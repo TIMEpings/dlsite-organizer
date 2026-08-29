@@ -6,6 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 
 from dlsite_organizer.domain.relation import Confidence, RelationType, WorkRelation
 from dlsite_organizer.persistence.metadata_store import MetadataObservation, MetadataStore
@@ -47,10 +48,14 @@ class HistoricalRelations:
     incoming: tuple[HistoricalRelation, ...] = ()
 
 
+class _ObservationStore(Protocol):
+    def list_all_observations(self) -> tuple[MetadataObservation, ...]: ...
+
+
 class HistoricalRelationService:
     """Interpret persisted explicit translation payloads; never performs I/O."""
 
-    def __init__(self, metadata_store: MetadataStore, translation_service: TranslationRelationService | None = None) -> None:
+    def __init__(self, metadata_store: _ObservationStore, translation_service: TranslationRelationService | None = None) -> None:
         self._store = metadata_store
         self._translation = translation_service or TranslationRelationService()
 
