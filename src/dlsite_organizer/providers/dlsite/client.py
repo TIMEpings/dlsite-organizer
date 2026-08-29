@@ -23,6 +23,7 @@ from dlsite_organizer.providers.dlsite.parser import (
 )
 from dlsite_organizer.providers.dlsite.sources import (
     ProductInfoAjaxSource,
+    TranslationInfoSource,
     normalize_product_info_ajax,
     parse_product_info_ajax,
 )
@@ -59,12 +60,19 @@ class DlsiteSite:
 class DlsiteWorkLookup:
     """One provider lookup with optional structured-source evidence.
 
-    ``product_info`` is provider-local evidence for a future relation adapter;
-    it is ``None`` when the HTML fallback supplied the normalized work.
+    ``product_info`` remains available to provider callers that need the full
+    validated DTO.  ``translation_info`` is the narrow source view consumed by
+    the application relation service.  It is ``None`` when HTML fallback
+    supplied the normalized work.
     """
 
     work: Work
     product_info: ProductInfoAjaxSource | None
+
+    @property
+    def translation_info(self) -> TranslationInfoSource | None:
+        """Expose only the provider source object needed by relation mapping."""
+        return self.product_info.translation_info if self.product_info is not None else None
 
 
 class DlsiteProvider:

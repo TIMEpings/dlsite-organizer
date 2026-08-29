@@ -21,10 +21,11 @@ from dlsite_organizer.providers.dlsite.exceptions import DlsiteParseError
 
 
 class TranslationInfoSource(BaseModel):
-    """Known translation fields retained for a future relation adapter.
+    """Known translation fields retained for the application relation adapter.
 
-    This is deliberately provider-local.  Its values are not evidence of a
-    domain ``WorkRelation`` and this release performs no relation inference.
+    This is deliberately provider-local.  ``TranslationRelationService``
+    interprets its explicit fields into domain ``WorkRelation`` objects; the
+    DTO itself does not perform that interpretation.
     """
 
     model_config = ConfigDict(extra="allow", frozen=True)

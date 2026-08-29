@@ -1,17 +1,18 @@
 # dlsite-organizer
 
-`dlsite-organizer` 是一个处于早期开发阶段的 Python 桌面应用。v0.1 提供单个
-RJcode 查询流程：标准化编号、读取 DLsite 当前作品元数据、转换为统一的 `Work`
-模型、生成 Windows 文件系统安全的名称，并在 GUI 中复制结果。
+`dlsite-organizer` 是一个处于早期开发阶段的 Python 桌面应用。v0.2 在单个
+RJcode 查询流程上增加了由 DLsite structured metadata 明确支持的翻译关系展示：
+标准化编号、读取当前作品元数据、转换为统一的 `Work` 模型、生成 Windows 文件系统
+安全的名称，并在 GUI 中复制结果或查看已确认的关系。
 
-本版本不会扫描或重命名本地文件，不搜索特典，不推断作品关系，也不会批量遍历
-RJcode。关系模型仅作为后续版本的领域契约存在。
+本版本不会扫描或重命名本地文件，不搜索特典，不进行 maker/date/RJ 编号启发式推断，
+也不会批量遍历 RJcode。关系只来自 DLsite structured metadata 明确声明的字段。
 
 ## Requirements
 
 - Python 3.12+
-- PySide6 Essentials（Qt Core/Gui/Widgets；不安装 v0.1 未使用的 Qt Addons）
-- Windows 是当前主要目标平台；架构预留 PyInstaller 打包位置，但 v0.1 尚未发布安装包
+- PySide6 Essentials（Qt Core/Gui/Widgets；不安装当前未使用的 Qt Addons）
+- Windows 是当前主要目标平台；架构预留 PyInstaller 打包位置，但 v0.2 尚未发布安装包
 
 ## Installation
 
@@ -57,7 +58,7 @@ pyright
 
 ## Provider status and limitations
 
-v0.1.2 的 provider 有两个受限的数据源，且它们都只在 provider 内转换为 `Work`：
+v0.2 的 provider 有两个受限的数据源：
 
 ```text
 product/info/ajax JSON → ProductInfoAjaxSource DTO → Work
@@ -70,8 +71,16 @@ source。作品身份来自请求所对应的顶层 RJ key；`product_id` 若存
 `work_type`、`age_category` 和精确的 `regist_datetime`。当前 `Work.release_date` 仅使用
 `regist_datetime` 的日期部分，并不宣称 `regist_date` 就是公开发布日期。若存在，
 `translation_info` 被保存为 provider-local `TranslationInfoSource`（包括 original/parent/child
-flags 与 workno 引用），本版本绝不会据此创建或猜测 `WorkRelation`。未知 JSON 字段可被忽略，
-但缺少或类型错误的核心 metadata 会令这个 source 无效。
+flags 与 workno 引用）。`TranslationRelationService` 再把这些明确字段转换为带
+`Confirmed` confidence 和结构化 evidence 的 `WorkRelation`；GUI 只消费
+application 层的 `TranslationRole + relations`，不会读取 provider raw fields。未知 JSON
+字段可被忽略，但缺少或类型错误的核心 metadata 会令这个 source 无效。
+
+当前关系解释仅支持：原作品、翻译 Parent、翻译 Child，以及 `translation_of`、
+`has_translation_child`、`child_of_translation` 三种明确方向。缺少 `translation_info` 或
+缺少明确 translation state 时显示“未发现 DLsite 明确的翻译关系信息”，不把它解释成
+“已证明没有翻译作品”。矛盾或不完整 topology 会保留安全的已知事实并报告 contract issue，
+不会生成自引用或伪造 target。
 
 HTML JSON-LD 仍是 fallback/supplementary source：当 AJAX 不可用、返回非成功状态或不符合
 DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及页面确实声明时的 maker、
@@ -92,4 +101,4 @@ DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及�
 下一阶段应在可访问 DLsite 的环境中针对性验证更多已知 translation 引用和 `regist_date` 语义，
 再考虑缓存。之后才会加入安全的
 `scan → plan → preview → execute → transaction log → undo` 重命名流程及基于证据的
-关系分析。
+关系历史分析。

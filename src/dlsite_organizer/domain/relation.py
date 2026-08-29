@@ -1,4 +1,4 @@
-"""Contracts for future evidence-based work relation analysis."""
+"""Evidence-backed work relation contracts."""
 
 from __future__ import annotations
 
@@ -11,7 +11,18 @@ from dlsite_organizer.domain.work_code import WorkCode
 
 
 class RelationType(StrEnum):
+    """Directional relation edges between two work identities.
+
+    The three explicit translation edges are intentionally distinct from
+    :class:`TranslationRole`, which describes the role of the source work.
+    The older broad values remain part of the v0.1 contract for compatibility;
+    v0.2 translation mapping uses only the explicit directional values.
+    """
+
     TRANSLATION = "translation"
+    TRANSLATION_OF = "translation_of"
+    HAS_TRANSLATION_CHILD = "has_translation_child"
+    CHILD_OF_TRANSLATION = "child_of_translation"
     ORIGINAL = "original"
     PARENT = "parent"
     CHILD = "child"
@@ -20,6 +31,15 @@ class RelationType(StrEnum):
     BUNDLE = "bundle"
     RELATED = "related"
     SUSPECTED = "suspected_relation"
+
+
+class TranslationRole(StrEnum):
+    """The explicit DLsite translation role of the queried work."""
+
+    ORIGINAL = "original"
+    TRANSLATION_PARENT = "translation_parent"
+    TRANSLATION_CHILD = "translation_child"
+    UNKNOWN = "unknown"
 
 
 class Confidence(StrEnum):
@@ -32,6 +52,7 @@ class Confidence(StrEnum):
 
 class EvidenceType(StrEnum):
     DLSITE_PARAMETER = "dlsite_parameter"
+    EXPLICIT_TRANSLATION_REFERENCE = "explicit_translation_reference"
     SAME_MAKER = "same_maker"
     SAME_RELEASE_DATE = "same_release_date"
     ADJACENT_WORKNO = "adjacent_workno"

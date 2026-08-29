@@ -1,4 +1,4 @@
-"""Complete v0.1 manual RJcode lookup page."""
+"""Complete v0.2 manual RJcode lookup page."""
 
 from __future__ import annotations
 
@@ -14,13 +14,19 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from dlsite_organizer.domain.relation import RelationType, TranslationRole
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupResult, LookupService
+from dlsite_organizer.services.translation_relations import (
+    TranslationAnalysis,
+    TranslationAnalysisStatus,
+)
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
 
 
@@ -46,7 +52,14 @@ class LookupPage(QWidget):
         self.copy_button.clicked.connect(self.copy_name)
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        page_layout = QVBoxLayout(self)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_area = QScrollArea()
+        scroll_area.setObjectName("lookupScrollArea")
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(36, 28, 36, 28)
         layout.setSpacing(18)
 
@@ -128,6 +141,34 @@ class LookupPage(QWidget):
         output_row.addWidget(self.copy_button)
         layout.addLayout(output_row)
 
+        relation_frame = QFrame()
+        relation_frame.setObjectName("relationCard")
+        relation_layout = QVBoxLayout(relation_frame)
+        relation_layout.setContentsMargins(22, 18, 22, 18)
+        relation_layout.setSpacing(10)
+        relation_heading = QLabel("作品关系")
+        relation_heading.setObjectName("sectionLabel")
+        relation_layout.addWidget(relation_heading)
+        relation_form = QFormLayout()
+        relation_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        relation_form.setHorizontalSpacing(18)
+        relation_form.setVerticalSpacing(8)
+        self.relation_role_value = _value_label()
+        self.relation_source_value = _value_label()
+        self.relation_confidence_value = _value_label()
+        self.relation_language_value = _value_label()
+        relation_form.addRow("角色", self.relation_role_value)
+        relation_form.addRow("来源", self.relation_source_value)
+        relation_form.addRow("可信度", self.relation_confidence_value)
+        relation_form.addRow("语言", self.relation_language_value)
+        relation_layout.addLayout(relation_form)
+        self.relation_details_value = _value_label()
+        relation_layout.addWidget(self.relation_details_value)
+        layout.addWidget(relation_frame)
+        self._clear_relations()
+        scroll_area.setWidget(content)
+        page_layout.addWidget(scroll_area)
+
     @Slot()
     def start_lookup(self) -> None:
         """Start one background lookup unless another is still active."""
@@ -177,6 +218,7 @@ class LookupPage(QWidget):
         self._formatted_name = result.formatted_name
         self.name_output.setText(result.formatted_name)
         self.copy_button.setEnabled(True)
+        self._show_relations(result.translation)
         self.status_label.setProperty("state", "success")
         self.status_label.setText("查询完成。")
         self._refresh_status_style()
@@ -241,6 +283,40 @@ class LookupPage(QWidget):
             label.setText("—")
         self.cover_label.clear()
         self.cover_label.setText("暂无封面")
+        self._clear_relations()
+
+    def _show_relations(self, analysis: TranslationAnalysis) -> None:
+        """Render application-level relation facts without reading provider DTOs."""
+        self.relation_role_value.setText(_role_label(analysis.role))
+        has_translation_info = analysis.status is not TranslationAnalysisStatus.NO_INFORMATION
+        self.relation_source_value.setText(
+            "DLsite translation_info" if has_translation_info else "—"
+        )
+        self.relation_confidence_value.setText(_confidence_label(analysis.status))
+        self.relation_language_value.setText(analysis.language or "—")
+
+        relation_lines = [
+            f"{_relation_label(relation.relation_type)}：{relation.target_workno}"
+            for relation in analysis.relations
+        ]
+        if analysis.status is TranslationAnalysisStatus.NO_INFORMATION:
+            message = "未发现 DLsite 明确的翻译关系信息"
+        elif analysis.status is TranslationAnalysisStatus.INVALID:
+            message = "DLsite translation_info 存在矛盾，未生成不安全的关系。"
+        elif analysis.status is TranslationAnalysisStatus.INCOMPLETE:
+            message = "DLsite translation_info 不完整；仅显示已明确且安全的关系。"
+        elif not relation_lines:
+            message = "当前 response 未列出具体的关联 RJcode。"
+        else:
+            message = "\n".join(relation_lines)
+        self.relation_details_value.setText(message)
+
+    def _clear_relations(self) -> None:
+        self.relation_role_value.setText("—")
+        self.relation_source_value.setText("—")
+        self.relation_confidence_value.setText("—")
+        self.relation_language_value.setText("—")
+        self.relation_details_value.setText("—")
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
@@ -253,3 +329,29 @@ def _value_label() -> QLabel:
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
     return label
+
+
+def _role_label(role: TranslationRole | None) -> str:
+    if role is None:
+        return "—"
+    return {
+        TranslationRole.ORIGINAL: "原作品",
+        TranslationRole.TRANSLATION_PARENT: "翻译作品 Parent",
+        TranslationRole.TRANSLATION_CHILD: "翻译作品 Child",
+    }[role]
+
+
+def _confidence_label(status: TranslationAnalysisStatus) -> str:
+    return {
+        TranslationAnalysisStatus.CONFIRMED: "已确认",
+        TranslationAnalysisStatus.INCOMPLETE: "部分确认",
+        TranslationAnalysisStatus.INVALID: "数据矛盾",
+    }.get(status, "—")
+
+
+def _relation_label(relation_type: RelationType) -> str:
+    return {
+        RelationType.TRANSLATION_OF: "翻译原作",
+        RelationType.HAS_TRANSLATION_CHILD: "翻译子作品",
+        RelationType.CHILD_OF_TRANSLATION: "所属翻译 Parent",
+    }.get(relation_type, relation_type.value)

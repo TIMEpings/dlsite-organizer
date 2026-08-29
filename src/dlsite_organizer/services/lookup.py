@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
+from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.domain.work_code import WorkCodeError, normalize_rjcode
 from dlsite_organizer.providers.base import WorkProvider
@@ -15,7 +17,12 @@ from dlsite_organizer.providers.dlsite.exceptions import (
     DlsiteParseError,
     WorkNotFoundError,
 )
+from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
 from dlsite_organizer.services.naming import NamingService
+from dlsite_organizer.services.translation_relations import (
+    TranslationAnalysis,
+    TranslationRelationService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +44,51 @@ class LookupFailure(Exception):
         self.user_message = message
 
 
+class _SourceAwareLookup(Protocol):
+    @property
+    def work(self) -> Work:
+        ...
+
+    @property
+    def translation_info(self) -> TranslationInfoSource | None:
+        ...
+
+
+@runtime_checkable
+class _SourceAwareProvider(Protocol):
+    def fetch_work_lookup(self, workno: str) -> _SourceAwareLookup:
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class LookupResult:
     work: Work
     formatted_name: str
+    translation: TranslationAnalysis = field(default_factory=TranslationAnalysis)
+
+    @property
+    def translation_role(self) -> TranslationRole | None:
+        """Compatibility-friendly shortcut for the interpreted role."""
+        return self.translation.role
+
+    @property
+    def relations(self) -> tuple[WorkRelation, ...]:
+        """Compatibility-friendly shortcut for interpreted relation edges."""
+        return self.translation.relations
 
 
 class LookupService:
     """Validate a code, fetch a Work, and produce its formatted name."""
 
-    def __init__(self, provider: WorkProvider, naming: NamingService) -> None:
+    def __init__(
+        self,
+        provider: WorkProvider | _SourceAwareProvider,
+        naming: NamingService,
+        translation_relations: TranslationRelationService | None = None,
+    ) -> None:
         self._provider = provider
         self._naming = naming
+        self._translation_relations = translation_relations or TranslationRelationService()
 
     def lookup(self, raw_workno: str) -> LookupResult:
         """Execute the complete metadata lookup use case."""
@@ -59,7 +99,7 @@ class LookupService:
 
         logger.info("Looking up work %s", workno)
         try:
-            work = self._provider.fetch_work(workno)
+            work, translation_info = self._fetch_work(workno)
         except WorkNotFoundError as exc:
             raise LookupFailure(
                 LookupFailureKind.NOT_FOUND,
@@ -81,4 +121,15 @@ class LookupService:
                 LookupFailureKind.UNEXPECTED,
                 "查询时发生意外错误，详细信息已写入日志。",
             ) from exc
-        return LookupResult(work=work, formatted_name=self._naming.format(work))
+        return LookupResult(
+            work=work,
+            formatted_name=self._naming.format(work),
+            translation=self._translation_relations.analyze(workno, translation_info),
+        )
+
+    def _fetch_work(self, workno: str) -> tuple[Work, TranslationInfoSource | None]:
+        """Prefer the source-aware provider extension without breaking simple providers."""
+        if isinstance(self._provider, _SourceAwareProvider):
+            lookup = self._provider.fetch_work_lookup(workno)
+            return lookup.work, lookup.translation_info
+        return self._provider.fetch_work(workno), None

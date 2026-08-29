@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
         nav_layout.addWidget(self.navigation_list, 1)
-        version = QLabel("v0.1.2 · 早期开发版")
+        version = QLabel("v0.2.0 · 早期开发版")
         version.setObjectName("versionLabel")
         nav_layout.addWidget(version)
 
@@ -56,7 +56,13 @@ class MainWindow(QMainWindow):
         page_definitions = [
             ("整理", _placeholder("整理", "本地扫描与安全重命名尚未实现。")),
             ("查询", self.lookup_page),
-            ("关系", _placeholder("关系", "作品关系分析尚未实现。")),
+            (
+                "关系",
+                _placeholder(
+                    "关系",
+                    "请在“查询”页输入 RJcode，确认的翻译关系会显示在作品信息下方。",
+                ),
+            ),
             ("设置", _placeholder("设置", "图形化设置页面尚未实现；当前可使用 TOML 配置。")),
         ]
         for label, page in page_definitions:
@@ -106,6 +112,7 @@ QWidget { color: #1e293b; font-family: "Segoe UI", "Microsoft YaHei UI"; font-si
 #pageTitle { font-size: 26px; font-weight: 700; color: #111827; }
 #pageDescription { color: #64748b; }
 #resultCard { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }
+#relationCard { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }
 #coverPlaceholder {
   background: #eef2f7;
   border: 1px solid #dbe2ea;

@@ -73,9 +73,17 @@ and an empty array in the other two samples, so it is not yet a stable source
 contract.
 
 `DlsiteProvider.fetch_work_lookup()` returns both normalized `Work` and the
-validated `ProductInfoAjaxSource` in one request flow. A future
-relation-specific adapter can use that evidence without re-requesting or
-reparsing the raw response. `fetch_work()` remains the metadata-only API.
+validated `ProductInfoAjaxSource` in one request flow. The application exposes
+only its nested `translation_info` to `TranslationRelationService`, which
+maps explicit flags and references into confirmed directional relations
+without re-requesting or reparsing the raw response. `fetch_work()` remains
+the metadata-only API.
+
+The current interpretation is intentionally narrow: a true role flag is
+required to identify Original, Translation Parent, or Translation Child, and
+each relation target must be a concrete work number from the response. An
+absent or role-less `translation_info` means that no explicit relation
+information was observed; it is not a proof that translations do not exist.
 
 ## Future-interest fields
 
