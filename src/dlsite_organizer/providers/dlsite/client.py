@@ -22,6 +22,7 @@ from dlsite_organizer.providers.dlsite.parser import (
     parse_product_page_source,
 )
 from dlsite_organizer.providers.dlsite.sources import (
+    ProductInfoAjaxSource,
     normalize_product_info_ajax,
     parse_product_info_ajax,
 )
@@ -54,6 +55,18 @@ class DlsiteSite:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DlsiteWorkLookup:
+    """One provider lookup with optional structured-source evidence.
+
+    ``product_info`` is provider-local evidence for a future relation adapter;
+    it is ``None`` when the HTML fallback supplied the normalized work.
+    """
+
+    work: Work
+    product_info: ProductInfoAjaxSource | None
+
+
 class DlsiteProvider:
     """Fetch DLsite metadata from structured JSON, then semantic HTML fallback."""
 
@@ -71,13 +84,20 @@ class DlsiteProvider:
         self._client_factory = client_factory or self._new_client
 
     def fetch_work(self, workno: str) -> Work:
-        """Fetch one work, preferring structured metadata over HTML semantics."""
+        """Fetch normalized metadata, retaining the minimal legacy interface."""
+        return self.fetch_work_lookup(workno).work
+
+    def fetch_work_lookup(self, workno: str) -> DlsiteWorkLookup:
+        """Fetch a work and its validated structured evidence in one request flow."""
         normalized = str(WorkCode.parse(workno, allowed_prefixes={"RJ"}))
         try:
             with self._client_factory() as client:
                 structured = self._fetch_structured(client, normalized)
                 if structured is not None:
-                    return structured
+                    return DlsiteWorkLookup(
+                        work=normalize_product_info_ajax(structured, section=self._site.section),
+                        product_info=structured,
+                    )
                 response = client.get(self.build_product_url(normalized))
         except httpx.TimeoutException as exc:
             logger.warning("DLsite request timed out for %s", normalized)
@@ -94,10 +114,13 @@ class DlsiteProvider:
 
         try:
             source = parse_product_page_source(response.text)
-            return normalize_product_page_source(
-                source,
-                workno=normalized,
-                section=self._site.section,
+            return DlsiteWorkLookup(
+                work=normalize_product_page_source(
+                    source,
+                    workno=normalized,
+                    section=self._site.section,
+                ),
+                product_info=None,
             )
         except DlsiteParseError:
             logger.exception("Failed to parse DLsite metadata for %s", normalized)
@@ -111,8 +134,8 @@ class DlsiteProvider:
         """Build the candidate structured endpoint URL for the configured site."""
         return self._site.product_info_url(workno)
 
-    def _fetch_structured(self, client: httpx.Client, workno: str) -> Work | None:
-        """Return structured metadata when valid, otherwise defer to HTML once.
+    def _fetch_structured(self, client: httpx.Client, workno: str) -> ProductInfoAjaxSource | None:
+        """Return structured evidence when valid, otherwise defer to HTML once.
 
         An unavailable endpoint, an unexpected response, or a contract mismatch
         is not proof that the work is absent.  HTML receives one supplementary
@@ -132,7 +155,7 @@ class DlsiteProvider:
             return None
         try:
             source = parse_product_info_ajax(response.text, workno)
-            return normalize_product_info_ajax(source, section=self._site.section)
+            return source
         except DlsiteParseError as exc:
             logger.info("Structured DLsite source unusable for %s: %s", workno, exc)
             return None

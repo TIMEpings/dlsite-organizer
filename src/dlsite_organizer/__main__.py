@@ -21,7 +21,7 @@ def main() -> int:
     application.setApplicationName("DLsite Organizer")
     application.setOrganizationName("dlsite-organizer")
     configure_logging(default_data_dir() / "logs")
-    logger.info("Starting DLsite Organizer v0.1.0")
+    logger.info("Starting DLsite Organizer v0.1.2")
 
     try:
         settings = load_settings()

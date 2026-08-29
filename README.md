@@ -57,20 +57,21 @@ pyright
 
 ## Provider status and limitations
 
-v0.1.1 的 provider 有两个受限的数据源，且它们都只在 provider 内转换为 `Work`：
+v0.1.2 的 provider 有两个受限的数据源，且它们都只在 provider 内转换为 `Work`：
 
 ```text
 product/info/ajax JSON → ProductInfoAjaxSource DTO → Work
 HTML Schema.org Product JSON-LD → HtmlProductSource → Work
 ```
 
-当 AJAX 响应成功且符合显式 DTO 契约时，它是首选 metadata source，提供 `workno`、
-`work_name`、`maker_id`、`maker_name`、`regist_date` 和 `work_image`。`work_type`、
-`age_category` 也会保留在 DTO 中，但目前没有对应的 domain 字段。若存在，
-`translation_info` 被保存为 provider-local `TranslationInfoSource`（
-`original_workno`、`parent_workno`、`child_worknos`、`lang`）；本版本绝不会据此创建或猜测
-`WorkRelation`。未知 JSON 字段可被忽略，但缺少或类型错误的核心 `workno` / `work_name`
-会令这个 source 无效。
+当 AJAX 响应成功且符合真实 regression fixture 校准过的 DTO 契约时，它是首选 metadata
+source。作品身份来自请求所对应的顶层 RJ key；`product_id` 若存在必须与该 key 一致，不能用
+图片路径或其他字段替代。DTO 保留 `work_name`、`maker_id`、`maker_name`、`work_image`、
+`work_type`、`age_category` 和精确的 `regist_datetime`。当前 `Work.release_date` 仅使用
+`regist_datetime` 的日期部分，并不宣称 `regist_date` 就是公开发布日期。若存在，
+`translation_info` 被保存为 provider-local `TranslationInfoSource`（包括 original/parent/child
+flags 与 workno 引用），本版本绝不会据此创建或猜测 `WorkRelation`。未知 JSON 字段可被忽略，
+但缺少或类型错误的核心 metadata 会令这个 source 无效。
 
 HTML JSON-LD 仍是 fallback/supplementary source：当 AJAX 不可用、返回非成功状态或不符合
 DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及页面确实声明时的 maker、
@@ -81,18 +82,14 @@ DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及�
 和 service 都不知道 `maniax/home/books/...`。AJAX endpoint 是否能跨 section 解析当前尚未
 验证，因此本版本仍使用一个显式配置的 section，未来可在这一处替换为最小 section resolver。
 
-本开发环境对候选 URL
-`https://www.dlsite.com/maniax/product/info/ajax?product_id=RJ01609020` 的连接探测超时
-（HTTP 000），浏览器连接器同样无法打开它。因此没有声称已验证线上 AJAX 结构，也没有
-加入 live integration fixture。`tests/fixtures/product_info_ajax_contract.json` 是明确标记为
-`product_info_ajax` 的**合成 provider contract fixture**，不是保存的真实 DLsite response；
-它只验证本项目对成功响应的处理边界。原有 `product_semantic.html` 同样是合成 HTML
-JSON-LD fixture。未来在可连接环境取得、并经审查的真实 response 后，应以最小语义子集
-替换或补充这两个 fixture。
+本轮使用了三份经审查的用户保存 AJAX 响应，并将它们的最小相关子集放入
+`tests/fixtures/dlsite/` 作为真实 regression fixture；没有执行实时请求。原有
+`product_semantic.html` 仍是合成 HTML JSON-LD fallback fixture。详细观察、已知契约和不确定性
+见 [docs/dlsite-data-contract.md](docs/dlsite-data-contract.md)。
 
 ## Roadmap
 
-下一阶段应先在可访问 DLsite 的环境中验证并固定真实 `product/info/ajax` 响应契约，再考虑
-缓存。之后才会加入安全的
+下一阶段应在可访问 DLsite 的环境中针对性验证更多已知 translation 引用和 `regist_date` 语义，
+再考虑缓存。之后才会加入安全的
 `scan → plan → preview → execute → transaction log → undo` 重命名流程及基于证据的
 关系分析。

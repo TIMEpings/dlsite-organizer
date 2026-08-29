@@ -1,0 +1,28 @@
+{
+  "RJ01637033": {
+    "site_id": "home",
+    "product_id": "RJ01637033",
+    "maker_id": "RG01001331",
+    "maker_name": "MYHONYAKU",
+    "age_category": 1,
+    "bonuses": [],
+    "is_limit_work": false,
+    "translation_info": {
+      "is_translation_agree": false,
+      "is_volunteer": false,
+      "is_original": false,
+      "is_parent": false,
+      "is_child": true,
+      "is_translation_bonus_child": false,
+      "original_workno": "RJ01609020",
+      "parent_workno": "RJ01636949",
+      "child_worknos": [],
+      "lang": "CHI_HANS"
+    },
+    "work_name": "【簡体中文版】ご奉仕×癒しのプレシャスメイドタイム ～美味しい手料理とあわあわヘッドスパで極楽癒され時間を旦那様にお届けAMSR～【CV.佃煮のりお】",
+    "work_image": "//img.dlsite.jp/modpub/images2/work/doujin/RJ01610000/RJ01609020_img_main.jpg",
+    "sales_end_info": null,
+    "regist_date": "2026-07-07 00:00:00",
+    "work_type": "SOU"
+  }
+}

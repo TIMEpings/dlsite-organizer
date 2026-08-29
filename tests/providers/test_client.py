@@ -12,7 +12,9 @@ from dlsite_organizer.providers.dlsite.exceptions import (
 )
 
 HTML_FIXTURE = Path(__file__).parents[1] / "fixtures" / "product_semantic.html"
-AJAX_FIXTURE = Path(__file__).parents[1] / "fixtures" / "product_info_ajax_contract.json"
+AJAX_FIXTURE = (
+    Path(__file__).parents[1] / "fixtures" / "dlsite" / "product_info_RJ01609020.json"
+)
 
 
 def client_factory(
@@ -34,8 +36,24 @@ def test_provider_prefers_valid_product_info_ajax_and_returns_domain_work() -> N
     work = provider.fetch_work("rj01609020")
 
     assert work.workno == "RJ01609020"
-    assert work.title == "雨音と過ごす夜"
+    assert work.title.startswith("ご奉仕×癒しのプレシャスメイドタイム")
     assert work.source_section == "maniax"
+
+
+def test_provider_lookup_retains_structured_evidence_without_a_second_request() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text=AJAX_FIXTURE.read_text(encoding="utf-8"))
+
+    lookup = DlsiteProvider(client_factory=client_factory(handler)).fetch_work_lookup("RJ01609020")
+
+    assert len(requests) == 1
+    assert lookup.work.workno == "RJ01609020"
+    assert lookup.product_info is not None
+    assert lookup.product_info.translation_info is not None
+    assert lookup.product_info.translation_info.is_original is True
 
 
 def test_provider_uses_html_when_structured_source_is_unusable() -> None:

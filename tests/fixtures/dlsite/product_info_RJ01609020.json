@@ -1,0 +1,26 @@
+{
+  "RJ01609020": {
+    "site_id": "home",
+    "maker_id": "RG01058997",
+    "age_category": 1,
+    "bonuses": [],
+    "is_limit_work": false,
+    "translation_info": {
+      "is_translation_agree": true,
+      "is_volunteer": false,
+      "is_original": true,
+      "is_parent": false,
+      "is_child": false,
+      "is_translation_bonus_child": false,
+      "original_workno": null,
+      "parent_workno": null,
+      "child_worknos": [],
+      "lang": null
+    },
+    "work_name": "ご奉仕×癒しのプレシャスメイドタイム ～美味しい手料理とあわあわヘッドスパで極楽癒され時間を旦那様にお届けASMR～【CV.佃煮のりお】",
+    "work_image": "//img.dlsite.jp/modpub/images2/work/doujin/RJ01610000/RJ01609020_img_main.jpg",
+    "sales_end_info": null,
+    "regist_date": "2026-05-26 00:00:00",
+    "work_type": "SOU"
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Current architecture
 
-The v0.1.1 lookup flow is deliberately small:
+The v0.1.2 lookup flow is deliberately small:
 
 ```text
 PySide6 LookupPage
@@ -31,19 +31,24 @@ no brute-force section probing. The configured section remains a provider implem
 is the narrow boundary where a future resolver can be introduced.
 
 `ProductInfoAjaxSource` and its nested `TranslationInfoSource` are provider-local Pydantic DTOs with
-`extra="allow"`. They retain a supported metadata subset and future translation fields without
-polluting `Work` or producing relations. Core `workno` and `work_name` must be correctly typed and
-the response work number must match the request. `HtmlProductSource` is a separate provider-local
-dataclass for Schema.org Product JSON-LD. Each source is normalized into `Work` only after extraction;
-the domain never imports HTTP, HTML, JSON, or DLsite DTOs.
+`extra="allow"`. They retain a reviewed metadata subset and translation evidence without polluting
+`Work` or producing relations. The validated AJAX envelope key establishes the queried `Work` identity;
+an optional nested `product_id` is retained separately and must agree when present. The raw
+`regist_date` timestamp is retained as `regist_datetime`, while `Work.release_date` receives only its
+date component for the current UI. `HtmlProductSource` is a separate provider-local dataclass for
+Schema.org Product JSON-LD. Each source is normalized into `Work` only after extraction; the domain
+never imports HTTP, HTML, JSON, or DLsite DTOs.
 
-The live candidate endpoint could not be reached from this development environment: a direct probe
-timed out before receiving an HTTP response and the browser connector could not open the URL. Thus the
-structured contract is fixture-backed, not asserted to match current production DLsite. The fixture
-named `product_info_ajax_contract.json` is synthetic and explicitly represents a `product_info_ajax`
-parser contract; it is not a captured response. HTML JSON-LD also remains unverified against current
-live markup. Optional values degrade to missing values; corrupt core source metadata is a parse
-failure rather than invented metadata.
+`DlsiteProvider.fetch_work_lookup()` is the source-aware extension point. It returns normalized
+`Work` plus the already-validated AJAX DTO in one request flow (or no AJAX DTO when HTML fallback
+was used). The existing `WorkProvider.fetch_work()` protocol remains metadata-only, so ordinary
+lookup callers and the domain do not acquire DLsite translation fields.
+
+The structured contract is backed by three reviewed, user-captured AJAX responses reduced into real
+regression fixtures. It remains a small-sample contract rather than a claim about every production
+response; see [DLsite AJAX data contract](dlsite-data-contract.md). HTML JSON-LD remains unverified
+against current live markup. Optional values degrade to missing values; corrupt core source metadata
+is a parse failure rather than invented metadata.
 
 SQLite is initialized through a small SQLAlchemy `Database` object. Its only table reserves a
 minimal shape for future historical observations. Lookups are not automatically persisted in

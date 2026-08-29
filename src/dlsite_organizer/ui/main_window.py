@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
         nav_layout.addWidget(self.navigation_list, 1)
-        version = QLabel("v0.1.1 · 早期开发版")
+        version = QLabel("v0.1.2 · 早期开发版")
         version.setObjectName("versionLabel")
         nav_layout.addWidget(version)
 
