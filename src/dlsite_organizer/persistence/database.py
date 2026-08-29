@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, create_engine
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -42,12 +42,16 @@ class RenameTransactionRecord(Base):
         DateTime(timezone=True), nullable=True
     )
     status: Mapped[str] = mapped_column(String(32), index=True)
+    recovery_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recovery_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    recovery_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class RenameOperationRecord(Base):
     '''Durable intent and outcome for one operation in a rename transaction.'''
 
     __tablename__ = 'rename_operations'
+    __table_args__ = (UniqueConstraint('transaction_id', 'sequence', name='uq_rename_operation_transaction_sequence'),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     transaction_id: Mapped[str] = mapped_column(
@@ -83,6 +87,16 @@ class Database:
         """Create the data directory and missing schema without writing observations."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(self._engine)
+        # Lightweight forward migration for development databases created by v0.4.
+        with self._engine.begin() as connection:
+            columns = {row[1] for row in connection.execute(text('PRAGMA table_info(rename_transactions)'))}
+            for name, definition in (
+                ('recovery_stage', 'VARCHAR(64)'),
+                ('recovery_error', 'VARCHAR'),
+                ('recovery_sequence', 'INTEGER'),
+            ):
+                if name not in columns:
+                    connection.execute(text(f'ALTER TABLE rename_transactions ADD COLUMN {name} {definition}'))
         self._initialized = True
 
     @property

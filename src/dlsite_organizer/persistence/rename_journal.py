@@ -54,6 +54,9 @@ class RenameJournal(Protocol):
     def latest_undoable(self) -> RenameTransaction | None:
         ...
 
+    def find_unresolved_transaction(self) -> RenameTransaction | None:
+        ...
+
     def mark_operation_success(self, transaction_id: str, sequence: int, when: datetime) -> None:
         ...
 
@@ -119,6 +122,10 @@ class UnavailableRenameJournal:
         self._raise()
         raise AssertionError('unreachable')
 
+    def find_unresolved_transaction(self) -> RenameTransaction | None:
+        self._raise()
+        raise AssertionError('unreachable')
+
     def mark_operation_success(self, transaction_id: str, sequence: int, when: datetime) -> None:
         del transaction_id, sequence, when
         self._raise()
@@ -174,6 +181,33 @@ class TransactionJournal:
 
     def __init__(self, database: Database) -> None:
         self._database = database
+
+    def find_unresolved_transaction(self) -> RenameTransaction | None:
+        self._ensure_available()
+        try:
+            with self._database.session() as session:
+                record = session.scalar(
+                    select(RenameTransactionRecord)
+                    .where(
+                        RenameTransactionRecord.status.in_(
+                            [
+                                TransactionStatus.PENDING.value,
+                                TransactionStatus.RECOVERY_REQUIRED.value,
+                            ]
+                        )
+                    )
+                    .order_by(RenameTransactionRecord.created_at.asc())
+                )
+                if record is None:
+                    return None
+                operations = session.scalars(
+                    select(RenameOperationRecord)
+                    .where(RenameOperationRecord.transaction_id == record.id)
+                    .order_by(RenameOperationRecord.sequence)
+                ).all()
+                return _to_transaction(record, operations)
+        except Exception as exc:
+            raise JournalError('journal health check failed') from exc
 
     @property
     def available(self) -> bool:
@@ -332,12 +366,11 @@ class TransactionJournal:
                 if transaction is None:
                     raise JournalError(f'找不到重命名事务日志：{transaction_id}')
                 transaction.status = TransactionStatus.RECOVERY_REQUIRED.value
-                transaction.completed_at = when
+                transaction.recovery_stage = 'forward'
+                transaction.recovery_error = error
+                transaction.recovery_sequence = sequence
                 if sequence is not None:
-                    operation = _operation_or_raise(session, transaction_id, sequence)
-                    operation.status = ExecutionStatus.RECOVERY_REQUIRED.value
-                    operation.error = error
-                    operation.executed_at = when
+                    _operation_or_raise(session, transaction_id, sequence)
                 session.commit()
         except JournalError:
             raise
@@ -365,11 +398,11 @@ class TransactionJournal:
                 if transaction is None:
                     raise JournalError(f'找不到重命名事务日志：{transaction_id}')
                 transaction.status = TransactionStatus.RECOVERY_REQUIRED.value
-                transaction.completed_at = when
+                transaction.recovery_stage = 'undo'
+                transaction.recovery_error = error
+                transaction.recovery_sequence = sequence
                 if sequence is not None:
-                    operation = _operation_or_raise(session, transaction_id, sequence)
-                    operation.undo_status = UndoStatus.FAILED.value
-                    operation.undo_error = error
+                    _operation_or_raise(session, transaction_id, sequence)
                 session.commit()
         except JournalError:
             raise
@@ -486,6 +519,9 @@ def _to_transaction(
         created_at=_as_utc(record.created_at),
         completed_at=_as_utc(record.completed_at) if record.completed_at else None,
         status=TransactionStatus(record.status),
+        recovery_stage=record.recovery_stage,
+        recovery_error=record.recovery_error,
+        recovery_sequence=record.recovery_sequence,
         operations=tuple(
             RenameOperation(
                 operation_id=operation.id,

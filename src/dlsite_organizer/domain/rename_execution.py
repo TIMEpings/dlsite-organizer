@@ -74,6 +74,9 @@ class RenameTransaction:
     completed_at: datetime | None
     status: TransactionStatus
     operations: tuple[RenameOperation, ...]
+    recovery_stage: str | None = None
+    recovery_error: str | None = None
+    recovery_sequence: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

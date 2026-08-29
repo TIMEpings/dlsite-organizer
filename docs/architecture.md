@@ -201,3 +201,7 @@ Renaming must always follow `scan → plan → preview → explicit confirmation
 execute → undo`; the scanner and planner must never mutate the filesystem. Relation analysis should accumulate explicit
 evidence and confidence, not infer truth from adjacent RJ numbers. These future services can share
 the existing `Work` model without importing the UI or DLsite-specific raw fields.
+
+## Startup journal health
+
+At startup and immediately before execution, the journal is checked for PENDING or RECOVERY_REQUIRED transactions. Any unresolved transaction blocks mutation. Execution facts (SUCCESS/FAILED/PENDING) remain separate from recovery uncertainty metadata; no automatic crash recovery is attempted.

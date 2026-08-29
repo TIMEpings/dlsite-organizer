@@ -62,7 +62,16 @@ class RenameExecutor:
     @property
     def available(self) -> bool:
         """Whether a durable journal is available for a mutation."""
-        return self._journal is not None and _journal_available(self._journal)
+        return (
+            self._journal is not None
+            and _journal_available(self._journal)
+            and (os.name == 'nt' or not isinstance(self._filesystem, LocalRenameFilesystem))
+        )
+
+    def unresolved_transaction(self) -> RenameTransaction | None:
+        if self._journal is None or not _journal_available(self._journal):
+            return None
+        return self._journal.find_unresolved_transaction()
 
     def execute(
         self,
@@ -105,6 +114,18 @@ class RenameExecutor:
                 '事务日志不可用，已禁止文件系统重命名。',
             )
         assert self._journal is not None
+        if os.name != 'nt' and isinstance(self._filesystem, LocalRenameFilesystem):
+            return self._no_mutation_result(
+                ordered, ExecutionStatus.REJECTED, '真实文件系统重命名仅支持 Windows'
+            )
+        try:
+            unresolved = self._journal.find_unresolved_transaction()
+        except Exception as exc:
+            return self._no_mutation_result(
+                ordered, ExecutionStatus.REJECTED, f'无法检查 journal health，已阻止重命名: {exc}'
+            )
+        if unresolved is not None:
+            return self._no_mutation_result(ordered, ExecutionStatus.REJECTED, _unresolved_message(unresolved))
         root = _absolute_path(root_path)
         issues = _preflight(root, ordered, case_insensitive=self._case_insensitive)
         if issues:
@@ -167,6 +188,9 @@ class RenameExecutor:
                     operation.target_path,
                 )
             try:
+                issue = _last_mile_issue(root, operation, case_insensitive=self._case_insensitive)
+                if issue is not None:
+                    raise _PreconditionError(issue)
                 self._filesystem.rename(operation.source_path, operation.target_path)
             except Exception as exc:
                 error = _filesystem_error(exc, operation.source_path, operation.target_path)
@@ -179,7 +203,11 @@ class RenameExecutor:
                 )
                 current_operations[index] = replace(
                     operation,
-                    status=ExecutionStatus.FAILED,
+                    status=(
+                        ExecutionStatus.PRECONDITION_FAILED
+                        if isinstance(exc, _PreconditionError)
+                        else ExecutionStatus.FAILED
+                    ),
                     error=error,
                 )
                 status = (
@@ -476,6 +504,8 @@ def _path_key(path: Path, case_insensitive: bool) -> str:
 
 
 def _filesystem_error(exc: Exception, source: Path, target: Path) -> str:
+    if isinstance(exc, _PreconditionError):
+        return str(exc)
     if isinstance(exc, FileExistsError):
         return f'target 已存在，未覆盖：{target}'
     if isinstance(exc, FileNotFoundError):
@@ -491,3 +521,31 @@ def _now():
     from datetime import UTC, datetime
 
     return datetime.now(UTC)
+
+
+class _PreconditionError(RuntimeError):
+    pass
+
+
+def _last_mile_issue(
+    root: Path, operation: RenameOperation, *, case_insensitive: bool
+) -> str | None:
+    source, target = operation.source_path, operation.target_path
+    if _path_key(source.parent, case_insensitive) != _path_key(root, case_insensitive):
+        return 'source parent changed outside expected root'
+    if _path_key(target.parent, case_insensitive) != _path_key(root, case_insensitive):
+        return 'target parent changed outside expected root'
+    if source == target or _path_key(source, case_insensitive) == _path_key(target, case_insensitive):
+        return 'source and target are identical or case-only'
+    if _link_like(source) or not _lexists(source) or not source.is_dir():
+        return 'source precondition changed before mutation'
+    if _entry_exists(root, target, case_insensitive):
+        return 'target appeared before mutation; refusing overwrite'
+    if target.name in ('.', '..') or any(sep in target.name for sep in ('\\', '/')):
+        return 'target is not a single safe filename component'
+    return None
+
+
+def _unresolved_message(transaction: RenameTransaction) -> str:
+    return (f'检测到未解决的重命名事务: {transaction.transaction_id} '
+            f'root={transaction.root} status={transaction.status.value}；已阻止新的文件系统修改')

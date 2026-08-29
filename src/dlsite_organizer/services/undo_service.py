@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,7 @@ from dlsite_organizer.domain.rename_execution import (
 from dlsite_organizer.persistence.rename_journal import RenameJournal
 from dlsite_organizer.services.rename_executor import (
     ExecutionProgressCallback,
+    LocalRenameFilesystem,
     RenameFilesystem,
     _absolute_path,
     _entry_exists,
@@ -49,6 +51,11 @@ class UndoService:
         assert self._journal is not None
         return self._journal.latest_undoable()
 
+    def unresolved_transaction(self) -> RenameTransaction | None:
+        if self._journal is None or not _journal_available(self._journal):
+            return None
+        return self._journal.find_unresolved_transaction()
+
     def undo(
         self,
         transaction_id: str | None = None,
@@ -64,6 +71,23 @@ class UndoService:
                 error='事务日志不可用，已禁止撤销文件操作。',
             )
         assert self._journal is not None
+        try:
+            unresolved = self._journal.find_unresolved_transaction()
+        except Exception as exc:
+            return UndoResult(
+                status=TransactionStatus.FAILED,
+                transaction=None,
+                error=f'journal health check failed: {exc}',
+            )
+        if unresolved is not None:
+            return UndoResult(
+                status=TransactionStatus.RECOVERY_REQUIRED,
+                transaction=unresolved,
+                operations=unresolved.operations,
+                error='unresolved transaction blocks undo',
+            )
+        if os.name != 'nt' and isinstance(self._filesystem, LocalRenameFilesystem):
+            return UndoResult(status=TransactionStatus.FAILED, transaction=None, error='真实文件系统重命名仅支持 Windows')
 
         try:
             transaction = (

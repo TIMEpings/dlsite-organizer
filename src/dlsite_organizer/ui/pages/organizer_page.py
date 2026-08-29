@@ -259,9 +259,16 @@ class OrganizerPage(QWidget):
         self._update_execute_button()
 
     def _update_execute_button(self) -> None:
+        unresolved = None
+        if self._execution_service is not None:
+            try:
+                unresolved = self._execution_service.unresolved_transaction()
+            except Exception:
+                unresolved = True
         self.execute_button.setEnabled(
             self._execution_service is not None
             and self._execution_service.available
+            and unresolved is None
             and self._thread is None
             and not self._preview_stale
             and self.selected_ready_count() > 0
@@ -521,6 +528,17 @@ class OrganizerPage(QWidget):
             self.undo_button.setEnabled(False)
             return
         try:
+            unresolved = self._undo_service.unresolved_transaction()
+            if unresolved is not None:
+                self.undo_button.setEnabled(False)
+                self.execute_button.setEnabled(False)
+                self.recent_transaction_label.setText(
+                    f'检测到未解决的重命名事务: {unresolved.transaction_id} | root={unresolved.root} | 状态={unresolved.status.value}'
+                )
+                self.status_label.setProperty('state', 'error')
+                self.status_label.setText('检测到未解决的重命名事务。为防止进一步改变文件系统，新的重命名和普通撤销已暂时禁用。请人工检查 SQLite 与文件系统。')
+                self._refresh_status_style()
+                return
             transaction = self._undo_service.latest_transaction()
         except Exception:
             self.undo_button.setEnabled(False)
