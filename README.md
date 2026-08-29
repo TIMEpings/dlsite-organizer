@@ -124,7 +124,8 @@ DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及�
 ## Roadmap
 
 下一阶段应在可访问 DLsite 的环境中针对性验证更多已知 translation 引用和 `regist_date` 语义，
-再考虑缓存。当前版本不实现关系历史分析、metadata persistent cache 或完整 transaction history browser。
+再考虑关系历史分析。当前版本不实现关系历史分析、完整 transaction history browser、特典检测
+或过期作品推断。
 
 ### v0.5 metadata cache
 

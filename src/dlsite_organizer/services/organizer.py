@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -17,7 +17,7 @@ from dlsite_organizer.domain.organizer import (
 )
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.services.folder_scanner import FolderScanner
-from dlsite_organizer.services.lookup import LookupFailure, LookupResult
+from dlsite_organizer.services.lookup import LookupFailure, LookupFreshness, LookupResult
 from dlsite_organizer.services.rename_planner import RenamePlanner
 
 logger = logging.getLogger(__name__)
@@ -181,15 +181,22 @@ class OrganizerService:
             assert work_code is not None
             lookup = lookup_by_code[work_code]
             if lookup.status is WorkLookupStatus.SUCCESS and lookup.result is not None:
-                plans.append(
-                    self._planner.plan(
-                        scan.root_path,
-                        candidate.source_path,
-                        work_code,
-                        lookup.result.work,
-                        formatted_name=lookup.result.formatted_name,
-                    )
+                plan = self._planner.plan(
+                    scan.root_path,
+                    candidate.source_path,
+                    work_code,
+                    lookup.result.work,
+                    formatted_name=lookup.result.formatted_name,
                 )
+                if lookup.result.freshness is LookupFreshness.CACHE_STALE_FALLBACK:
+                    plan = replace(
+                        plan,
+                        warnings=(
+                            *plan.warnings,
+                            "使用旧缓存 metadata：本次未能取得新的 DLsite 响应。",
+                        ),
+                    )
+                plans.append(plan)
             else:
                 status = (
                     RenamePlanStatus.CANCELLED

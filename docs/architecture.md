@@ -71,10 +71,16 @@ response; see [DLsite AJAX data contract](dlsite-data-contract.md). HTML JSON-LD
 against current live markup. Optional values degrade to missing values; corrupt core source metadata
 is a parse failure rather than invented metadata.
 
-SQLite is initialized through a small SQLAlchemy `Database` object. It contains the historical
-observation placeholder plus the v0.4 `rename_transactions` and `rename_operations` journal tables.
-Lookups and translation relations are still not automatically persisted; the project does not
-pretend to provide a metadata cache or a relation history repository.
+SQLite is initialized through a small SQLAlchemy `Database` object. It retains the early
+`work_observations` placeholder for compatibility, but the production observation source in v0.5 is
+`metadata_observations`; the placeholder is deprecated/unused and its unknown old rows are not
+migrated. `work_metadata_cache` stores one current row per work number, while
+`metadata_observations` appends one row for each successful live provider response. The cache and
+observation schemas are initialized separately from the v0.4 `rename_transactions` and
+`rename_operations` journal tables.
+Lookup results use the cache for current metadata and preserve provider provenance separately from
+delivery freshness. Translation relations are reconstructed from the normalized cached
+`translation_info`; no relation-history query or inference is implemented.
 
 Settings use `tomllib` and validated Pydantic models. Missing configuration is normal and uses
 built-in defaults. Invalid present configuration is surfaced rather than silently ignored.
@@ -107,9 +113,10 @@ recursively inspect work contents or support VJ/BJ Organizer candidates.
 
 `WorkLookup` is an in-memory batch record. `OrganizerService` deduplicates RJcodes for one run,
 calls the existing `LookupService` sequentially, isolates failures, and emits progress through the
-worker boundary. There is no persistent metadata cache. Cooperative cancellation stops new
-requests; an already-running bounded HTTP request may finish, and completed results remain in the
-preview.
+worker boundary. It shares the persistent `LookupService` metadata cache with the manual lookup
+page; fresh cache hits avoid provider calls, while stale fallback is surfaced as a plan warning.
+Cooperative cancellation stops new requests; an already-running bounded HTTP request may finish,
+and completed results remain in the preview.
 
 `RenamePlanner` only computes `source_path`, `current_name`, `proposed_name`, and `target_path`.
 It consumes the existing `NamingService` result and never calls a filesystem mutation API. It

@@ -11,7 +11,7 @@ from dlsite_organizer.domain.rename_execution import RenameExecutionResult, Tran
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.rename_journal import TransactionJournal, UnavailableRenameJournal
-from dlsite_organizer.services.lookup import LookupResult
+from dlsite_organizer.services.lookup import LookupFreshness, LookupResult
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
@@ -195,3 +195,39 @@ def test_organizer_page_shows_recent_transaction_and_disables_undo_after_success
     assert not page.undo_button.isEnabled()
     assert (tmp_path / 'old RJ01609020').exists()
     page.close()
+
+
+def test_organizer_page_shows_stale_metadata_warning_but_not_fresh_cache_warning(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    (tmp_path / "old RJ01609020").mkdir()
+
+    class FreshnessLookupService:
+        def __init__(self, freshness: LookupFreshness) -> None:
+            self.freshness = freshness
+
+        def lookup(self, raw_workno: str) -> LookupResult:
+            work = Work(workno=raw_workno, title="Preview Title", maker_name="Circle")
+            return LookupResult(
+                work=work,
+                formatted_name=f"[Circle][{raw_workno}] Preview Title",
+                freshness=self.freshness,
+            )
+
+    stale_page = OrganizerPage(
+        OrganizerService(FreshnessLookupService(LookupFreshness.CACHE_STALE_FALLBACK))
+    )
+    stale_page.set_preview(stale_page._organizer_service.preview(tmp_path))
+    stale_details = cast(QTableWidgetItem, stale_page.table.item(0, 6))
+    assert stale_page._preview is not None
+    assert stale_page._preview.plans[0].status is RenamePlanStatus.READY
+    assert "使用旧缓存 metadata" in stale_details.text()
+    stale_page.close()
+
+    fresh_page = OrganizerPage(
+        OrganizerService(FreshnessLookupService(LookupFreshness.CACHE_FRESH))
+    )
+    fresh_page.set_preview(fresh_page._organizer_service.preview(tmp_path))
+    fresh_details = cast(QTableWidgetItem, fresh_page.table.item(0, 6))
+    assert "使用旧缓存 metadata" not in fresh_details.text()
+    fresh_page.close()

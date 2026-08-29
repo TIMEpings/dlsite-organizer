@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from dlsite_organizer.domain.work import Availability, Work
@@ -61,6 +61,7 @@ class CachedMetadata:
     translation_info: TranslationInfoSource | None
     source: str
     fetched_at: datetime
+    regist_datetime: datetime | None = None
 
 
 class MetadataStore:
@@ -92,10 +93,39 @@ class MetadataStore:
                     availability=Availability(row.availability),
                     source_section=row.source_section,
                 )
-                return CachedMetadata(work, translation, row.source, row.fetched_at)
+                fetched_at = _as_utc(row.fetched_at)
+                if fetched_at is None:
+                    raise ValueError("cached metadata is missing fetched_at")
+                return CachedMetadata(
+                    work,
+                    translation,
+                    row.source,
+                    fetched_at,
+                    _as_utc(row.regist_datetime),
+                )
         except Exception:
             logger.exception("Metadata cache read failed for %s", workno)
             return None
+
+    def list_observations(self, workno: str) -> tuple[MetadataObservation, ...]:
+        """Return historical rows in deterministic observation order."""
+        try:
+            with self._database.session() as session:
+                rows = session.scalars(
+                    select(MetadataObservation)
+                    .where(MetadataObservation.workno == workno)
+                    .order_by(
+                        MetadataObservation.observed_at.asc(),
+                        MetadataObservation.id.asc(),
+                    )
+                ).all()
+                for row in rows:
+                    row.observed_at = _as_utc(row.observed_at)  # type: ignore[assignment]
+                    row.regist_datetime = _as_utc(row.regist_datetime)
+                return tuple(rows)
+        except Exception:
+            logger.exception("Metadata observations read failed for %s", workno)
+            return ()
 
     def save(
         self,
@@ -108,14 +138,18 @@ class MetadataStore:
         age_category: str | int | None = None,
         regist_datetime: datetime | None = None,
     ) -> None:
-        now = fetched_at or datetime.now(UTC)
+        now = _as_utc(fetched_at) or datetime.now(UTC)
+        normalized_regist_datetime = _as_utc(regist_datetime)
         try:
             with self._database.session() as session:
                 row = session.get(WorkMetadataCache, work.workno) or WorkMetadataCache(
                     workno=work.workno
                 )
                 row.title, row.maker_id, row.maker_name = work.title, work.maker_id, work.maker_name
-                row.release_date, row.regist_datetime = work.release_date, regist_datetime
+                row.release_date, row.regist_datetime = (
+                    work.release_date,
+                    normalized_regist_datetime,
+                )
                 row.series_name, row.cvs_json, row.tags_json = (
                     work.series_name,
                     json.dumps(work.cvs),
@@ -146,6 +180,8 @@ class MetadataStore:
         age_category: str | int | None = None,
         regist_datetime: datetime | None = None,
     ) -> None:
+        normalized_observed_at = _as_utc(observed_at) or datetime.now(UTC)
+        normalized_regist_datetime = _as_utc(regist_datetime)
         try:
             with self._database.session() as session:
                 session.add(
@@ -155,7 +191,7 @@ class MetadataStore:
                         maker_id=work.maker_id,
                         maker_name=work.maker_name,
                         release_date=work.release_date,
-                        regist_datetime=regist_datetime,
+                        regist_datetime=normalized_regist_datetime,
                         work_type=work_type,
                         age_category=str(age_category) if age_category is not None else None,
                         availability=work.availability.value,
@@ -163,9 +199,23 @@ class MetadataStore:
                         translation_json=translation_info.model_dump_json()
                         if translation_info
                         else None,
-                        observed_at=observed_at or datetime.now(UTC),
+                        observed_at=normalized_observed_at,
                     )
                 )
                 session.commit()
         except Exception:
             logger.exception("Metadata observation write failed for %s", work.workno)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalize datetimes before SQLite strips timezone metadata.
+
+    DLsite's current ``regist_date`` source values are naive timestamps.  The
+    application contract treats those values as UTC rather than silently using
+    the machine's local timezone.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)

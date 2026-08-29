@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Protocol, cast, runtime_checkable
+from typing import Callable, Protocol, cast, runtime_checkable
 
 from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
 from dlsite_organizer.domain.work import Work
@@ -79,6 +79,9 @@ class LookupResult:
         return self.translation.relations
 
 
+LookupClock = Callable[[], datetime]
+
+
 class LookupService:
     def __init__(
         self,
@@ -88,6 +91,7 @@ class LookupService:
         metadata_store: MetadataStore | None = None,
         cache_ttl_hours: float = 24.0,
         allow_stale_on_error: bool = True,
+        clock: LookupClock | None = None,
     ):
         self._provider = provider
         self._naming = naming
@@ -95,6 +99,7 @@ class LookupService:
         self._metadata_store = metadata_store
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
         self._allow_stale_on_error = allow_stale_on_error
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def lookup(self, raw_workno: str, *, force_refresh: bool = False) -> LookupResult:
         try:
@@ -105,28 +110,34 @@ class LookupService:
         if (
             cached
             and not force_refresh
-            and datetime.now(UTC) - cached.fetched_at <= self._cache_ttl
+            and self._now() - cached.fetched_at < self._cache_ttl
         ):
             return self._result(
                 workno,
                 cached.work,
                 cached.translation_info,
                 LookupFreshness.CACHE_FRESH,
-                "CACHE",
+                cached.source,
                 cached.fetched_at,
             )
         try:
             work, info, source, fetched, obj = self._fetch_work(workno)
         except WorkNotFoundError as exc:
             raise LookupFailure(LookupFailureKind.NOT_FOUND, f"Work not found: {workno}") from exc
-        except (DlsiteConnectionError, DlsiteHttpError, DlsiteParseError) as exc:
+        except DlsiteParseError as exc:
+            logger.exception("DLsite provider contract failure for %s", workno)
+            raise LookupFailure(
+                LookupFailureKind.RESPONSE,
+                "DLsite 返回的数据暂时无法读取，请稍后重试。",
+            ) from exc
+        except (DlsiteConnectionError, DlsiteHttpError) as exc:
             if cached and self._allow_stale_on_error:
                 return self._result(
                     workno,
                     cached.work,
                     cached.translation_info,
                     LookupFreshness.CACHE_STALE_FALLBACK,
-                    "CACHE_STALE",
+                    cached.source,
                     cached.fetched_at,
                 )
             kind = (
@@ -148,17 +159,43 @@ class LookupService:
             regist_datetime = cast(datetime | None, getattr(product, "regist_datetime", None))
             work_type = cast(str | None, getattr(product, "work_type", None))
             age_category = cast(str | int | None, getattr(product, "age_category", None))
-            self._metadata_store.save(work, info, source=source, fetched_at=fetched,
-                work_type=work_type, age_category=age_category, regist_datetime=regist_datetime)
-            self._metadata_store.append_observation(work, info, source=source, observed_at=fetched,
-                work_type=work_type, age_category=age_category, regist_datetime=regist_datetime)
+            try:
+                self._metadata_store.save(
+                    work,
+                    info,
+                    source=source,
+                    fetched_at=fetched,
+                    work_type=work_type,
+                    age_category=age_category,
+                    regist_datetime=regist_datetime,
+                )
+            except Exception:
+                logger.exception("Metadata cache persistence failed for %s", workno)
+            try:
+                self._metadata_store.append_observation(
+                    work,
+                    info,
+                    source=source,
+                    observed_at=fetched,
+                    work_type=work_type,
+                    age_category=age_category,
+                    regist_datetime=regist_datetime,
+                )
+            except Exception:
+                logger.exception("Metadata observation persistence failed for %s", workno)
         return self._result(workno, work, info, LookupFreshness.LIVE, source, fetched)
 
     def _fetch_work(self, workno):
         if isinstance(self._provider, _SourceAwareProvider):
             x = self._provider.fetch_work_lookup(workno)
-            return x.work, x.translation_info, getattr(x, "source", "LIVE"), datetime.now(UTC), x
-        return self._provider.fetch_work(workno), None, "LIVE", datetime.now(UTC), None
+            return x.work, x.translation_info, getattr(x, "source", "LIVE"), self._now(), x
+        return self._provider.fetch_work(workno), None, "LIVE", self._now(), None
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None:
+            raise ValueError("Lookup clock must return a timezone-aware datetime")
+        return value.astimezone(UTC)
 
     def _result(self, workno, work, info, freshness, source, fetched):
         return LookupResult(
