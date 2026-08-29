@@ -12,6 +12,7 @@ from dlsite_organizer.persistence.rename_journal import (
     TransactionJournal,
     UnavailableRenameJournal,
 )
+from dlsite_organizer.persistence.metadata_store import MetadataStore, MetadataObservation, WorkMetadataCache
 
 __all__ = [
     "Database",
@@ -22,4 +23,7 @@ __all__ = [
     "RenameTransactionRecord",
     "TransactionJournal",
     "UnavailableRenameJournal",
+    "MetadataStore",
+    "MetadataObservation",
+    "WorkMetadataCache",
 ]

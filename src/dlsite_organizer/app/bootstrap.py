@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from dlsite_organizer.app.settings import AppSettings
 from dlsite_organizer.persistence.database import Database
+from dlsite_organizer.persistence.metadata_store import MetadataStore
 from dlsite_organizer.persistence.rename_journal import (
     RenameJournal,
     TransactionJournal,
@@ -46,17 +47,22 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         timeout_seconds=settings.provider.timeout_seconds,
     )
     naming = NamingService(settings.naming_template)
-    lookup_service = LookupService(provider, naming)
+    database = Database(settings.database_path)
+    try:
+        database.initialize()
+    except Exception:
+        logger.exception('Database initialization failed; metadata persistence disabled')
+        metadata_store = None
+    else:
+        metadata_store = MetadataStore(database) if settings.cache.enabled else None
+    lookup_service = LookupService(provider, naming, metadata_store=metadata_store,
+        cache_ttl_hours=settings.cache.ttl_hours, allow_stale_on_error=settings.cache.allow_stale_on_error)
     organizer_service = OrganizerService(
         lookup_service,
         scanner=FolderScanner(),
         planner=RenamePlanner(naming),
     )
-    database = Database(settings.database_path)
-    try:
-        database.initialize()
-    except Exception:
-        logger.exception('Rename journal database initialization failed; execution disabled')
+    if not database.initialized:
         journal: RenameJournal = UnavailableRenameJournal()
     else:
         journal = TransactionJournal(database)

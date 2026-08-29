@@ -25,17 +25,19 @@ class LookupWorker(QObject):
         lookup_service: LookupService,
         cover_service: CoverService,
         raw_workno: str,
+        force_refresh: bool = False,
     ) -> None:
         super().__init__()
         self._lookup_service = lookup_service
         self._cover_service = cover_service
         self._raw_workno = raw_workno
+        self._force_refresh = force_refresh
 
     @Slot()
     def run(self) -> None:
         """Execute lookup and optional cover retrieval in the worker thread."""
         try:
-            result = self._lookup_service.lookup(self._raw_workno)
+            result = self._lookup_service.lookup(self._raw_workno, force_refresh=self._force_refresh)
             self.result_ready.emit(result)
             if result.work.cover_url:
                 cover = self._cover_service.fetch(result.work.cover_url)

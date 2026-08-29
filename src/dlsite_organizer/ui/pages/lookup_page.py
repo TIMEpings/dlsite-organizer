@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from dlsite_organizer.domain.relation import RelationType, TranslationRole
 from dlsite_organizer.services.cover import CoverService
-from dlsite_organizer.services.lookup import LookupResult, LookupService
+from dlsite_organizer.services.lookup import LookupFreshness, LookupResult, LookupService
 from dlsite_organizer.services.translation_relations import (
     TranslationAnalysis,
     TranslationAnalysisStatus,
@@ -45,9 +45,11 @@ class LookupPage(QWidget):
         self._thread: QThread | None = None
         self._worker: LookupWorker | None = None
         self._formatted_name = ""
+        self.refresh_button = QPushButton("强制刷新")
 
         self._build_ui()
         self.query_button.clicked.connect(self.start_lookup)
+        self.refresh_button.clicked.connect(self.force_refresh)
         self.code_input.returnPressed.connect(self.start_lookup)
         self.copy_button.clicked.connect(self.copy_name)
 
@@ -81,6 +83,7 @@ class LookupPage(QWidget):
         self.query_button.setMinimumSize(96, 40)
         query_row.addWidget(self.code_input, 1)
         query_row.addWidget(self.query_button)
+        query_row.addWidget(self.refresh_button)
         layout.addLayout(query_row)
 
         self.status_label = QLabel("请输入 RJcode 开始查询。")
@@ -200,6 +203,21 @@ class LookupPage(QWidget):
         self._worker = worker
         thread.start()
 
+    @Slot()
+    def force_refresh(self) -> None:
+        if self._thread is not None:
+            return
+        self._start_lookup_worker(force_refresh=True)
+
+    def _start_lookup_worker(self, *, force_refresh: bool = False) -> None:
+        self.start_lookup() if not force_refresh else self._run_lookup(force_refresh=True)
+
+    def _run_lookup(self, *, force_refresh: bool) -> None:
+        self._set_loading(True); self._clear_result()
+        thread = QThread(); worker = LookupWorker(self._lookup_service, self._cover_service, self.code_input.text(), force_refresh)
+        worker.moveToThread(thread); thread.started.connect(worker.run); worker.result_ready.connect(self._show_result); worker.cover_ready.connect(self._show_cover); worker.failed.connect(self._show_error); worker.finished.connect(thread.quit); worker.finished.connect(worker.deleteLater); thread.finished.connect(thread.deleteLater); thread.finished.connect(self._lookup_finished)
+        self._thread, self._worker = thread, worker; thread.start()
+
     @Slot(object)
     def _show_result(self, value: object) -> None:
         result = cast(LookupResult, value)
@@ -220,7 +238,8 @@ class LookupPage(QWidget):
         self.copy_button.setEnabled(True)
         self._show_relations(result.translation)
         self.status_label.setProperty("state", "success")
-        self.status_label.setText("查询完成。")
+        label = {LookupFreshness.LIVE: "实时", LookupFreshness.CACHE_FRESH: "缓存", LookupFreshness.CACHE_STALE_FALLBACK: "旧缓存"}[result.freshness]
+        self.status_label.setText(f"查询完成 · {label}")
         self._refresh_status_style()
 
     @Slot(bytes)
@@ -265,6 +284,7 @@ class LookupPage(QWidget):
 
     def _set_loading(self, loading: bool) -> None:
         self.query_button.setEnabled(not loading)
+        self.refresh_button.setEnabled(not loading)
         self.code_input.setEnabled(not loading)
 
     def _clear_result(self) -> None:

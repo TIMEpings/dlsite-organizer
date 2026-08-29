@@ -205,3 +205,4 @@ the existing `Work` model without importing the UI or DLsite-specific raw fields
 ## Startup journal health
 
 At startup and immediately before execution, the journal is checked for PENDING or RECOVERY_REQUIRED transactions. Any unresolved transaction blocks mutation. Execution facts (SUCCESS/FAILED/PENDING) remain separate from recovery uncertainty metadata; no automatic crash recovery is attempted.
+LookupService uses MetadataStore for a current cache and append-only observations. Cache freshness is independent from historical evidence: fresh hits replace neither observations nor provenance, while successful live provider responses update the current row and append one observation. Metadata persistence failures are logged and never disable live lookup; rename journal availability remains a separate safety boundary.

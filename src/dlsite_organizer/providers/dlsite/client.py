@@ -68,6 +68,7 @@ class DlsiteWorkLookup:
 
     work: Work
     product_info: ProductInfoAjaxSource | None
+    source: str = "DLSITE_HTML_JSONLD"
 
     @property
     def translation_info(self) -> TranslationInfoSource | None:
@@ -105,6 +106,7 @@ class DlsiteProvider:
                     return DlsiteWorkLookup(
                         work=normalize_product_info_ajax(structured, section=self._site.section),
                         product_info=structured,
+                        source="DLSITE_PRODUCT_INFO_AJAX",
                     )
                 response = client.get(self.build_product_url(normalized))
         except httpx.TimeoutException as exc:
@@ -129,6 +131,7 @@ class DlsiteProvider:
                     section=self._site.section,
                 ),
                 product_info=None,
+                source="DLSITE_HTML_JSONLD",
             )
         except DlsiteParseError:
             logger.exception("Failed to parse DLsite metadata for %s", normalized)

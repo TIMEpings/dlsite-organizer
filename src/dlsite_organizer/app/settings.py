@@ -18,6 +18,12 @@ class ProviderSettings(BaseModel):
     base_url: str = "https://www.dlsite.com"
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
 
+class CacheSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    enabled: bool = True
+    ttl_hours: float = Field(default=24.0, gt=0)
+    allow_stale_on_error: bool = True
+
 
 class AppSettings(BaseModel):
     """Validated values used to compose the application."""
@@ -27,6 +33,7 @@ class AppSettings(BaseModel):
     naming_template: str = DEFAULT_NAMING_TEMPLATE
     database_path: Path = Field(default_factory=lambda: default_data_dir() / "metadata.sqlite3")
     provider: ProviderSettings = Field(default_factory=ProviderSettings)
+    cache: CacheSettings = Field(default_factory=CacheSettings)
 
 
 class SettingsError(ValueError):
