@@ -1,0 +1,19 @@
+{
+  "RJ01609020": {
+    "workno": "RJ01609020",
+    "work_name": "雨音と過ごす夜",
+    "maker_id": "RG12345",
+    "maker_name": "星空サークル",
+    "regist_date": "2025-06-14 00:00:00",
+    "work_image": "//img.dlsite.jp/sample.jpg",
+    "work_type": "SOU",
+    "age_category": 3,
+    "translation_info": {
+      "original_workno": "RJ01000001",
+      "parent_workno": "RJ01000002",
+      "child_worknos": ["RJ02000001", "RJ02000002"],
+      "lang": "zh_CN"
+    },
+    "fixture_only_unknown_extra": "proves unknown fields are tolerated"
+  }
+}

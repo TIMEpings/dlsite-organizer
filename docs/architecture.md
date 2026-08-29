@@ -2,7 +2,7 @@
 
 ## Current architecture
 
-The v0.1 lookup flow is deliberately small:
+The v0.1.1 lookup flow is deliberately small:
 
 ```text
 PySide6 LookupPage
@@ -11,9 +11,11 @@ LookupService ─────→ NamingService
         ↓
 WorkProvider protocol
         ↓
-DlsiteProvider → page parser → public DLsite product page
-        ↓
-      Work
+DlsiteProvider → product_info_ajax parser → ProductInfoAjaxSource ─┐
+        ↓ (only when unusable)                                      │
+HTML JSON-LD parser → HtmlProductSource ────────────────────────────┤
+                                                                     ↓
+                                                                   Work
 ```
 
 `Work`, work-code validation, safe naming primitives, and relation contracts live in the domain
@@ -22,12 +24,26 @@ coordinates validation, provider access, error translation, and naming without k
 The UI owns thread lifecycle and presentation only; `LookupWorker` invokes services and emits
 values, and never manipulates widgets or implements parsing policy.
 
-The DLsite adapter builds section URLs in one place and converts provider-local raw HTML into the
-domain `Work`. v0.1 conservatively reads only Schema.org `Product` JSON-LD. The offline fixture is a
-contract sample rather than a captured live page. Because this environment could not establish a
-DLsite connection during development, compatibility with the current live markup remains an
-explicit integration limitation. Optional fields degrade to missing values; a missing trustworthy
-title is a parse failure rather than invented metadata.
+`DlsiteSite` builds every section-scoped URL in one place. `DlsiteProvider` first requests the
+candidate `product/info/ajax?product_id=<WORKNO>` source. A successful response is used only when it
+validates as `ProductInfoAjaxSource`; otherwise the provider makes one HTML fallback request. There is
+no brute-force section probing. The configured section remains a provider implementation detail and
+is the narrow boundary where a future resolver can be introduced.
+
+`ProductInfoAjaxSource` and its nested `TranslationInfoSource` are provider-local Pydantic DTOs with
+`extra="allow"`. They retain a supported metadata subset and future translation fields without
+polluting `Work` or producing relations. Core `workno` and `work_name` must be correctly typed and
+the response work number must match the request. `HtmlProductSource` is a separate provider-local
+dataclass for Schema.org Product JSON-LD. Each source is normalized into `Work` only after extraction;
+the domain never imports HTTP, HTML, JSON, or DLsite DTOs.
+
+The live candidate endpoint could not be reached from this development environment: a direct probe
+timed out before receiving an HTTP response and the browser connector could not open the URL. Thus the
+structured contract is fixture-backed, not asserted to match current production DLsite. The fixture
+named `product_info_ajax_contract.json` is synthetic and explicitly represents a `product_info_ajax`
+parser contract; it is not a captured response. HTML JSON-LD also remains unverified against current
+live markup. Optional values degrade to missing values; corrupt core source metadata is a parse
+failure rather than invented metadata.
 
 SQLite is initialized through a small SQLAlchemy `Database` object. Its only table reserves a
 minimal shape for future historical observations. Lookups are not automatically persisted in

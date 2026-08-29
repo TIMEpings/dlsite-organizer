@@ -57,18 +57,42 @@ pyright
 
 ## Provider status and limitations
 
-v0.1 的 provider 只构造集中管理的公开作品页面 URL，并只尝试读取页面中的
-Schema.org `Product` JSON-LD。它不依赖未经验证的 AJAX 私有字段，也不会把页面字段
-直接暴露给 domain 或 UI。核心字段仅承诺 `workno` 与 `title`；maker 和发售日期只有在
-语义数据可靠提供时才显示，其他字段均可缺失。
+v0.1.1 的 provider 有两个受限的数据源，且它们都只在 provider 内转换为 `Work`：
 
-当前默认 section 是 `maniax`。v0.1 不会依次猜测请求多个 section，因此其他 DLsite
-类别尚未自动识别。离线 parser fixture 是项目定义的语义契约样本，不是从线上保存的
-页面快照；在实时网络无法访问 DLsite 的环境中，线上页面是否实际提供兼容 JSON-LD
-必须视为尚未验证。页面语义标记变更时，provider/parser 需要相应更新。
+```text
+product/info/ajax JSON → ProductInfoAjaxSource DTO → Work
+HTML Schema.org Product JSON-LD → HtmlProductSource → Work
+```
+
+当 AJAX 响应成功且符合显式 DTO 契约时，它是首选 metadata source，提供 `workno`、
+`work_name`、`maker_id`、`maker_name`、`regist_date` 和 `work_image`。`work_type`、
+`age_category` 也会保留在 DTO 中，但目前没有对应的 domain 字段。若存在，
+`translation_info` 被保存为 provider-local `TranslationInfoSource`（
+`original_workno`、`parent_workno`、`child_worknos`、`lang`）；本版本绝不会据此创建或猜测
+`WorkRelation`。未知 JSON 字段可被忽略，但缺少或类型错误的核心 `workno` / `work_name`
+会令这个 source 无效。
+
+HTML JSON-LD 仍是 fallback/supplementary source：当 AJAX 不可用、返回非成功状态或不符合
+DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及页面确实声明时的 maker、
+发售日期、系列、声优、tags 和封面；它不提供 translation contract。不会为同一个 RJcode
+轮询多个 section。
+
+当前默认 section 仍是 `maniax`，但 URL 构造集中在 provider 的 `DlsiteSite` 中；UI、domain
+和 service 都不知道 `maniax/home/books/...`。AJAX endpoint 是否能跨 section 解析当前尚未
+验证，因此本版本仍使用一个显式配置的 section，未来可在这一处替换为最小 section resolver。
+
+本开发环境对候选 URL
+`https://www.dlsite.com/maniax/product/info/ajax?product_id=RJ01609020` 的连接探测超时
+（HTTP 000），浏览器连接器同样无法打开它。因此没有声称已验证线上 AJAX 结构，也没有
+加入 live integration fixture。`tests/fixtures/product_info_ajax_contract.json` 是明确标记为
+`product_info_ajax` 的**合成 provider contract fixture**，不是保存的真实 DLsite response；
+它只验证本项目对成功响应的处理边界。原有 `product_semantic.html` 同样是合成 HTML
+JSON-LD fixture。未来在可连接环境取得、并经审查的真实 response 后，应以最小语义子集
+替换或补充这两个 fixture。
 
 ## Roadmap
 
-下一阶段将先验证并加固真实页面 metadata adapter，再考虑缓存。之后才会加入安全的
+下一阶段应先在可访问 DLsite 的环境中验证并固定真实 `product/info/ajax` 响应契约，再考虑
+缓存。之后才会加入安全的
 `scan → plan → preview → execute → transaction log → undo` 重命名流程及基于证据的
 关系分析。

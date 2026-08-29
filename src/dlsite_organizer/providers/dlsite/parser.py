@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urljoin
@@ -19,16 +20,42 @@ from dlsite_organizer.domain.work import Availability, Work
 from dlsite_organizer.providers.dlsite.exceptions import DlsiteParseError
 
 
+@dataclass(frozen=True, slots=True)
+class HtmlProductSource:
+    """Provider-local data extracted from Schema.org Product JSON-LD."""
+
+    title: str
+    maker_id: str | None
+    maker_name: str | None
+    release_date: date | None
+    series_name: str | None
+    cvs: list[str]
+    tags: list[str]
+    cover_url: str | None
+
+
 def parse_product_page(html: str, workno: str, *, section: str) -> Work:
-    """Convert a product page's semantic JSON-LD into a Work."""
+    """Legacy convenience wrapper for HTML fallback normalization.
+
+    ``parse_product_page_source`` owns the HTML-specific extraction.  Keeping
+    this wrapper preserves the v0.1 parser API for callers and tests.
+    """
+    return normalize_product_page_source(
+        parse_product_page_source(html),
+        workno=workno,
+        section=section,
+    )
+
+
+def parse_product_page_source(html: str) -> HtmlProductSource:
+    """Extract provider-local semantic data from HTML JSON-LD."""
     product = _find_product_document(html)
     title = _text(product.get("name"))
     if title is None:
         raise DlsiteParseError("Product metadata did not contain a title")
 
     maker_id, maker_name = _parse_maker(product)
-    return Work(
-        workno=workno,
+    return HtmlProductSource(
         title=title,
         maker_id=maker_id,
         maker_name=maker_name,
@@ -37,6 +64,26 @@ def parse_product_page(html: str, workno: str, *, section: str) -> Work:
         cvs=_parse_people(product.get("actor")),
         tags=_parse_keywords(product.get("keywords")),
         cover_url=_parse_image(product.get("image")),
+    )
+
+
+def normalize_product_page_source(
+    source: HtmlProductSource,
+    *,
+    workno: str,
+    section: str,
+) -> Work:
+    """Normalize HTML semantic data without exposing its structure to domain code."""
+    return Work(
+        workno=workno,
+        title=source.title,
+        maker_id=source.maker_id,
+        maker_name=source.maker_name,
+        release_date=source.release_date,
+        series_name=source.series_name,
+        cvs=source.cvs,
+        tags=source.tags,
+        cover_url=source.cover_url,
         availability=Availability.AVAILABLE,
         source_section=section,
     )

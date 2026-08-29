@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from urllib.parse import quote
 
 import httpx
@@ -16,13 +17,45 @@ from dlsite_organizer.providers.dlsite.exceptions import (
     DlsiteParseError,
     WorkNotFoundError,
 )
-from dlsite_organizer.providers.dlsite.parser import parse_product_page
+from dlsite_organizer.providers.dlsite.parser import (
+    normalize_product_page_source,
+    parse_product_page_source,
+)
+from dlsite_organizer.providers.dlsite.sources import (
+    normalize_product_info_ajax,
+    parse_product_info_ajax,
+)
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class DlsiteSite:
+    """Centralized URL policy for one explicitly configured DLsite section.
+
+    The provider never leaks this storefront routing detail to domain or UI.
+    A future section resolver can replace the configured value here without
+    changing callers or probing every DLsite section.
+    """
+
+    base_url: str
+    section: str
+
+    def product_info_url(self, workno: str) -> str:
+        return (
+            f"{self.base_url}/{quote(self.section, safe='')}/product/info/ajax?product_id="
+            f"{quote(workno, safe='')}"
+        )
+
+    def product_page_url(self, workno: str) -> str:
+        return (
+            f"{self.base_url}/{quote(self.section, safe='')}/work/=/product_id/"
+            f"{quote(workno, safe='')}.html"
+        )
+
+
 class DlsiteProvider:
-    """Fetch public product pages from one explicitly configured DLsite section."""
+    """Fetch DLsite metadata from structured JSON, then semantic HTML fallback."""
 
     def __init__(
         self,
@@ -32,18 +65,20 @@ class DlsiteProvider:
         timeout_seconds: float = 15.0,
         client_factory: Callable[[], httpx.Client] | None = None,
     ) -> None:
-        self._section = section.strip("/")
-        self._base_url = base_url.rstrip("/")
+        normalized_section = section.strip("/")
+        self._site = DlsiteSite(base_url=base_url.rstrip("/"), section=normalized_section)
         self._timeout = httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 10.0))
         self._client_factory = client_factory or self._new_client
 
     def fetch_work(self, workno: str) -> Work:
-        """Fetch and parse one public product page."""
+        """Fetch one work, preferring structured metadata over HTML semantics."""
         normalized = str(WorkCode.parse(workno, allowed_prefixes={"RJ"}))
-        url = self.build_product_url(normalized)
         try:
             with self._client_factory() as client:
-                response = client.get(url)
+                structured = self._fetch_structured(client, normalized)
+                if structured is not None:
+                    return structured
+                response = client.get(self.build_product_url(normalized))
         except httpx.TimeoutException as exc:
             logger.warning("DLsite request timed out for %s", normalized)
             raise DlsiteConnectionError("DLsite request timed out") from exc
@@ -58,17 +93,49 @@ class DlsiteProvider:
             raise DlsiteHttpError(f"Unexpected HTTP status {response.status_code}")
 
         try:
-            return parse_product_page(response.text, normalized, section=self._section)
+            source = parse_product_page_source(response.text)
+            return normalize_product_page_source(
+                source,
+                workno=normalized,
+                section=self._site.section,
+            )
         except DlsiteParseError:
             logger.exception("Failed to parse DLsite metadata for %s", normalized)
             raise
 
     def build_product_url(self, workno: str) -> str:
         """Build a section-scoped public product URL in one centralized location."""
-        return (
-            f"{self._base_url}/{quote(self._section, safe='')}/work/=/product_id/"
-            f"{quote(workno, safe='')}.html"
-        )
+        return self._site.product_page_url(workno)
+
+    def build_product_info_url(self, workno: str) -> str:
+        """Build the candidate structured endpoint URL for the configured site."""
+        return self._site.product_info_url(workno)
+
+    def _fetch_structured(self, client: httpx.Client, workno: str) -> Work | None:
+        """Return structured metadata when valid, otherwise defer to HTML once.
+
+        An unavailable endpoint, an unexpected response, or a contract mismatch
+        is not proof that the work is absent.  HTML receives one supplementary
+        chance rather than triggering section guessing or further requests.
+        """
+        try:
+            response = client.get(self.build_product_info_url(workno))
+        except httpx.RequestError as exc:
+            logger.info("Structured DLsite source unavailable for %s: %s", workno, exc)
+            return None
+        if response.is_error:
+            logger.info(
+                "Structured DLsite source returned HTTP %s for %s; using HTML fallback",
+                response.status_code,
+                workno,
+            )
+            return None
+        try:
+            source = parse_product_info_ajax(response.text, workno)
+            return normalize_product_info_ajax(source, section=self._site.section)
+        except DlsiteParseError as exc:
+            logger.info("Structured DLsite source unusable for %s: %s", workno, exc)
+            return None
 
     def _new_client(self) -> httpx.Client:
         return httpx.Client(
