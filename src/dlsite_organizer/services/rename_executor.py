@@ -125,7 +125,9 @@ class RenameExecutor:
                 ordered, ExecutionStatus.REJECTED, f'无法检查 journal health，已阻止重命名: {exc}'
             )
         if unresolved is not None:
-            return self._no_mutation_result(ordered, ExecutionStatus.REJECTED, _unresolved_message(unresolved))
+            return self._no_mutation_result(
+                ordered, ExecutionStatus.REJECTED, _unresolved_message(unresolved)
+            )
         root = _absolute_path(root_path)
         issues = _preflight(root, ordered, case_insensitive=self._case_insensitive)
         if issues:
@@ -535,7 +537,9 @@ def _last_mile_issue(
         return 'source parent changed outside expected root'
     if _path_key(target.parent, case_insensitive) != _path_key(root, case_insensitive):
         return 'target parent changed outside expected root'
-    if source == target or _path_key(source, case_insensitive) == _path_key(target, case_insensitive):
+    if source == target or _path_key(source, case_insensitive) == _path_key(
+        target, case_insensitive
+    ):
         return 'source and target are identical or case-only'
     if _link_like(source) or not _lexists(source) or not source.is_dir():
         return 'source precondition changed before mutation'

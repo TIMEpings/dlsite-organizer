@@ -69,9 +69,7 @@ class OrganizerPage(QWidget):
 
         heading = QLabel("整理")
         heading.setObjectName("pageTitle")
-        description = QLabel(
-            "扫描作品根目录，查询 RJcode 并生成重命名预览；执行前需要明确确认。"
-        )
+        description = QLabel("扫描作品根目录，查询 RJcode 并生成重命名预览；执行前需要明确确认。")
         description.setObjectName("pageDescription")
         description.setWordWrap(True)
         layout.addWidget(heading)
@@ -102,8 +100,8 @@ class OrganizerPage(QWidget):
         self.cancel_button.setEnabled(False)
         action_row.addWidget(self.scan_button)
         action_row.addWidget(self.cancel_button)
-        self.execute_button = QPushButton('执行重命名')
-        self.execute_button.setObjectName('primaryButton')
+        self.execute_button = QPushButton("执行重命名")
+        self.execute_button.setObjectName("primaryButton")
         self.execute_button.setMinimumSize(124, 40)
         self.execute_button.setEnabled(False)
         action_row.addWidget(self.execute_button)
@@ -131,10 +129,10 @@ class OrganizerPage(QWidget):
         self.summary_label.setObjectName("pageDescription")
         layout.addWidget(self.summary_label)
         recent_row = QHBoxLayout()
-        self.recent_transaction_label = QLabel('最近一次重命名：无')
-        self.recent_transaction_label.setObjectName('pageDescription')
+        self.recent_transaction_label = QLabel("最近一次重命名：无")
+        self.recent_transaction_label.setObjectName("pageDescription")
         self.recent_transaction_label.setWordWrap(True)
-        self.undo_button = QPushButton('撤销最近一次重命名')
+        self.undo_button = QPushButton("撤销最近一次重命名")
         self.undo_button.setMinimumSize(152, 36)
         self.undo_button.setEnabled(False)
         recent_row.addWidget(self.recent_transaction_label, 1)
@@ -279,27 +277,27 @@ class OrganizerPage(QWidget):
         result = cast(RenameExecutionResult, value)
         self._last_execution_result = result
         self._invalidate_preview()
-        if result.status.name == 'COMPLETED':
-            self.status_label.setProperty('state', 'success')
+        if result.status.name == "COMPLETED":
+            self.status_label.setProperty("state", "success")
             self.status_label.setText(
-                f'重命名完成：成功 {result.success_count}，失败 {result.failed_count}。 '
-                f'Transaction: {result.transaction_id}。当前预览已失效，请重新扫描。'
+                f"重命名完成：成功 {result.success_count}，失败 {result.failed_count}。 "
+                f"Transaction: {result.transaction_id}。当前预览已失效，请重新扫描。"
             )
-        elif result.status.name == 'PARTIAL':
-            self.status_label.setProperty('state', 'error')
+        elif result.status.name == "PARTIAL":
+            self.status_label.setProperty("state", "error")
             self.status_label.setText(
-                f'重命名未全部完成：成功 {result.success_count}，失败 {result.failed_count}，'
-                f'未执行 {result.not_executed_count}。已停止后续操作。'
-                ' 可以从最近事务尝试撤销已经成功的修改。'
+                f"重命名未全部完成：成功 {result.success_count}，失败 {result.failed_count}，"
+                f"未执行 {result.not_executed_count}。已停止后续操作。"
+                " 可以从最近事务尝试撤销已经成功的修改。"
             )
-        elif result.status.name == 'RECOVERY_REQUIRED':
-            self.status_label.setProperty('state', 'error')
+        elif result.status.name == "RECOVERY_REQUIRED":
+            self.status_label.setProperty("state", "error")
             self.status_label.setText(
-                '重命名状态需要恢复：文件系统与 journal 可能不同步。'
-                ' 请不要立即重新执行；详细信息已写入日志。'
+                "重命名状态需要恢复：文件系统与 journal 可能不同步。"
+                " 请不要立即重新执行；详细信息已写入日志。"
             )
         else:
-            self._show_error(result.error or '重命名未执行。')
+            self._show_error(result.error or "重命名未执行。")
         self._refresh_status_style()
         self._refresh_recent_transaction()
 
@@ -308,20 +306,20 @@ class OrganizerPage(QWidget):
         result = cast(UndoResult, value)
         self._last_undo_result = result
         self._invalidate_preview()
-        if result.status.name == 'UNDONE':
-            self.status_label.setProperty('state', 'success')
+        if result.status.name == "UNDONE":
+            self.status_label.setProperty("state", "success")
             self.status_label.setText(
-                f'撤销完成：恢复 {result.success_count} 个目录。当前预览已失效，请重新扫描。'
+                f"撤销完成：恢复 {result.success_count} 个目录。当前预览已失效，请重新扫描。"
             )
-        elif result.status.name == 'UNDO_PARTIAL':
+        elif result.status.name == "UNDO_PARTIAL":
             self._show_error(
-                f'撤销未全部完成：成功 {result.success_count}，失败 {result.failed_count}。'
-                ' 已停止后续撤销操作。'
+                f"撤销未全部完成：成功 {result.success_count}，失败 {result.failed_count}。"
+                " 已停止后续撤销操作。"
             )
-        elif result.status.name == 'RECOVERY_REQUIRED':
-            self._show_error('撤销状态需要恢复；请不要立即重新执行。')
+        elif result.status.name == "RECOVERY_REQUIRED":
+            self._show_error("撤销状态需要恢复；请不要立即重新执行。")
         else:
-            self._show_error(result.error or '撤销未执行。')
+            self._show_error(result.error or "撤销未执行。")
         self._refresh_status_style()
         self._refresh_recent_transaction()
 
@@ -331,25 +329,18 @@ class OrganizerPage(QWidget):
         if self._execution_service is None or not plans:
             return
         warning_count = sum(bool(plan.warnings) for plan in plans)
-        text = (
-            f'即将重命名 {len(plans)} 个文件夹。 '
-            '不会移动或删除文件。 '
-            '不会覆盖已存在目录。'
-        )
+        text = f"即将重命名 {len(plans)} 个文件夹。 不会移动或删除文件。 不会覆盖已存在目录。"
         if warning_count:
-            text += f' 其中 {warning_count} 项包含路径警告。'
+            text += f" 其中 {warning_count} 项包含路径警告。"
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setWindowTitle('确认执行重命名')
+        dialog.setWindowTitle("确认执行重命名")
         dialog.setText(text)
         dialog.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
         )
         dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
-        details = ' '.join(
-            f'{plan.source_path.name} -> {plan.target_path}'
-            for plan in plans
-        )
+        details = " ".join(f"{plan.source_path.name} -> {plan.target_path}" for plan in plans)
         dialog.setDetailedText(details)
         if dialog.exec() != QMessageBox.StandardButton.Yes:
             return
@@ -372,20 +363,19 @@ class OrganizerPage(QWidget):
         try:
             transaction = self._undo_service.latest_transaction()
         except Exception as exc:
-            self._show_error(f'无法读取最近事务：{exc}')
+            self._show_error(f"无法读取最近事务：{exc}")
             return
         if transaction is None:
             self._refresh_recent_transaction()
             return
         count = sum(
-            operation.status.name == 'SUCCESS'
-            and operation.undo_status.name != 'SUCCESS'
+            operation.status.name == "SUCCESS" and operation.undo_status.name != "SUCCESS"
             for operation in transaction.operations
         )
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setWindowTitle('确认撤销重命名')
-        dialog.setText(f'将撤销最近一次重命名。 {count} 个目录将恢复到执行前的名称。')
+        dialog.setWindowTitle("确认撤销重命名")
+        dialog.setText(f"将撤销最近一次重命名。 {count} 个目录将恢复到执行前的名称。")
         dialog.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
         )
@@ -422,11 +412,9 @@ class OrganizerPage(QWidget):
         thread.start()
 
     @Slot(int, int, str, str)
-    def _show_action_progress(
-        self, completed: int, total: int, source: str, target: str
-    ) -> None:
-        self.status_label.setProperty('state', 'loading')
-        self.status_label.setText(f'正在执行 {completed} / {total}: {source} -> {target}')
+    def _show_action_progress(self, completed: int, total: int, source: str, target: str) -> None:
+        self.status_label.setProperty("state", "loading")
+        self.status_label.setText(f"正在执行 {completed} / {total}: {source} -> {target}")
         self._refresh_status_style()
 
     def _append_plan(self, plan: RenamePlan) -> None:
@@ -451,9 +439,7 @@ class OrganizerPage(QWidget):
             item.setToolTip(value)
             if column == 0 and plan.status is RenamePlanStatus.READY:
                 item.setFlags(
-                    item.flags()
-                    | Qt.ItemFlag.ItemIsUserCheckable
-                    | Qt.ItemFlag.ItemIsEnabled
+                    item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
                 )
                 item.setCheckState(Qt.CheckState.Checked)
             elif column == 0:
@@ -521,7 +507,7 @@ class OrganizerPage(QWidget):
         self._preview_stale = True
         self.table.setEnabled(False)
         self.execute_button.setEnabled(False)
-        self.summary_label.setText('Preview stale: 请重新扫描以刷新状态。')
+        self.summary_label.setText("Preview stale: 请重新扫描以刷新状态。")
 
     def _refresh_recent_transaction(self) -> None:
         if self._undo_service is None:
@@ -533,30 +519,33 @@ class OrganizerPage(QWidget):
                 self.undo_button.setEnabled(False)
                 self.execute_button.setEnabled(False)
                 self.recent_transaction_label.setText(
-                    f'检测到未解决的重命名事务: {unresolved.transaction_id} | root={unresolved.root} | 状态={unresolved.status.value}'
+                    f"检测到未解决的重命名事务: {unresolved.transaction_id} "
+                    f"| root={unresolved.root} | 状态={unresolved.status.value}"
                 )
-                self.status_label.setProperty('state', 'error')
-                self.status_label.setText('检测到未解决的重命名事务。为防止进一步改变文件系统，新的重命名和普通撤销已暂时禁用。请人工检查 SQLite 与文件系统。')
+                self.status_label.setProperty("state", "error")
+                self.status_label.setText(
+                "检测到未解决的重命名事务。为防止进一步改变文件系统，新的重命名和普通撤销已暂时禁用。"
+                "请人工检查 SQLite 与文件系统。"
+                )
                 self._refresh_status_style()
                 return
             transaction = self._undo_service.latest_transaction()
         except Exception:
             self.undo_button.setEnabled(False)
-            self.recent_transaction_label.setText('最近一次重命名：journal 不可用')
+            self.recent_transaction_label.setText("最近一次重命名：journal 不可用")
             return
         if transaction is None:
             self.undo_button.setEnabled(False)
-            self.recent_transaction_label.setText('最近一次重命名：无')
+            self.recent_transaction_label.setText("最近一次重命名：无")
             return
         pending = sum(
-            operation.status.name == 'SUCCESS'
-            and operation.undo_status.name != 'SUCCESS'
+            operation.status.name == "SUCCESS" and operation.undo_status.name != "SUCCESS"
             for operation in transaction.operations
         )
         self.undo_button.setEnabled(self._thread is None and pending > 0)
         self.recent_transaction_label.setText(
-            f'最近一次重命名：{transaction.created_at:%Y-%m-%d %H:%M} | '
-            f'可撤销：{pending} | 事务：{transaction.transaction_id}'
+            f"最近一次重命名：{transaction.created_at:%Y-%m-%d %H:%M} | "
+            f"可撤销：{pending} | 事务：{transaction.transaction_id}"
         )
 
     def _clear_preview(self) -> None:

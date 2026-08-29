@@ -87,7 +87,11 @@ class UndoService:
                 error='unresolved transaction blocks undo',
             )
         if os.name != 'nt' and isinstance(self._filesystem, LocalRenameFilesystem):
-            return UndoResult(status=TransactionStatus.FAILED, transaction=None, error='真实文件系统重命名仅支持 Windows')
+            return UndoResult(
+                status=TransactionStatus.FAILED,
+                transaction=None,
+                error='真实文件系统重命名仅支持 Windows',
+            )
 
         try:
             transaction = (
@@ -180,8 +184,6 @@ class UndoService:
 
         filesystem = self._filesystem
         if filesystem is None:
-            from dlsite_organizer.services.rename_executor import LocalRenameFilesystem
-
             filesystem = LocalRenameFilesystem()
         current_operations = list(transaction.operations)
         by_sequence = {

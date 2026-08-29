@@ -51,7 +51,11 @@ class RenameOperationRecord(Base):
     '''Durable intent and outcome for one operation in a rename transaction.'''
 
     __tablename__ = 'rename_operations'
-    __table_args__ = (UniqueConstraint('transaction_id', 'sequence', name='uq_rename_operation_transaction_sequence'),)
+    __table_args__ = (
+        UniqueConstraint(
+            'transaction_id', 'sequence', name='uq_rename_operation_transaction_sequence'
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     transaction_id: Mapped[str] = mapped_column(
@@ -89,14 +93,19 @@ class Database:
         Base.metadata.create_all(self._engine)
         # Lightweight forward migration for development databases created by v0.4.
         with self._engine.begin() as connection:
-            columns = {row[1] for row in connection.execute(text('PRAGMA table_info(rename_transactions)'))}
+            columns = {
+                row[1]
+                for row in connection.execute(text('PRAGMA table_info(rename_transactions)'))
+            }
             for name, definition in (
                 ('recovery_stage', 'VARCHAR(64)'),
                 ('recovery_error', 'VARCHAR'),
                 ('recovery_sequence', 'INTEGER'),
             ):
                 if name not in columns:
-                    connection.execute(text(f'ALTER TABLE rename_transactions ADD COLUMN {name} {definition}'))
+                    connection.execute(
+                        text(f'ALTER TABLE rename_transactions ADD COLUMN {name} {definition}')
+                    )
         self._initialized = True
 
     @property
