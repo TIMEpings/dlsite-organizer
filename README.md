@@ -1,12 +1,14 @@
 # dlsite-organizer
 
-`dlsite-organizer` 是一个处于早期开发阶段的 Python 桌面应用。v0.3 支持手动 RJcode
-查询、已确认翻译关系、本地作品文件夹扫描，以及安全的重命名预览：扫描目录名中的
+`dlsite-organizer` 是一个处于早期开发阶段的 Python 桌面应用。v0.4 支持手动 RJcode
+查询、已确认翻译关系、本地作品文件夹扫描，以及带确认、执行日志和撤销的安全重命名：扫描目录名中的
 RJcode，读取 DLsite metadata，通过统一的 `NamingService` 生成目标目录名，并在 GUI 中
-审查 `RenamePlan`。
+审查、选择并执行 `RenamePlan`。
 
-> **v0.3 Organizer is preview-only.** 当前不会重命名、移动或删除本地文件，也不会创建
-> 快捷方式。关系只来自 DLsite structured metadata 明确声明的字段。
+> **v0.4 首次支持真实目录重命名。** 执行遵循 `Preview → Explicit confirmation →
+> Preflight → Journal → Rename`。只重命名 Organizer root 下的直接子目录；不会移动、删除或覆盖目录。
+> 每个事务写入 SQLite journal，并可按 journal 尝试撤销最近一次成功或部分成功的重命名。
+> Undo 依赖重命名后的目录和原位置未被用户手工修改，不能证明目录身份，也不提供 ACID 保证。
 
 扫描默认只读取用户选择根目录的直接子目录；无 RJcode 的目录会跳过并计数，包含多个不同
 RJcode 的目录会作为 ambiguous 行显示。当前 Organizer 只处理 RJ，不递归扫描，也不实现
@@ -16,7 +18,7 @@ RJcode 的目录会作为 ambiguous 行显示。当前 Organizer 只处理 RJ，
 
 - Python 3.12+
 - PySide6 Essentials（Qt Core/Gui/Widgets；不安装当前未使用的 Qt Addons）
-- Windows 是当前主要目标平台；架构预留 PyInstaller 打包位置，但 v0.3 尚未发布安装包
+- Windows 是当前主要目标平台；架构预留 PyInstaller 打包位置，但尚未发布安装包
 
 ## Installation
 
@@ -60,19 +62,28 @@ pyright
 默认测试全部离线运行。任何未来的真实 DLsite integration test 都必须标记为
 `integration`，且不进入默认测试集。
 
-## v0.3 Organizer flow
+## v0.4 Organizer flow
 
 ```text
 ScanCandidate → WorkLookup → Work → NamingService → RenamePlan → Preview
+                                                        ↓
+                                      User confirmation → Preflight → Journal → Rename
 ```
 
 同一轮扫描中的相同 RJcode 只查询一次；单个查询失败不会中断其他作品。Planner 会检查
 当前目标是否已存在、批次内目标碰撞、Windows 大小写不敏感路径策略、根目录 containment
-和保守的路径长度阈值。没有执行按钮，流程在 Preview 结束。
+和保守的路径长度阈值。GUI 默认选中 READY 行，但只有用户明确确认后才会执行；执行器会再次进行整批
+preflight。执行器只使用同一 root 下直接子目录的 `Path.rename`，拒绝非 READY、目标存在、
+symlink/junction、重复路径、依赖链、cycle 和 case-only rename。执行中首次失败会停止后续项目，
+不自动 rollback；每次 filesystem mutation 后立即持久化 journal。执行结束后旧 preview 失效，必须重新扫描。
+
+最近一次可撤销事务显示在 Organizer 页面。Undo 完全读取 transaction journal，按成功操作的反向顺序
+执行并再次 preflight；目标冲突、路径消失或目录被替换时会拒绝整批 Undo。事务状态和每个 operation
+的执行/撤销结果都会保存在 SQLite 中。若 journal 不可用，执行按钮禁用且服务拒绝任何 filesystem mutation。
 
 ## Provider status and limitations
 
-v0.3 的 provider 有两个受限的数据源：
+v0.4 的 provider 有两个受限的数据源：
 
 ```text
 product/info/ajax JSON → ProductInfoAjaxSource DTO → Work
@@ -113,6 +124,4 @@ DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及�
 ## Roadmap
 
 下一阶段应在可访问 DLsite 的环境中针对性验证更多已知 translation 引用和 `regist_date` 语义，
-再考虑缓存。之后才会在单独版本中加入安全的
-`scan → plan → preview → execute → transaction log → undo` 重命名流程及基于证据的
-关系历史分析；当前 v0.3 明确终止于 Preview。
+再考虑缓存。当前版本不实现关系历史分析、metadata persistent cache 或完整 transaction history browser。

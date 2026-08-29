@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from dlsite_organizer.app.settings import AppSettings
 from dlsite_organizer.persistence.database import Database
+from dlsite_organizer.persistence.rename_journal import (
+    RenameJournal,
+    TransactionJournal,
+    UnavailableRenameJournal,
+)
 from dlsite_organizer.providers.dlsite.client import DlsiteProvider
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_planner import RenamePlanner
+from dlsite_organizer.services.undo_service import UndoService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +33,9 @@ class ApplicationComponents:
     organizer_service: OrganizerService
     cover_service: CoverService
     database: Database
+    rename_executor: RenameExecutor
+    undo_service: UndoService
+    rename_journal: RenameJournal
 
 
 def build_components(settings: AppSettings) -> ApplicationComponents:
@@ -40,10 +53,21 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         planner=RenamePlanner(naming),
     )
     database = Database(settings.database_path)
-    database.initialize()
+    try:
+        database.initialize()
+    except Exception:
+        logger.exception('Rename journal database initialization failed; execution disabled')
+        journal: RenameJournal = UnavailableRenameJournal()
+    else:
+        journal = TransactionJournal(database)
+    rename_executor = RenameExecutor(journal)
+    undo_service = UndoService(journal)
     return ApplicationComponents(
         lookup_service=lookup_service,
         organizer_service=organizer_service,
         cover_service=CoverService(),
         database=database,
+        rename_executor=rename_executor,
+        undo_service=undo_service,
+        rename_journal=journal,
     )

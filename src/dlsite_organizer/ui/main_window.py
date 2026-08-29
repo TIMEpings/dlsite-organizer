@@ -19,7 +19,9 @@ from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_planner import RenamePlanner
+from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 
@@ -32,6 +34,8 @@ class MainWindow(QMainWindow):
         lookup_service: LookupService,
         cover_service: CoverService,
         organizer_service: OrganizerService | None = None,
+        rename_executor: RenameExecutor | None = None,
+        undo_service: UndoService | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("DLsite Organizer")
@@ -56,7 +60,7 @@ class MainWindow(QMainWindow):
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
         nav_layout.addWidget(self.navigation_list, 1)
-        version = QLabel("v0.3.0 · 早期开发版")
+        version = QLabel("v0.4.0 · 安全重命名")
         version.setObjectName("versionLabel")
         nav_layout.addWidget(version)
 
@@ -68,7 +72,9 @@ class MainWindow(QMainWindow):
                 lookup_service,
                 scanner=FolderScanner(),
                 planner=RenamePlanner(),
-            )
+            ),
+            execution_service=rename_executor,
+            undo_service=undo_service,
         )
         page_definitions = [
             ("整理", self.organizer_page),

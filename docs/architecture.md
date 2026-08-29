@@ -2,7 +2,7 @@
 
 ## Current architecture
 
-The v0.3 lookup flow remains deliberately small:
+The v0.4 lookup flow remains deliberately small:
 
 ```text
 PySide6 LookupPage
@@ -71,10 +71,10 @@ response; see [DLsite AJAX data contract](dlsite-data-contract.md). HTML JSON-LD
 against current live markup. Optional values degrade to missing values; corrupt core source metadata
 is a parse failure rather than invented metadata.
 
-SQLite is initialized through a small SQLAlchemy `Database` object. Its only table reserves a
-minimal shape for future historical observations. Lookups are not automatically persisted in
-v0.2, and translation relations are not written to SQLite; the project does not yet pretend to
-provide a cache or history repository.
+SQLite is initialized through a small SQLAlchemy `Database` object. It contains the historical
+observation placeholder plus the v0.4 `rename_transactions` and `rename_operations` journal tables.
+Lookups and translation relations are still not automatically persisted; the project does not
+pretend to provide a metadata cache or a relation history repository.
 
 Settings use `tomllib` and validated Pydantic models. Missing configuration is normal and uses
 built-in defaults. Invalid present configuration is surfaced rather than silently ignored.
@@ -115,8 +115,67 @@ preview.
 It consumes the existing `NamingService` result and never calls a filesystem mutation API. It
 marks READY, UNCHANGED, existing-target and planned-target conflicts separately, treats Windows
 path comparison as case-insensitive by policy, checks that source and target remain below the
-selected root, and records a warning for long target paths. The current flow ends at Preview;
-there is deliberately no RenameExecutor, undo, transaction log, or execution boundary in v0.3.
+selected root, and records a warning for long target paths. It never mutates the filesystem.
+
+The v0.4 execution boundary is intentionally separate from planning:
+
+```text
+RenamePlanner
+      ↓
+Preview
+      ↓
+User Confirmation
+      ↓
+RenameExecutionService
+      ↓
+RenameExecutor
+      ↕
+TransactionJournal
+      ↓
+Filesystem
+```
+
+`OrganizerPage` selects only READY plans and asks for explicit confirmation containing the number
+of filesystem mutations. `RenameExecutor` is the application-facing execution service in this
+small release; the Qt worker only runs it off the GUI thread. The executor does not call DLsite,
+NamingService, RJ parsing, or a library scan. It receives already-generated plans, sorts them
+deterministically by source path, performs a batch-wide preflight, and then uses only same-parent
+`Path.rename`. It rejects non-READY plans, missing or changed sources, symlink/junction sources,
+existing targets, paths outside the selected root, duplicate sources/targets, dependency chains/cycles,
+and case-only renames. v0.4 supports direct child directory renames under one root only; it does
+not move, delete, merge, overwrite, or add temporary-name graph handling.
+
+There is no journal, no mutation: SQLite initialization or journal writes must be available before
+the first filesystem operation. The transaction intent and all operation intents are committed
+before mutation. After each successful rename, its operation status is committed before the next
+rename starts. A failure stops all later operations and leaves earlier successful renames in a
+PARTIAL transaction; it does not automatically roll them back. If a rename succeeded but its
+success journal update or final transaction update failed, the transaction is marked
+`RECOVERY_REQUIRED` when possible, later mutation stops, and the UI tells the user not to rerun
+immediately. Journal schema changes use SQLAlchemy `create_all` for missing tables, so existing
+databases gain the v0.4 tables without manual deletion or a heavyweight migration framework.
+
+Undo is a separate journal-driven flow:
+
+```text
+TransactionJournal
+      ↓
+UndoService
+      ↓
+Preflight
+      ↓
+Filesystem
+```
+
+Undo considers only successful, not-yet-undone operations from a COMPLETED, PARTIAL, or
+UNDO_PARTIAL transaction. It validates the renamed path and original path under the original
+root, rejects symlink/junctions, target conflicts and missing paths, and executes in reverse
+sequence. It stops on the first filesystem or journal failure. A partial undo remains
+`UNDO_PARTIAL` and can be retried after the external condition is resolved; journal failure after
+a successful undo is `RECOVERY_REQUIRED`. The journal stores paths and cannot prove that a
+renamed directory was not manually replaced, so Undo is a best-effort path-based recovery aid,
+not an ACID or identity-verified transaction. Existing databases receive the two journal tables
+through SQLAlchemy `create_all` without manual deletion.
 
 ## Thread boundary
 
@@ -138,7 +197,7 @@ RelationAnalyzer → historical evidence-backed WorkRelation
 HistoryStore     → timestamped observations
 ```
 
-Renaming must always follow `scan → plan → preview → execute → transaction log → undo`; the v0.3
-scanner and planner stop before execution and must never mutate the filesystem. Relation analysis should accumulate explicit
+Renaming must always follow `scan → plan → preview → explicit confirmation → preflight → journal →
+execute → undo`; the scanner and planner must never mutate the filesystem. Relation analysis should accumulate explicit
 evidence and confidence, not infer truth from adjacent RJ numbers. These future services can share
 the existing `Work` model without importing the UI or DLsite-specific raw fields.

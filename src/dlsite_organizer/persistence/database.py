@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import DateTime, Integer, String, create_engine
+from sqlalchemy import DateTime, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -30,17 +30,73 @@ class WorkObservation(Base):
     )
 
 
+class RenameTransactionRecord(Base):
+    '''Durable header for one confirmed rename batch.'''
+
+    __tablename__ = 'rename_transactions'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    root: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), index=True)
+
+
+class RenameOperationRecord(Base):
+    '''Durable intent and outcome for one operation in a rename transaction.'''
+
+    __tablename__ = 'rename_operations'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transaction_id: Mapped[str] = mapped_column(
+        ForeignKey('rename_transactions.id'), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    source_path: Mapped[str] = mapped_column(String)
+    target_path: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    undo_status: Mapped[str] = mapped_column(String(32), index=True)
+    undo_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    undone_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class Database:
-    """Own the SQLite engine and initialize only the minimum schema."""
+    """Own the SQLite engine and initialize the small application schema."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._engine = create_engine(f"sqlite:///{path.as_posix()}")
+        self._engine = create_engine(
+            f"sqlite:///{path.as_posix()}",
+            connect_args={"check_same_thread": False},
+        )
+        self._initialized = False
 
     def initialize(self) -> None:
         """Create the data directory and missing schema without writing observations."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(self._engine)
+        self._initialized = True
+
+    @property
+    def initialized(self) -> bool:
+        """Whether all required tables were successfully initialized."""
+        return self._initialized
+
+    def session(self):
+        """Create a short-lived session for one durable journal operation."""
+        if not self._initialized:
+            raise RuntimeError("Database has not been initialized")
+        from sqlalchemy.orm import Session
+
+        return Session(self._engine)
 
     def dispose(self) -> None:
         """Release pooled SQLite connections."""

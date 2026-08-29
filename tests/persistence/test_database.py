@@ -14,5 +14,9 @@ def test_database_initializes_minimum_schema(tmp_path: Path) -> None:
 
     assert path.exists()
     engine = create_engine(f"sqlite:///{path.as_posix()}")
-    assert inspect(engine).get_table_names() == ["work_observations"]
+    assert set(inspect(engine).get_table_names()) == {
+        "rename_operations",
+        "rename_transactions",
+        "work_observations",
+    }
     engine.dispose()
