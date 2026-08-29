@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+build/
+dist/
+*.egg-info/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+.idea/
+.vscode/
+*.spec
