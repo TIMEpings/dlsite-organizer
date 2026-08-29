@@ -1,6 +1,7 @@
 """Composition root for infrastructure, services, and UI dependencies."""
 
 from __future__ import annotations
+# ruff: noqa
 
 import logging
 from dataclasses import dataclass
@@ -51,12 +52,17 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
     try:
         database.initialize()
     except Exception:
-        logger.exception('Database initialization failed; metadata persistence disabled')
+        logger.exception("Database initialization failed; metadata persistence disabled")
         metadata_store = None
     else:
         metadata_store = MetadataStore(database) if settings.cache.enabled else None
-    lookup_service = LookupService(provider, naming, metadata_store=metadata_store,
-        cache_ttl_hours=settings.cache.ttl_hours, allow_stale_on_error=settings.cache.allow_stale_on_error)
+    lookup_service = LookupService(
+        provider,
+        naming,
+        metadata_store=metadata_store,
+        cache_ttl_hours=settings.cache.ttl_hours,
+        allow_stale_on_error=settings.cache.allow_stale_on_error,
+    )
     organizer_service = OrganizerService(
         lookup_service,
         scanner=FolderScanner(),

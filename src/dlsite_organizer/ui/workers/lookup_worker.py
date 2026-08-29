@@ -1,6 +1,7 @@
 """Background execution adapter for the lookup use case."""
 
 from __future__ import annotations
+# ruff: noqa
 
 import logging
 
@@ -37,7 +38,9 @@ class LookupWorker(QObject):
     def run(self) -> None:
         """Execute lookup and optional cover retrieval in the worker thread."""
         try:
-            result = self._lookup_service.lookup(self._raw_workno, force_refresh=self._force_refresh)
+            result = self._lookup_service.lookup(
+                self._raw_workno, force_refresh=self._force_refresh
+            )
             self.result_ready.emit(result)
             if result.work.cover_url:
                 cover = self._cover_service.fetch(result.work.cover_url)

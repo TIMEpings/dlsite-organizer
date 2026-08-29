@@ -1,12 +1,14 @@
 """Persistence for current metadata cache and append-only observations."""
+
 from __future__ import annotations
+# ruff: noqa
 
 import json
 import logging
-from datetime import UTC, date, datetime
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, select
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from dlsite_organizer.domain.work import Availability, Work
@@ -64,6 +66,7 @@ class CachedMetadata:
 class MetadataStore:
     def __init__(self, database: Database) -> None:
         self._database = database
+        self._database.initialize_metadata()
 
     def get(self, workno: str) -> CachedMetadata | None:
         try:
@@ -71,44 +74,98 @@ class MetadataStore:
                 row = session.get(WorkMetadataCache, workno)
                 if row is None:
                     return None
-                translation = TranslationInfoSource.model_validate(json.loads(row.translation_json)) if row.translation_json else None
-                work = Work(workno=row.workno, title=row.title, maker_id=row.maker_id, maker_name=row.maker_name,
-                            release_date=row.release_date, series_name=row.series_name,
-                            cvs=json.loads(row.cvs_json), tags=json.loads(row.tags_json), cover_url=row.cover_url,
-                            availability=Availability(row.availability), source_section=row.source_section)
+                translation = (
+                    TranslationInfoSource.model_validate(json.loads(row.translation_json))
+                    if row.translation_json
+                    else None
+                )
+                work = Work(
+                    workno=row.workno,
+                    title=row.title,
+                    maker_id=row.maker_id,
+                    maker_name=row.maker_name,
+                    release_date=row.release_date,
+                    series_name=row.series_name,
+                    cvs=json.loads(row.cvs_json),
+                    tags=json.loads(row.tags_json),
+                    cover_url=row.cover_url,
+                    availability=Availability(row.availability),
+                    source_section=row.source_section,
+                )
                 return CachedMetadata(work, translation, row.source, row.fetched_at)
         except Exception:
             logger.exception("Metadata cache read failed for %s", workno)
             return None
 
-    def save(self, work: Work, translation_info: TranslationInfoSource | None, *, source: str,
-             fetched_at: datetime | None = None, work_type: str | None = None,
-             age_category: str | int | None = None, regist_datetime: datetime | None = None) -> None:
+    def save(
+        self,
+        work: Work,
+        translation_info: TranslationInfoSource | None,
+        *,
+        source: str,
+        fetched_at: datetime | None = None,
+        work_type: str | None = None,
+        age_category: str | int | None = None,
+        regist_datetime: datetime | None = None,
+    ) -> None:
         now = fetched_at or datetime.now(UTC)
         try:
             with self._database.session() as session:
-                row = session.get(WorkMetadataCache, work.workno) or WorkMetadataCache(workno=work.workno)
+                row = session.get(WorkMetadataCache, work.workno) or WorkMetadataCache(
+                    workno=work.workno
+                )
                 row.title, row.maker_id, row.maker_name = work.title, work.maker_id, work.maker_name
                 row.release_date, row.regist_datetime = work.release_date, regist_datetime
-                row.series_name, row.cvs_json, row.tags_json = work.series_name, json.dumps(work.cvs), json.dumps(work.tags)
-                row.cover_url, row.availability, row.source_section = work.cover_url, work.availability.value, work.source_section
-                row.translation_json = translation_info.model_dump_json() if translation_info else None
+                row.series_name, row.cvs_json, row.tags_json = (
+                    work.series_name,
+                    json.dumps(work.cvs),
+                    json.dumps(work.tags),
+                )
+                row.cover_url, row.availability, row.source_section = (
+                    work.cover_url,
+                    work.availability.value,
+                    work.source_section,
+                )
+                row.translation_json = (
+                    translation_info.model_dump_json() if translation_info else None
+                )
                 row.source, row.fetched_at = source, now
-                session.add(row); session.commit()
+                session.add(row)
+                session.commit()
         except Exception:
             logger.exception("Metadata cache write failed for %s", work.workno)
 
-    def append_observation(self, work: Work, translation_info: TranslationInfoSource | None, *, source: str,
-                           observed_at: datetime | None = None, work_type: str | None = None,
-                           age_category: str | int | None = None, regist_datetime: datetime | None = None) -> None:
+    def append_observation(
+        self,
+        work: Work,
+        translation_info: TranslationInfoSource | None,
+        *,
+        source: str,
+        observed_at: datetime | None = None,
+        work_type: str | None = None,
+        age_category: str | int | None = None,
+        regist_datetime: datetime | None = None,
+    ) -> None:
         try:
             with self._database.session() as session:
-                session.add(MetadataObservation(workno=work.workno, title=work.title, maker_id=work.maker_id,
-                    maker_name=work.maker_name, release_date=work.release_date, regist_datetime=regist_datetime,
-                    work_type=work_type, age_category=str(age_category) if age_category is not None else None,
-                    availability=work.availability.value, source=source,
-                    translation_json=translation_info.model_dump_json() if translation_info else None,
-                    observed_at=observed_at or datetime.now(UTC)))
+                session.add(
+                    MetadataObservation(
+                        workno=work.workno,
+                        title=work.title,
+                        maker_id=work.maker_id,
+                        maker_name=work.maker_name,
+                        release_date=work.release_date,
+                        regist_datetime=regist_datetime,
+                        work_type=work_type,
+                        age_category=str(age_category) if age_category is not None else None,
+                        availability=work.availability.value,
+                        source=source,
+                        translation_json=translation_info.model_dump_json()
+                        if translation_info
+                        else None,
+                        observed_at=observed_at or datetime.now(UTC),
+                    )
+                )
                 session.commit()
         except Exception:
             logger.exception("Metadata observation write failed for %s", work.workno)

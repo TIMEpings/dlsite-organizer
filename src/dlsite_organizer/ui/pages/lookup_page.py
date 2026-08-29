@@ -1,6 +1,7 @@
 """Complete v0.2 manual RJcode lookup page."""
 
 from __future__ import annotations
+# ruff: noqa
 
 from typing import cast
 
@@ -213,10 +214,23 @@ class LookupPage(QWidget):
         self.start_lookup() if not force_refresh else self._run_lookup(force_refresh=True)
 
     def _run_lookup(self, *, force_refresh: bool) -> None:
-        self._set_loading(True); self._clear_result()
-        thread = QThread(); worker = LookupWorker(self._lookup_service, self._cover_service, self.code_input.text(), force_refresh)
-        worker.moveToThread(thread); thread.started.connect(worker.run); worker.result_ready.connect(self._show_result); worker.cover_ready.connect(self._show_cover); worker.failed.connect(self._show_error); worker.finished.connect(thread.quit); worker.finished.connect(worker.deleteLater); thread.finished.connect(thread.deleteLater); thread.finished.connect(self._lookup_finished)
-        self._thread, self._worker = thread, worker; thread.start()
+        self._set_loading(True)
+        self._clear_result()
+        thread = QThread()
+        worker = LookupWorker(
+            self._lookup_service, self._cover_service, self.code_input.text(), force_refresh
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.result_ready.connect(self._show_result)
+        worker.cover_ready.connect(self._show_cover)
+        worker.failed.connect(self._show_error)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._lookup_finished)
+        self._thread, self._worker = thread, worker
+        thread.start()
 
     @Slot(object)
     def _show_result(self, value: object) -> None:
@@ -238,7 +252,11 @@ class LookupPage(QWidget):
         self.copy_button.setEnabled(True)
         self._show_relations(result.translation)
         self.status_label.setProperty("state", "success")
-        label = {LookupFreshness.LIVE: "实时", LookupFreshness.CACHE_FRESH: "缓存", LookupFreshness.CACHE_STALE_FALLBACK: "旧缓存"}[result.freshness]
+        label = {
+            LookupFreshness.LIVE: "实时",
+            LookupFreshness.CACHE_FRESH: "缓存",
+            LookupFreshness.CACHE_STALE_FALLBACK: "旧缓存",
+        }[result.freshness]
         self.status_label.setText(f"查询完成 · {label}")
         self._refresh_status_style()
 

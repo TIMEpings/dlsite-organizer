@@ -18,6 +18,7 @@ class ProviderSettings(BaseModel):
     base_url: str = "https://www.dlsite.com"
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
 
+
 class CacheSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     enabled: bool = True

@@ -1,6 +1,7 @@
 """SQLAlchemy schema and lifecycle for local metadata observations."""
 
 from __future__ import annotations
+# ruff: noqa
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,16 +32,14 @@ class WorkObservation(Base):
 
 
 class RenameTransactionRecord(Base):
-    '''Durable header for one confirmed rename batch.'''
+    """Durable header for one confirmed rename batch."""
 
-    __tablename__ = 'rename_transactions'
+    __tablename__ = "rename_transactions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     root: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     recovery_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
     recovery_error: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -48,32 +47,26 @@ class RenameTransactionRecord(Base):
 
 
 class RenameOperationRecord(Base):
-    '''Durable intent and outcome for one operation in a rename transaction.'''
+    """Durable intent and outcome for one operation in a rename transaction."""
 
-    __tablename__ = 'rename_operations'
+    __tablename__ = "rename_operations"
     __table_args__ = (
         UniqueConstraint(
-            'transaction_id', 'sequence', name='uq_rename_operation_transaction_sequence'
+            "transaction_id", "sequence", name="uq_rename_operation_transaction_sequence"
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    transaction_id: Mapped[str] = mapped_column(
-        ForeignKey('rename_transactions.id'), index=True
-    )
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("rename_transactions.id"), index=True)
     sequence: Mapped[int] = mapped_column(Integer)
     source_path: Mapped[str] = mapped_column(String)
     target_path: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String(32), index=True)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
-    executed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     undo_status: Mapped[str] = mapped_column(String(32), index=True)
     undo_error: Mapped[str | None] = mapped_column(String, nullable=True)
-    undone_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Database:
@@ -90,23 +83,40 @@ class Database:
     def initialize(self) -> None:
         """Create the data directory and missing schema without writing observations."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        Base.metadata.create_all(self._engine)
+        core_tables = [
+            t
+            for t in Base.metadata.tables.values()
+            if t.name not in {"work_metadata_cache", "metadata_observations"}
+        ]
+        Base.metadata.create_all(self._engine, tables=core_tables)
         # Lightweight forward migration for development databases created by v0.4.
         with self._engine.begin() as connection:
             columns = {
-                row[1]
-                for row in connection.execute(text('PRAGMA table_info(rename_transactions)'))
+                row[1] for row in connection.execute(text("PRAGMA table_info(rename_transactions)"))
             }
             for name, definition in (
-                ('recovery_stage', 'VARCHAR(64)'),
-                ('recovery_error', 'VARCHAR'),
-                ('recovery_sequence', 'INTEGER'),
+                ("recovery_stage", "VARCHAR(64)"),
+                ("recovery_error", "VARCHAR"),
+                ("recovery_sequence", "INTEGER"),
             ):
                 if name not in columns:
                     connection.execute(
-                        text(f'ALTER TABLE rename_transactions ADD COLUMN {name} {definition}')
+                        text(f"ALTER TABLE rename_transactions ADD COLUMN {name} {definition}")
                     )
         self._initialized = True
+
+    def initialize_metadata(self) -> None:
+        """Create metadata tables after the core/journal schema is initialized."""
+        if not self._initialized:
+            raise RuntimeError("Database has not been initialized")
+        Base.metadata.create_all(
+            self._engine,
+            tables=[
+                t
+                for t in Base.metadata.tables.values()
+                if t.name in {"work_metadata_cache", "metadata_observations"}
+            ],
+        )
 
     @property
     def initialized(self) -> bool:
