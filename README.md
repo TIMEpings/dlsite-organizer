@@ -1,18 +1,22 @@
 # dlsite-organizer
 
-`dlsite-organizer` 是一个处于早期开发阶段的 Python 桌面应用。v0.2 在单个
-RJcode 查询流程上增加了由 DLsite structured metadata 明确支持的翻译关系展示：
-标准化编号、读取当前作品元数据、转换为统一的 `Work` 模型、生成 Windows 文件系统
-安全的名称，并在 GUI 中复制结果或查看已确认的关系。
+`dlsite-organizer` 是一个处于早期开发阶段的 Python 桌面应用。v0.3 支持手动 RJcode
+查询、已确认翻译关系、本地作品文件夹扫描，以及安全的重命名预览：扫描目录名中的
+RJcode，读取 DLsite metadata，通过统一的 `NamingService` 生成目标目录名，并在 GUI 中
+审查 `RenamePlan`。
 
-本版本不会扫描或重命名本地文件，不搜索特典，不进行 maker/date/RJ 编号启发式推断，
-也不会批量遍历 RJcode。关系只来自 DLsite structured metadata 明确声明的字段。
+> **v0.3 Organizer is preview-only.** 当前不会重命名、移动或删除本地文件，也不会创建
+> 快捷方式。关系只来自 DLsite structured metadata 明确声明的字段。
+
+扫描默认只读取用户选择根目录的直接子目录；无 RJcode 的目录会跳过并计数，包含多个不同
+RJcode 的目录会作为 ambiguous 行显示。当前 Organizer 只处理 RJ，不递归扫描，也不实现
+特典检测、启发式关系推断或 VJ/BJ Organizer 支持。
 
 ## Requirements
 
 - Python 3.12+
 - PySide6 Essentials（Qt Core/Gui/Widgets；不安装当前未使用的 Qt Addons）
-- Windows 是当前主要目标平台；架构预留 PyInstaller 打包位置，但 v0.2 尚未发布安装包
+- Windows 是当前主要目标平台；架构预留 PyInstaller 打包位置，但 v0.3 尚未发布安装包
 
 ## Installation
 
@@ -56,9 +60,19 @@ pyright
 默认测试全部离线运行。任何未来的真实 DLsite integration test 都必须标记为
 `integration`，且不进入默认测试集。
 
+## v0.3 Organizer flow
+
+```text
+ScanCandidate → WorkLookup → Work → NamingService → RenamePlan → Preview
+```
+
+同一轮扫描中的相同 RJcode 只查询一次；单个查询失败不会中断其他作品。Planner 会检查
+当前目标是否已存在、批次内目标碰撞、Windows 大小写不敏感路径策略、根目录 containment
+和保守的路径长度阈值。没有执行按钮，流程在 Preview 结束。
+
 ## Provider status and limitations
 
-v0.2 的 provider 有两个受限的数据源：
+v0.3 的 provider 有两个受限的数据源：
 
 ```text
 product/info/ajax JSON → ProductInfoAjaxSource DTO → Work
@@ -99,6 +113,6 @@ DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及�
 ## Roadmap
 
 下一阶段应在可访问 DLsite 的环境中针对性验证更多已知 translation 引用和 `regist_date` 语义，
-再考虑缓存。之后才会加入安全的
+再考虑缓存。之后才会在单独版本中加入安全的
 `scan → plan → preview → execute → transaction log → undo` 重命名流程及基于证据的
-关系历史分析。
+关系历史分析；当前 v0.3 明确终止于 Preview。

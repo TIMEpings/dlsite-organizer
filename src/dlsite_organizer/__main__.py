@@ -21,7 +21,7 @@ def main() -> int:
     application.setApplicationName("DLsite Organizer")
     application.setOrganizationName("dlsite-organizer")
     configure_logging(default_data_dir() / "logs")
-    logger.info("Starting DLsite Organizer v0.2.0")
+    logger.info("Starting DLsite Organizer v0.3.0")
 
     try:
         settings = load_settings()
@@ -35,7 +35,11 @@ def main() -> int:
         QMessageBox.critical(None, "启动失败", "应用初始化失败，详细信息已写入日志。")
         return 1
 
-    window = MainWindow(components.lookup_service, components.cover_service)
+    window = MainWindow(
+        components.lookup_service,
+        components.cover_service,
+        components.organizer_service,
+    )
     window.show()
     exit_code = application.exec()
     components.database.dispose()

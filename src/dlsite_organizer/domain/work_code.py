@@ -65,3 +65,29 @@ class WorkCode:
 def normalize_rjcode(value: str) -> str:
     """Normalize an RJ code for the v0.1 user interface."""
     return str(WorkCode.parse(value, allowed_prefixes={"RJ"}))
+
+
+def extract_work_codes(text: str) -> list[str]:
+    """Extract distinct, normalized RJ codes from a folder name.
+
+    Folder names are tokenized first and every token is validated by the same
+    :class:`WorkCode` parser used by manual lookup.  This keeps extraction from
+    introducing a second, subtly different code-validation rule.
+    """
+    if not isinstance(text, str):
+        return []
+
+    codes: list[str] = []
+    for index, character in enumerate(text):
+        if character.upper() != "R" or text[index : index + 2].upper() != "RJ":
+            continue
+        end = index + 2
+        while end < len(text) and text[end].isdigit():
+            end += 1
+        try:
+            normalized = normalize_rjcode(text[index:end])
+        except WorkCodeError:
+            continue
+        if normalized not in codes:
+            codes.append(normalized)
+    return codes

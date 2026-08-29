@@ -16,14 +16,23 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer.services.cover import CoverService
+from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
+from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.rename_planner import RenamePlanner
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
+from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 
 
 class MainWindow(QMainWindow):
-    """Host the complete lookup page and honest future-feature placeholders."""
+    """Host the organizer preview, lookup page, and honest future placeholders."""
 
-    def __init__(self, lookup_service: LookupService, cover_service: CoverService) -> None:
+    def __init__(
+        self,
+        lookup_service: LookupService,
+        cover_service: CoverService,
+        organizer_service: OrganizerService | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("DLsite Organizer")
         self.resize(1080, 760)
@@ -47,14 +56,22 @@ class MainWindow(QMainWindow):
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
         nav_layout.addWidget(self.navigation_list, 1)
-        version = QLabel("v0.2.0 · 早期开发版")
+        version = QLabel("v0.3.0 · 早期开发版")
         version.setObjectName("versionLabel")
         nav_layout.addWidget(version)
 
         self.pages = QStackedWidget()
         self.lookup_page = LookupPage(lookup_service, cover_service)
+        self.organizer_page = OrganizerPage(
+            organizer_service
+            or OrganizerService(
+                lookup_service,
+                scanner=FolderScanner(),
+                planner=RenamePlanner(),
+            )
+        )
         page_definitions = [
-            ("整理", _placeholder("整理", "本地扫描与安全重命名尚未实现。")),
+            ("整理", self.organizer_page),
             ("查询", self.lookup_page),
             (
                 "关系",
@@ -78,9 +95,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Avoid destroying a running QThread during a bounded network request."""
-        if self.lookup_page.is_busy():
+        if self.lookup_page.is_busy() or self.organizer_page.is_busy():
             event.ignore()
-            QMessageBox.information(self, "查询进行中", "请等待当前查询结束后再退出。")
+            QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再退出。")
             return
         event.accept()
 

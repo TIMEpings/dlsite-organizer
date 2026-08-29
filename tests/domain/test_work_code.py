@@ -1,6 +1,11 @@
 import pytest
 
-from dlsite_organizer.domain.work_code import WorkCode, WorkCodeError, normalize_rjcode
+from dlsite_organizer.domain.work_code import (
+    WorkCode,
+    WorkCodeError,
+    extract_work_codes,
+    normalize_rjcode,
+)
 
 
 @pytest.mark.parametrize(
@@ -28,3 +33,20 @@ def test_rejects_invalid_or_out_of_range_rjcodes(raw: str) -> None:
 def test_general_work_code_can_represent_future_supported_prefixes() -> None:
     assert str(WorkCode.parse("vj123456")) == "VJ123456"
     assert str(WorkCode.parse("BJ12345678")) == "BJ12345678"
+
+
+@pytest.mark.parametrize(
+    ("folder_name", "expected"),
+    [
+        ("RJ01609020", ["RJ01609020"]),
+        ("[RJ01609020] title", ["RJ01609020"]),
+        ("【RJ01609020】title", ["RJ01609020"]),
+        ("Circle - rj01609020", ["RJ01609020"]),
+        ("SomeWorkRJ01609020", ["RJ01609020"]),
+        ("RJ01609020 [RJ01609020]", ["RJ01609020"]),
+        ("RJ01609020 Something RJ01636949", ["RJ01609020", "RJ01636949"]),
+        ("Misc", []),
+    ],
+)
+def test_extract_work_codes_reuses_normalization(folder_name: str, expected: list[str]) -> None:
+    assert extract_work_codes(folder_name) == expected
