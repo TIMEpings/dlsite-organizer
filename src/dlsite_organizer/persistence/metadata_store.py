@@ -127,6 +127,22 @@ class MetadataStore:
             logger.exception("Metadata observations read failed for %s", workno)
             return ()
 
+    def list_all_observations(self) -> tuple[MetadataObservation, ...]:
+        """Return all persisted observations for historical relation derivation."""
+        try:
+            with self._database.session() as session:
+                rows = session.scalars(
+                    select(MetadataObservation).order_by(
+                        MetadataObservation.observed_at.asc(), MetadataObservation.id.asc()
+                    )
+                ).all()
+                for row in rows:
+                    row.observed_at = _as_utc(row.observed_at)  # type: ignore[assignment]
+                return tuple(rows)
+        except Exception:
+            logger.exception("All metadata observations read failed")
+            return ()
+
     def save(
         self,
         work: Work,

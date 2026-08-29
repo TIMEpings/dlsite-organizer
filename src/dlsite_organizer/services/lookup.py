@@ -24,6 +24,7 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysis,
     TranslationRelationService,
 )
+from dlsite_organizer.services.historical_relations import HistoricalRelationService, HistoricalRelations
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class LookupResult:
     freshness: LookupFreshness = LookupFreshness.LIVE
     source: str = "LIVE"
     fetched_at: datetime | None = None
+    historical_relations: HistoricalRelations = field(default_factory=HistoricalRelations)
 
     @property
     def translation_role(self) -> TranslationRole | None:
@@ -89,6 +91,7 @@ class LookupService:
         naming: NamingService,
         translation_relations: TranslationRelationService | None = None,
         metadata_store: MetadataStore | None = None,
+        historical_relations: HistoricalRelationService | None = None,
         cache_ttl_hours: float = 24.0,
         allow_stale_on_error: bool = True,
         clock: LookupClock | None = None,
@@ -97,6 +100,7 @@ class LookupService:
         self._naming = naming
         self._translation_relations = translation_relations or TranslationRelationService()
         self._metadata_store = metadata_store
+        self._historical_relations = historical_relations or (HistoricalRelationService(metadata_store, self._translation_relations) if metadata_store else None)
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
         self._allow_stale_on_error = allow_stale_on_error
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -205,4 +209,5 @@ class LookupService:
             freshness=freshness,
             source=source,
             fetched_at=fetched,
+            historical_relations=self._historical_relations.for_work(workno) if self._historical_relations else HistoricalRelations(),
         )

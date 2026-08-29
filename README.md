@@ -129,8 +129,11 @@ DTO 时，provider 只再请求一次 HTML 页面。它可提供 title，以及�
 
 ### v0.5 metadata cache
 
-Lookup results use a persistent 24-hour metadata cache by default. The Lookup page offers a force-refresh action and indicates live, fresh-cache, or stale-cache fallback data. Successful live AJAX/HTML observations are appended to the SQLite historical observation store; cache hits and stale fallbacks do not create synthetic history. Historical observations are retained for future evidence-based relation analysis; v0.5 does not infer bonuses, expired works, or relation history.
+Lookup results use a persistent 24-hour metadata cache by default. The Lookup page offers a force-refresh action and indicates live, fresh-cache, or stale-cache fallback data. Successful live AJAX/HTML observations are appended to the SQLite historical observation store; cache hits and stale fallbacks do not create synthetic history. Historical relations are derived only from explicit translation references; no bonuses, expired-work inference, or heuristics are used.
 
 ### v0.4.1 safety
 
 Real rename execution is Windows only. If an unfinished or recovery-required rename journal is detected, all new filesystem mutations are blocked.
+# Historical confirmed translation relations
+
+The application derives aggregated relations from persisted DLsite metadata observations. Historical evidence is shown separately from the current response and may reveal reverse links even when the queried work no longer exposes them.

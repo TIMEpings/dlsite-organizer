@@ -168,6 +168,9 @@ class LookupPage(QWidget):
         relation_layout.addLayout(relation_form)
         self.relation_details_value = _value_label()
         relation_layout.addWidget(self.relation_details_value)
+        relation_layout.addWidget(QLabel("历史已确认关系"))
+        self.historical_relations_value = _value_label()
+        relation_layout.addWidget(self.historical_relations_value)
         layout.addWidget(relation_frame)
         self._clear_relations()
         scroll_area.setWidget(content)
@@ -250,7 +253,7 @@ class LookupPage(QWidget):
         self._formatted_name = result.formatted_name
         self.name_output.setText(result.formatted_name)
         self.copy_button.setEnabled(True)
-        self._show_relations(result.translation)
+        self._show_relations(result.translation, result.historical_relations)
         self.status_label.setProperty("state", "success")
         label = {
             LookupFreshness.LIVE: "实时",
@@ -323,7 +326,7 @@ class LookupPage(QWidget):
         self.cover_label.setText("暂无封面")
         self._clear_relations()
 
-    def _show_relations(self, analysis: TranslationAnalysis) -> None:
+    def _show_relations(self, analysis: TranslationAnalysis, historical=None) -> None:
         """Render application-level relation facts without reading provider DTOs."""
         self.relation_role_value.setText(_role_label(analysis.role))
         has_translation_info = analysis.status is not TranslationAnalysisStatus.NO_INFORMATION
@@ -348,6 +351,12 @@ class LookupPage(QWidget):
         else:
             message = "\n".join(relation_lines)
         self.relation_details_value.setText(message)
+        if historical is None or (not historical.outgoing and not historical.incoming):
+            self.historical_relations_value.setText("暂无历史已确认关系")
+        else:
+            lines = [f"传出：{r.target_workno} · {_relation_label(r.relation_type)} · 首次 {r.first_seen.date()} · 最近 {r.last_seen.date()} · {r.observation_count} 次" for r in historical.outgoing]
+            lines += [f"传入：{r.subject_workno} · {_relation_label(r.relation_type)} · 首次 {r.first_seen.date()} · 最近 {r.last_seen.date()} · {r.observation_count} 次" for r in historical.incoming]
+            self.historical_relations_value.setText("\n".join(lines))
 
     def _clear_relations(self) -> None:
         self.relation_role_value.setText("—")
@@ -355,6 +364,7 @@ class LookupPage(QWidget):
         self.relation_confidence_value.setText("—")
         self.relation_language_value.setText("—")
         self.relation_details_value.setText("—")
+        self.historical_relations_value.setText("—")
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
