@@ -12,6 +12,7 @@ from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from dlsite_organizer.domain.work import Availability, Work
+from dlsite_organizer.domain.candidate import CandidateSnapshotSource, KnownWorkSnapshot
 from dlsite_organizer.persistence.database import Base, Database
 from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
 
@@ -141,6 +142,75 @@ class MetadataStore:
                 return tuple(rows)
         except Exception:
             logger.exception("All metadata observations read failed")
+            return ()
+
+    def list_known_work_summaries(self) -> tuple[KnownWorkSnapshot, ...]:
+        """Return one latest local metadata snapshot per known work.
+
+        Current cache rows take precedence.  A work without a current cache is
+        represented by its most recently observed historical row instead.
+        """
+        try:
+            with self._database.session() as session:
+                caches = session.scalars(select(WorkMetadataCache)).all()
+                observations = session.scalars(
+                    select(MetadataObservation).order_by(
+                        MetadataObservation.observed_at.desc(), MetadataObservation.id.desc()
+                    )
+                ).all()
+                snapshots: dict[str, KnownWorkSnapshot] = {}
+                for row in caches:
+                    snapshots[row.workno] = KnownWorkSnapshot(
+                        workno=row.workno,
+                        title=row.title,
+                        maker_id=row.maker_id,
+                        maker_name=row.maker_name,
+                        regist_datetime=_as_utc(row.regist_datetime),
+                        source=CandidateSnapshotSource.CURRENT_CACHE,
+                        fetched_at=_as_utc(row.fetched_at),
+                    )
+                for row in observations:
+                    if row.workno in snapshots:
+                        continue
+                    snapshots[row.workno] = KnownWorkSnapshot(
+                        workno=row.workno,
+                        title=row.title,
+                        maker_id=row.maker_id,
+                        maker_name=row.maker_name,
+                        regist_datetime=_as_utc(row.regist_datetime),
+                        source=CandidateSnapshotSource.HISTORICAL_OBSERVATION,
+                        observed_at=_as_utc(row.observed_at),
+                    )
+                return tuple(sorted(snapshots.values(), key=lambda item: item.workno))
+        except Exception:
+            logger.exception("Known metadata summary read failed")
+            return ()
+
+    def list_current_relation_pairs(self) -> tuple[tuple[str, str], ...]:
+        """Return canonical pairs from current cached explicit relations."""
+        pairs: set[tuple[str, str]] = set()
+        try:
+            from dlsite_organizer.services.translation_relations import TranslationRelationService
+
+            translator = TranslationRelationService()
+            with self._database.session() as session:
+                rows = session.scalars(select(WorkMetadataCache)).all()
+                for row in rows:
+                    if not row.translation_json:
+                        continue
+                    try:
+                        info = TranslationInfoSource.model_validate(json.loads(row.translation_json))
+                        for relation in translator.analyze(row.workno, info).relations:
+                            pairs.add(
+                                tuple(
+                                    sorted((relation.source_workno, relation.target_workno))
+                                )  # type: ignore[arg-type]
+                            )
+                    except Exception:
+                        logger.warning("Skipping malformed current translation cache %s", row.workno)
+            return tuple(sorted(pairs))
+        except Exception:
+            logger.exception("Current relation read failed")
             return ()
 
     def save(

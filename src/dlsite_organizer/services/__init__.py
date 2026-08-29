@@ -1,5 +1,13 @@
 """Application use cases."""
 
+from dlsite_organizer.services.candidate_relations import (
+    CandidateDiscoveryService,
+    CandidateEvidenceEvaluator,
+    CandidateRelationService,
+    CandidateSearchPolicy,
+    normalize_maker_name,
+    rj_numeric_distance,
+)
 from dlsite_organizer.services.folder_scanner import (
     FolderScanFailure,
     FolderScanFailureKind,
@@ -27,6 +35,10 @@ from dlsite_organizer.services.translation_relations import (
 
 __all__ = [
     "WINDOWS_PATH_WARNING_THRESHOLD",
+    "CandidateDiscoveryService",
+    "CandidateEvidenceEvaluator",
+    "CandidateRelationService",
+    "CandidateSearchPolicy",
     "FolderScanFailure",
     "FolderScanFailureKind",
     "FolderScanner",
@@ -43,4 +55,6 @@ __all__ = [
     "TranslationRelationService",
     "WorkLookup",
     "WorkLookupStatus",
+    "normalize_maker_name",
+    "rj_numeric_distance",
 ]

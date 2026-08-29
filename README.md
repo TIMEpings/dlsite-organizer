@@ -137,3 +137,10 @@ Real rename execution is Windows only. If an unfinished or recovery-required ren
 # Historical confirmed translation relations
 
 The application derives aggregated relations from persisted DLsite metadata observations. Historical evidence is shown separately from the current response and may reveal reverse links even when the queried work no longer exposes them.
+### v0.7 explainable relation candidates
+
+Lookup can show experimental **关联作品候选** derived from local metadata.
+Candidates are non-confirmed suggestions for review, not DLsite-confirmed
+relations, and the feature intentionally provides no score or probability.
+See [`docs/candidate-evidence.md`](docs/candidate-evidence.md) for the evidence
+contract and calibration limitations.
