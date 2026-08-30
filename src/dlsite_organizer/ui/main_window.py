@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         self.review_queue_page = ReviewQueuePage(
             candidate_review_queue_service,
             lookup_service.manual_review_service,
+            cover_service,
         )
         page_definitions = [
             ("整理", self.organizer_page),

@@ -43,7 +43,13 @@ class LookupWorker(QObject):
             )
             self.result_ready.emit(result)
             if result.work.cover_url:
-                cover = self._cover_service.fetch(result.work.cover_url)
+                fetch_for_work = getattr(self._cover_service, "fetch_for_work", None)
+                if callable(fetch_for_work):
+                    cover = fetch_for_work(result.work.workno, result.work.cover_url)
+                else:
+                    # Preserve compatibility with small test doubles and
+                    # older callers that only expose the URL-based fetch API.
+                    cover = self._cover_service.fetch(result.work.cover_url)
                 if cover is not None:
                     self.cover_ready.emit(cover)
         except LookupFailure as exc:

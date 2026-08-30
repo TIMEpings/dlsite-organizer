@@ -92,7 +92,7 @@ def test_groups_make_canonical_pairs_and_context():
     assert result.items[0].rj_numeric_distance == 1
     assert {entry.value for entry in result.items[0].context} == {3, 4}
     assert result.items[0].maker_identity == "ID:M"
-    assert result.policy_provenance.application_version == "0.10.0"
+    assert result.policy_provenance.application_version == "0.10.1"
     assert result.unreviewed_count == 3
     assert result.related_count == 0
     assert result.not_related_count == 0
