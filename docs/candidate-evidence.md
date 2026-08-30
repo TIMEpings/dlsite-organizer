@@ -39,3 +39,7 @@ Reviews are stored separately from DLsite-confirmed relations and do not
 alter candidate generation, scoring, or confirmation semantics. A versioned
 snapshot of the evidence shown at review time is retained for future manual
 label analysis.
+
+v0.9 only reads manual review events to build a descriptive evaluation dataset;
+it does not change this candidate policy or promote candidates to confirmed
+relations.

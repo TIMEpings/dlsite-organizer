@@ -59,6 +59,14 @@ ruff check .
 pyright
 ```
 
+## v0.9 manual review dataset
+
+Manual review events can be analyzed with the derived
+`EvaluationDatasetService` and exported as a deterministic, notes-free CSV.
+The dataset uses the latest review per canonical pair and preserves review-time
+evidence; it does not score candidates, learn from labels, or auto-confirm
+relations. See [docs/evaluation-dataset.md](docs/evaluation-dataset.md).
+
 默认测试全部离线运行。任何未来的真实 DLsite integration test 都必须标记为
 `integration`，且不进入默认测试集。
 

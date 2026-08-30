@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from sqlalchemy import DateTime, Index, Integer, String, Text, select
 from sqlalchemy.orm import Mapped, mapped_column
 
+from dlsite_organizer.domain.evaluation import InvalidSnapshotReview
 from dlsite_organizer.domain.manual_review import (
     CandidateEvidenceSnapshot,
     CandidateReviewOutcome,
@@ -116,6 +117,72 @@ class ManualReviewRepository:
 
     list_manual_reviews = list_reviews
 
+    def list_reviews_for_evaluation(
+        self,
+    ) -> tuple[ManualReviewEvent | InvalidSnapshotReview, ...]:
+        """Read all rows for evaluation, retaining label-valid bad snapshots.
+
+        The historical v0.8 methods intentionally skip malformed events.  This
+        enhanced query is opt-in and only projects rows whose label/provenance
+        fields are valid while their JSON snapshot cannot be decoded.
+        """
+        with self._database.session() as session:
+            rows = session.scalars(
+                select(ManualRelationReviewRecord).order_by(
+                    ManualRelationReviewRecord.reviewed_at.asc(),
+                    ManualRelationReviewRecord.id.asc(),
+                )
+            ).all()
+            result: list[ManualReviewEvent | InvalidSnapshotReview] = []
+            for row in rows:
+                try:
+                    result.append(_to_domain(row))
+                    continue
+                except Exception as error:
+                    try:
+                        outcome = CandidateReviewOutcome(row.outcome)
+                        relation_type = (
+                            ManualRelationType(row.relation_type)
+                            if row.relation_type
+                            else None
+                        )
+                        provenance = ManualReviewProvenance(row.provenance)
+                    except Exception:
+                        logger.warning(
+                            "Skipping malformed manual review row %s", row.id, exc_info=True
+                        )
+                        continue
+                    if not _label_fields_are_valid(
+                        outcome,
+                        relation_type,
+                        row.subject_workno,
+                        row.target_workno,
+                        row.workno_a,
+                        row.workno_b,
+                    ):
+                        logger.warning(
+                            "Skipping malformed manual review row %s", row.id, exc_info=True
+                        )
+                        continue
+                    result.append(
+                        InvalidSnapshotReview(
+                            id=row.id,
+                            workno_a=row.workno_a,
+                            workno_b=row.workno_b,
+                            outcome=outcome,
+                            relation_type=relation_type,
+                            subject_workno=row.subject_workno,
+                            target_workno=row.target_workno,
+                            reviewed_at=_utc(row.reviewed_at),
+                            provenance=provenance,
+                            snapshot_error=str(error),
+                            snapshot_schema_version=_snapshot_schema_version(
+                                row.evidence_snapshot_json
+                            ),
+                        )
+                    )
+            return tuple(result)
+
     def reviews_for_work(self, workno: str) -> tuple[ManualReviewEvent, ...]:
         normalized = str(WorkCode.parse(workno, allowed_prefixes={"RJ"}))
         with self._database.session() as session:
@@ -157,6 +224,39 @@ def _valid_events(rows: Sequence[ManualRelationReviewRecord]) -> tuple[ManualRev
         except Exception:
             logger.warning("Skipping malformed manual review row %s", row.id, exc_info=True)
     return tuple(events)
+
+
+def _label_fields_are_valid(
+    outcome: CandidateReviewOutcome,
+    relation_type: ManualRelationType | None,
+    subject_workno: str | None,
+    target_workno: str | None,
+    workno_a: str,
+    workno_b: str,
+) -> bool:
+    """Validate non-snapshot semantics without inventing replacement evidence."""
+    try:
+        ManualReviewEvent(
+            workno_a=workno_a,
+            workno_b=workno_b,
+            outcome=outcome,
+            relation_type=relation_type,
+            subject_workno=subject_workno,
+            target_workno=target_workno,
+            evidence_snapshot=CandidateEvidenceSnapshot(),
+            reviewed_at=datetime.now(UTC),
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _snapshot_schema_version(payload: str) -> int | None:
+    try:
+        value = json.loads(payload).get("schema_version")
+    except Exception:
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _utc(value: datetime) -> datetime:

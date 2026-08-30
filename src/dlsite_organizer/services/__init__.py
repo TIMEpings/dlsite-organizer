@@ -8,6 +8,11 @@ from dlsite_organizer.services.candidate_relations import (
     normalize_maker_name,
     rj_numeric_distance,
 )
+from dlsite_organizer.services.evaluation_dataset import (
+    EVALUATION_POLICY_VERSION,
+    MINIMUM_DECIDED_LABELS,
+    EvaluationDatasetService,
+)
 from dlsite_organizer.services.folder_scanner import (
     FolderScanFailure,
     FolderScanFailureKind,
@@ -34,11 +39,14 @@ from dlsite_organizer.services.translation_relations import (
 )
 
 __all__ = [
+    "EVALUATION_POLICY_VERSION",
+    "MINIMUM_DECIDED_LABELS",
     "WINDOWS_PATH_WARNING_THRESHOLD",
     "CandidateDiscoveryService",
     "CandidateEvidenceEvaluator",
     "CandidateRelationService",
     "CandidateSearchPolicy",
+    "EvaluationDatasetService",
     "FolderScanFailure",
     "FolderScanFailureKind",
     "FolderScanner",
