@@ -20,10 +20,19 @@ Evidence comes only from the immutable review-time
 is readable but its snapshot is damaged, the record is `INVALID_SNAPSHOT`: its
 manual outcome counts remain included, but evidence-group denominators exclude
 it. The service preserves canonical `workno_a`/`workno_b` and directional
-`subject_workno`/`target_workno`. Relation type counts include concrete manual
-types; `UNKNOWN` and `OTHER` remain generic related labels. A bonus subset is
-only a count/list of manually labelled `BONUS_OF` and `LIMITED_BONUS_OF` pairs;
-it is not bonus accuracy.
+`subject_workno`/`target_workno`. Relation type counts automatically include
+all concrete manual types, including `SAME_SERIES`, `SAME_WORK_VARIANT`,
+`SAME_WORK_LANGUAGE_VARIANT`, and `INCLUDED_IN`; `UNKNOWN` and `OTHER` remain
+valid generic related labels. `INCLUDED_IN` is stored as
+`subject INCLUDED_IN target` and keeps that direction after canonicalization
+and reverse work queries. A bonus subset is only a count/list of manually
+labelled `BONUS_OF` and `LIMITED_BONUS_OF` pairs; it is not bonus accuracy.
+
+The taxonomy additions only make manual labels more precise. They do not
+change candidate policy, `manual_related_rate`, the `RELATED + NOT_RELATED`
+denominator, or the selection-bias warning. New types are not in the bonus
+subset. Historical events are never automatically reclassified; reviewers
+correct a label through the normal append-only review flow.
 
 Schema v2 snapshots expose candidate discovery provenance through
 `candidate_policy_id`, `candidate_policy_version`, and `application_version` on

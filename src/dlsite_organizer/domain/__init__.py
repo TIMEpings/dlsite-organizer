@@ -25,12 +25,14 @@ from dlsite_organizer.domain.evaluation import (
     RelationTypeCount,
 )
 from dlsite_organizer.domain.manual_review import (
+    MANUAL_RELATION_DIRECTIONALITY,
     CandidateEvidenceSnapshot,
     CandidateReviewOutcome,
     ManualRelationReview,
     ManualRelationType,
     ManualReviewEvent,
     ManualReviewProvenance,
+    is_manual_relation_directional,
     parse_candidate_evidence_snapshot,
 )
 from dlsite_organizer.domain.organizer import (
@@ -57,6 +59,7 @@ from dlsite_organizer.domain.work import Work
 from dlsite_organizer.domain.work_code import WorkCode, WorkCodeError, extract_work_codes
 
 __all__ = [
+    "MANUAL_RELATION_DIRECTIONALITY",
     "CandidateEvidence",
     "CandidateEvidenceKind",
     "CandidateEvidencePolarity",
@@ -104,5 +107,6 @@ __all__ = [
     "WorkCodeError",
     "WorkRelation",
     "extract_work_codes",
+    "is_manual_relation_directional",
     "parse_candidate_evidence_snapshot",
 ]

@@ -294,6 +294,58 @@ def test_queue_latest_review_detail_preserves_direction_and_history(qapp: QAppli
     page.close()
 
 
+@pytest.mark.parametrize(
+    ("relation_type", "subject", "target"),
+    [
+        (ManualRelationType.SAME_WORK_LANGUAGE_VARIANT, None, None),
+        (ManualRelationType.INCLUDED_IN, "RJ00000002", "RJ00000001"),
+    ],
+)
+def test_queue_latest_review_detail_displays_new_relation_semantics(
+    qapp: QApplication,
+    relation_type: ManualRelationType,
+    subject: str | None,
+    target: str | None,
+) -> None:
+    store = ReviewStore()
+    manual_reviews = ManualReviewService(store, clock=lambda: WHEN)
+    service = queue_service(
+        (snapshot("RJ00000001"), snapshot("RJ00000002")),
+        manual_reviews=manual_reviews,
+    )
+    item = service.build(filter=CandidateQueueFilter.ALL).items[0]
+    candidate = CandidateRelation(
+        source_workno=item.workno_a,
+        target_workno=item.workno_b,
+        supporting_evidence=item.supporting_evidence,
+        context=item.context,
+        evaluated_at=WHEN,
+        source_snapshot=item.source_snapshot,
+        target_snapshot=item.target_snapshot,
+        policy_provenance=item.policy_provenance,
+    )
+    manual_reviews.submit_review(
+        item.workno_a,
+        item.workno_b,
+        CandidateReviewOutcome.RELATED,
+        relation_type=relation_type,
+        subject_workno=subject,
+        target_workno=target,
+        candidate=candidate,
+    )
+
+    page = ReviewQueuePage(service, manual_reviews)
+    page.filter_combo.setCurrentIndex(page.filter_combo.findData(CandidateQueueFilter.ALL))
+    page.table.selectRow(0)
+
+    assert f"RELATED · {relation_type.name}" in page.details.text()
+    if relation_type is ManualRelationType.INCLUDED_IN:
+        assert "Direction: RJ00000002 INCLUDED_IN RJ00000001" in page.details.text()
+    else:
+        assert "Direction:" not in page.details.text()
+    page.close()
+
+
 def test_queue_selection_clears_on_pagination_filter_and_refresh(qapp: QApplication) -> None:
     items = tuple(snapshot(f"RJ{i:08d}") for i in range(1, 17))
     page = ReviewQueuePage(queue_service(items))

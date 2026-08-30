@@ -584,6 +584,77 @@ def test_review_dialog_switching_to_not_related_clears_direction_and_type(
     page.close()
 
 
+def test_review_dialog_supports_new_taxonomy_and_clears_included_direction(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ReviewStore()
+    page = review_page(store)
+
+    def drive(dialog: QDialog) -> int:
+        combos = dialog.findChildren(QComboBox)
+        relation = combos[1]
+        expected = {
+            "same_series": "同系列作品",
+            "same_work_variant": "同一作品的不同版本",
+            "same_work_language_variant": "同一作品的不同语言版本",
+            "included_in": "收录于合集/套装",
+        }
+        for value, label in expected.items():
+            index = relation.findData(value)
+            assert index >= 0
+            assert relation.itemText(index) == label
+
+        relation.setCurrentIndex(relation.findData("included_in"))
+        assert not combos[2].isHidden()
+        assert not combos[3].isHidden()
+        assert "RJ01636949 收录于 RJ01637033" in " ".join(
+            label.text() for label in dialog.findChildren(QLabel)
+        )
+        combos[2].setCurrentIndex(1)
+        combos[3].setCurrentIndex(0)
+
+        # A symmetric correction must hide the direction UI and clear the
+        # previously selected INCLUDED_IN direction before saving.
+        relation.setCurrentIndex(relation.findData("same_series"))
+        assert combos[2].isHidden()
+        assert combos[3].isHidden()
+        emit_save(dialog)
+        return int(dialog.result())
+
+    monkeypatch.setattr(QDialog, "exec", drive)
+    page._open_review_dialog(candidate_result().candidates[0])
+
+    assert store.events[-1].relation_type is ManualRelationType.SAME_SERIES
+    assert store.events[-1].subject_workno is None
+    assert store.events[-1].target_workno is None
+    page.close()
+
+
+def test_review_dialog_saves_included_in_direction_with_explicit_work_numbers(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ReviewStore()
+    page = review_page(store)
+
+    def drive(dialog: QDialog) -> int:
+        combos = dialog.findChildren(QComboBox)
+        combos[1].setCurrentIndex(combos[1].findData("included_in"))
+        combos[2].setCurrentIndex(1)
+        combos[3].setCurrentIndex(0)
+        emit_save(dialog)
+        return int(dialog.result())
+
+    monkeypatch.setattr(QDialog, "exec", drive)
+    page._open_review_dialog(candidate_result().candidates[0])
+
+    assert store.events[-1].relation_type is ManualRelationType.INCLUDED_IN
+    assert store.events[-1].subject_workno == "RJ01637033"
+    assert store.events[-1].target_workno == "RJ01636949"
+    page.close()
+
+
 def test_review_dialog_save_failure_is_visible_and_does_not_mark_candidate_reviewed(
     qapp: QApplication,
     monkeypatch: pytest.MonkeyPatch,

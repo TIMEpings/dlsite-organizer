@@ -1,6 +1,6 @@
 # Local Candidate Review Queue
 
-The v0.10.1 review queue is a derived, local-only view over the current
+The v0.10.2 review queue is a derived, local-only view over the current
 `KnownWorkSnapshot` universe. It is rebuilt on refresh and is never persisted
 as candidate rows or queue history. Refresh performs no provider/network calls.
 
@@ -26,10 +26,14 @@ stores the same v2 evidence snapshot with policy provenance. Evaluation data
 is rebuilt later from those review events; the queue does not mutate metrics or
 evaluation records.
 
-The latest manual review summary is shown alongside the pair. Symmetric
-relations remain pair-level; directional relations retain the event's subject
-and target direction. Evidence/context are descriptive observations for human
-review, not confidence, scoring, or probability.
+The latest manual review summary is shown alongside the pair. It can display
+`RELATED · SAME_SERIES`, `RELATED · SAME_WORK_VARIANT`, and
+`RELATED · SAME_WORK_LANGUAGE_VARIANT` without direction. Directional relations
+retain the event's subject and target direction; for example, an included work
+is displayed as `A INCLUDED_IN B`. The inverse work view may describe that as
+“B contains A”, but it does not create or persist a reverse event. Direction
+and evidence/context are descriptive review information, not confidence,
+scoring, or probability.
 
 The default filter is Unreviewed. The result reports known-work, eligible-work,
 filtered pair, returned-row, and descriptive counts for each latest review

@@ -205,6 +205,69 @@ def test_relation_counts_bonus_subset_and_evidence_groups() -> None:
     )
 
 
+def test_new_relation_distribution_is_latest_label_and_not_bonus_subset() -> None:
+    relations = (
+        (ManualRelationType.SAME_SERIES, 1),
+        (ManualRelationType.SAME_WORK_VARIANT, 3),
+        (ManualRelationType.SAME_WORK_LANGUAGE_VARIANT, 3),
+        (ManualRelationType.INCLUDED_IN, 3),
+    )
+    events = []
+    event_id = 1
+    for relation_type, count in relations:
+        for _ in range(count):
+            a = f"RJ{event_id:08d}"
+            b = f"RJ{event_id + 100:08d}"
+            events.append(
+                review(
+                    event_id,
+                    a,
+                    b,
+                    CandidateReviewOutcome.RELATED,
+                    WHEN,
+                    relation_type=relation_type,
+                    subject=a if relation_type.is_directional else None,
+                    target=b if relation_type.is_directional else None,
+                )
+            )
+            event_id += 1
+
+    summary = EvaluationDatasetService(Store(*events), minimum_decided_labels=1).summary()
+    assert summary.relation_type_distribution == {
+        ManualRelationType.SAME_SERIES: 1,
+        ManualRelationType.SAME_WORK_VARIANT: 3,
+        ManualRelationType.SAME_WORK_LANGUAGE_VARIANT: 3,
+        ManualRelationType.INCLUDED_IN: 3,
+    }
+    assert summary.manual_bonus_related_pairs == 0
+
+
+def test_reclassification_uses_latest_new_relation_without_rewriting_history() -> None:
+    older = review(
+        1,
+        "RJ00000001",
+        "RJ00000002",
+        CandidateReviewOutcome.RELATED,
+        WHEN,
+        relation_type=ManualRelationType.OTHER,
+    )
+    latest = review(
+        2,
+        "RJ00000002",
+        "RJ00000001",
+        CandidateReviewOutcome.RELATED,
+        WHEN.replace(minute=1),
+        relation_type=ManualRelationType.SAME_SERIES,
+    )
+    store = Store(older, latest)
+    service = EvaluationDatasetService(store)
+
+    records = service.records()
+    assert len(store.list_reviews()) == 2
+    assert len(records) == 1
+    assert records[0].relation_type is ManualRelationType.SAME_SERIES
+
+
 def test_csv_is_deterministic_utf8_bom_and_excludes_notes(tmp_path: Path) -> None:
     event = review(1, "RJ00000002", "RJ00000001", CandidateReviewOutcome.UNSURE, WHEN)
     event = event.model_copy(update={"notes": "private note"})
@@ -219,3 +282,32 @@ def test_csv_is_deterministic_utf8_bom_and_excludes_notes(tmp_path: Path) -> Non
     assert "private note" not in content
     assert content.splitlines()[1].startswith("RJ00000001,RJ00000002")
     assert first.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+def test_csv_exports_mixed_new_relation_types_and_included_direction(tmp_path: Path) -> None:
+    events = [
+        review(
+            1,
+            "RJ00000002",
+            "RJ00000001",
+            CandidateReviewOutcome.RELATED,
+            WHEN,
+            relation_type=ManualRelationType.SAME_WORK_LANGUAGE_VARIANT,
+        ),
+        review(
+            2,
+            "RJ00000004",
+            "RJ00000003",
+            CandidateReviewOutcome.RELATED,
+            WHEN,
+            relation_type=ManualRelationType.INCLUDED_IN,
+            subject="RJ00000004",
+            target="RJ00000003",
+        ),
+    ]
+    path = tmp_path / "mixed.csv"
+    EvaluationDatasetService(Store(*events)).export_csv(path)
+    content = path.read_text(encoding="utf-8-sig")
+    assert "same_work_language_variant" in content
+    assert "included_in" in content
+    assert "RJ00000003,RJ00000004,related,included_in,RJ00000004,RJ00000003" in content

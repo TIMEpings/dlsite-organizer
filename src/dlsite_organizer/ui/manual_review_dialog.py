@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QLabel,
     QMessageBox,
     QPlainTextEdit,
 )
@@ -39,34 +40,77 @@ def open_manual_review_dialog(parent, service, candidate: CandidateRelation) -> 
         ("child_of", "子作品"),
         ("bundled_with", "捆绑/套装"),
         ("other", "其他"),
+        ("same_series", "同系列作品"),
+        ("same_work_variant", "同一作品的不同版本"),
+        ("same_work_language_variant", "同一作品的不同语言版本"),
+        ("included_in", "收录于合集/套装"),
     ):
         relation.addItem(label, value)
     notes = QPlainTextEdit()
     subject = QComboBox()
-    subject.addItems([candidate.source_workno, candidate.target_workno])
     target = QComboBox()
-    target.addItems([candidate.source_workno, candidate.target_workno])
-    target.setCurrentIndex(1)
-    fields = (
-        ("判断", outcome),
-        ("关系类型", relation),
-        ("关系主体", subject),
-        ("关系目标", target),
-        ("备注", notes),
-    )
-    for label, widget in fields:
-        form.addRow(label, widget)
+    direction_hint = QLabel()
+    direction_hint.setWordWrap(True)
+    subject_label = QLabel("关系主体")
+    target_label = QLabel("关系目标")
+    direction_label = QLabel("方向说明")
+    form.addRow("判断", outcome)
+    form.addRow("关系类型", relation)
+    form.addRow(subject_label, subject)
+    form.addRow(target_label, target)
+    form.addRow(direction_label, direction_hint)
+    form.addRow("备注", notes)
     buttons = QDialogButtonBox(
         QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
     )
     form.addRow(buttons)
 
-    def update_visibility(index: int) -> None:
-        related = index == 0
+    def update_direction_items(included: bool) -> None:
+        subject.blockSignals(True)
+        target.blockSignals(True)
+        try:
+            subject.clear()
+            target.clear()
+            worknos = (candidate.source_workno, candidate.target_workno)
+            if included:
+                subject.addItem(f"{worknos[0]}（独立作品）", worknos[0])
+                subject.addItem(f"{worknos[1]}（独立作品）", worknos[1])
+                target.addItem(f"{worknos[0]}（合集/套装）", worknos[0])
+                target.addItem(f"{worknos[1]}（合集/套装）", worknos[1])
+            else:
+                for workno in worknos:
+                    subject.addItem(workno, workno)
+                    target.addItem(workno, workno)
+            subject.setCurrentIndex(0)
+            target.setCurrentIndex(1)
+        finally:
+            subject.blockSignals(False)
+            target.blockSignals(False)
+
+    def update_visibility(index: int = -1) -> None:
+        related = outcome.currentData() == CandidateReviewOutcome.RELATED
         relation.setEnabled(related)
-        directional = related and relation.currentData() not in {"bundled_with", "other", "unknown"}
+        relation_type = ManualRelationType(relation.currentData()) if related else None
+        directional = related and relation_type is not None and relation_type.is_directional
+        included = relation_type is ManualRelationType.INCLUDED_IN
+        if included:
+            direction_hint.setText(
+                f"请选择明确方向：{candidate.source_workno} 收录于 {candidate.target_workno}，"
+                f"或 {candidate.target_workno} 收录于 {candidate.source_workno}。"
+            )
+        elif directional:
+            direction_hint.setText("请选择关系主体与关系目标；保存后会保留该方向。")
+        else:
+            direction_hint.clear()
+        update_direction_items(included)
+        subject.setEnabled(directional)
+        target.setEnabled(directional)
         subject.setVisible(directional)
         target.setVisible(directional)
+        subject_label.setVisible(directional)
+        target_label.setVisible(directional)
+        direction_label.setVisible(directional)
+        direction_hint.setVisible(directional)
 
     relation.currentIndexChanged.connect(lambda _index: update_visibility(outcome.currentIndex()))
     outcome.currentIndexChanged.connect(update_visibility)
@@ -82,8 +126,8 @@ def open_manual_review_dialog(parent, service, candidate: CandidateRelation) -> 
                 candidate.target_workno,
                 CandidateReviewOutcome(outcome.currentData()),
                 relation_type=relation_type,
-                subject_workno=subject.currentText() if directional else None,
-                target_workno=target.currentText() if directional else None,
+                subject_workno=subject.currentData() if directional else None,
+                target_workno=target.currentData() if directional else None,
                 notes=notes.toPlainText() or None,
                 candidate=candidate,
             )

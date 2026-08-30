@@ -1,11 +1,50 @@
 # Manual candidate review
 
-v0.8 adds a local annotation layer for derived candidates. A review is an
+v0.10.2 extends the local annotation taxonomy without changing candidate
+discovery. A review is an
 append-only event on a canonical unordered RJ pair and is persisted with
 `MANUAL_USER_REVIEW` provenance. Outcomes are `RELATED`, `NOT_RELATED`, and
-`UNSURE`; only `RELATED` requires a relation type. Directional types store the
-explicit subject and target selected by the user, while `BUNDLED_WITH`,
-`OTHER`, and `UNKNOWN` are symmetric.
+`UNSURE`; only `RELATED` requires a relation type.
+
+## Relation taxonomy
+
+The complete manual relation taxonomy is:
+
+| Type | Direction | Meaning |
+| --- | --- | --- |
+| `TRANSLATION_OF` | directional | Subject is translated from target; use only when the source/target direction is known. |
+| `BONUS_OF` | directional | Subject is a bonus associated with target. |
+| `LIMITED_BONUS_OF` | directional | Subject is a limited/edition bonus associated with target. |
+| `CHILD_OF` | directional | Subject is a child work of target. |
+| `INCLUDED_IN` | directional | Independent work subject is included in collection/package target. |
+| `BUNDLED_WITH` | symmetric | Two works are in a symmetric bundle/set and containment is unknown or intentionally unexpressed. |
+| `OTHER` | symmetric | Related, but not covered by a more specific taxonomy value. |
+| `UNKNOWN` | symmetric | Related, but the relation type is not known. |
+| `SAME_SERIES` | symmetric | Two independently released works explicitly belong to the same series, with no more specific relation. |
+| `SAME_WORK_VARIANT` | symmetric | The same underlying work has different non-language versions/editions, such as a revised or format variant. |
+| `SAME_WORK_LANGUAGE_VARIANT` | symmetric | The same underlying work has official different-language editions, without asserting translation direction. |
+
+`SAME_SERIES` is not `SAME_WORK_VARIANT`: the former describes distinct works
+within one series, while the latter describes different versions of one
+underlying work. `SAME_WORK_VARIANT` is for non-language version/edition
+differences. Use `SAME_WORK_LANGUAGE_VARIANT` for official language editions
+when the reviewer does not want to assert which one translated from which.
+
+`TRANSLATION_OF` remains directional. For example, `B TRANSLATION_OF A`
+requires a clear statement that B was translated from A; different-language
+titles alone are not enough.
+
+`INCLUDED_IN` is also directional: an independently released work A stored as
+`A INCLUDED_IN B` means collection/package B contains A. The UI may phrase this
+as “A 收录于 B” or, when viewing the inverse work, “B 包含 A”, but there is no
+separate `CONTAINS` enum and no second event. `BUNDLED_WITH` remains available
+for genuinely symmetric bundle relationships; existing values are not
+reinterpreted automatically.
+
+Symmetric relations persist with `subject_workno = None` and
+`target_workno = None`. Directional relations persist the explicit subject and
+target selected by the reviewer. Canonical pair ordering never changes an
+`INCLUDED_IN` direction.
 
 Each event stores a versioned evidence snapshot (maker identity, registration
 date, RJ distance, local group counts, and candidate evaluation time). New
@@ -45,4 +84,8 @@ policy performance comparison.
 
 The local candidate review queue is an additional entry point for the same
 manual review service. Persistence remains append-only, local-only, and uses
-the existing review-time evidence snapshot contract.
+the existing review-time evidence snapshot contract. Re-reviewing a pair appends
+a new event; it never rewrites the old relation type or evidence snapshot. Thus
+an `OTHER` event followed by `SAME_SERIES`, or a `BUNDLED_WITH` event followed by
+`INCLUDED_IN`, remains a two-event history and only the latest event is used by
+the current evaluation view.

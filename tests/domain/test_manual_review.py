@@ -72,6 +72,74 @@ def test_direction_is_normalized_after_pair_canonicalization() -> None:
 
 
 @pytest.mark.parametrize(
+    "relation_type",
+    [
+        ManualRelationType.SAME_SERIES,
+        ManualRelationType.SAME_WORK_VARIANT,
+        ManualRelationType.SAME_WORK_LANGUAGE_VARIANT,
+    ],
+)
+def test_new_symmetric_relations_reject_direction(
+    relation_type: ManualRelationType,
+) -> None:
+    assert not relation_type.is_directional
+    with pytest.raises(ValidationError):
+        ManualReviewEvent(
+            workno_a="RJ00000001",
+            workno_b="RJ00000002",
+            outcome=CandidateReviewOutcome.RELATED,
+            relation_type=relation_type,
+            subject_workno="RJ00000001",
+            target_workno="RJ00000002",
+            evidence_snapshot=SNAPSHOT,
+            reviewed_at=WHEN,
+        )
+
+
+def test_included_in_is_directional_and_survives_pair_canonicalization() -> None:
+    event = ManualReviewEvent(
+        workno_a="RJ00000002",
+        workno_b="RJ00000001",
+        outcome=CandidateReviewOutcome.RELATED,
+        relation_type=ManualRelationType.INCLUDED_IN,
+        subject_workno="RJ00000002",
+        target_workno="RJ00000001",
+        evidence_snapshot=SNAPSHOT,
+        reviewed_at=WHEN,
+    )
+
+    assert ManualRelationType.INCLUDED_IN.is_directional
+    assert event.workno_a == "RJ00000001"
+    assert event.workno_b == "RJ00000002"
+    assert event.subject_workno == "RJ00000002"
+    assert event.target_workno == "RJ00000001"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"subject_workno": None, "target_workno": "RJ00000002"},
+        {"subject_workno": "RJ00000001", "target_workno": None},
+        {"subject_workno": "RJ00000001", "target_workno": "RJ00000003"},
+        {"subject_workno": "RJ00000001", "target_workno": "RJ00000001"},
+    ],
+)
+def test_included_in_requires_distinct_pair_direction(
+    kwargs: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        ManualReviewEvent(
+            workno_a="RJ00000001",
+            workno_b="RJ00000002",
+            outcome=CandidateReviewOutcome.RELATED,
+            relation_type=ManualRelationType.INCLUDED_IN,
+            evidence_snapshot=SNAPSHOT,
+            reviewed_at=WHEN,
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
     "outcome", [CandidateReviewOutcome.NOT_RELATED, CandidateReviewOutcome.UNSURE]
 )
 def test_non_related_outcomes_have_no_relation_or_direction(

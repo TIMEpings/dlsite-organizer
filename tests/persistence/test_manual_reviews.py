@@ -257,6 +257,119 @@ def test_review_persists_snapshot_direction_and_notes_across_restart(tmp_path: P
     restarted.dispose()
 
 
+@pytest.mark.parametrize(
+    "relation_type",
+    [
+        ManualRelationType.SAME_SERIES,
+        ManualRelationType.SAME_WORK_VARIANT,
+        ManualRelationType.SAME_WORK_LANGUAGE_VARIANT,
+        ManualRelationType.INCLUDED_IN,
+    ],
+)
+def test_new_relation_types_round_trip_across_restart(
+    tmp_path: Path, relation_type: ManualRelationType
+) -> None:
+    path = tmp_path / f"{relation_type.value}.sqlite3"
+    database, repository = repository_for(path)
+    directional = relation_type.is_directional
+    saved = repository.append(
+        event(
+            CandidateReviewOutcome.RELATED,
+            workno_a="RJ00000002",
+            workno_b="RJ00000001",
+            relation_type=relation_type,
+            subject_workno="RJ00000002" if directional else None,
+            target_workno="RJ00000001" if directional else None,
+        )
+    )
+    database.dispose()
+
+    restarted, restarted_repository = repository_for(path)
+    loaded = restarted_repository.latest_for_pair("RJ00000001", "RJ00000002")
+    assert loaded is not None
+    assert loaded.id == saved.id
+    assert loaded.relation_type is relation_type
+    assert loaded.subject_workno == ("RJ00000002" if directional else None)
+    assert loaded.target_workno == ("RJ00000001" if directional else None)
+    restarted.dispose()
+
+
+@pytest.mark.parametrize(
+    "relation_type", [ManualRelationType.OTHER, ManualRelationType.BUNDLED_WITH]
+)
+def test_legacy_symmetric_relation_round_trip_after_restart(
+    tmp_path: Path, relation_type: ManualRelationType
+) -> None:
+    path = tmp_path / f"legacy-{relation_type.value}.sqlite3"
+    database, repository = repository_for(path)
+    saved = repository.append(
+        event(
+            CandidateReviewOutcome.RELATED,
+            relation_type=relation_type,
+        )
+    )
+    database.dispose()
+
+    restarted, restarted_repository = repository_for(path)
+    loaded = restarted_repository.latest_for_pair("RJ00000001", "RJ00000002")
+    assert loaded == saved
+    assert loaded is not None
+    assert loaded.relation_type is relation_type
+    assert loaded.subject_workno is None
+    assert loaded.target_workno is None
+    restarted.dispose()
+
+
+def test_included_in_reverse_work_query_keeps_event_direction(tmp_path: Path) -> None:
+    database, repository = repository_for(tmp_path / "included-in-query.sqlite3")
+    saved = repository.append(
+        event(
+            CandidateReviewOutcome.RELATED,
+            workno_a="RJ00000002",
+            workno_b="RJ00000001",
+            relation_type=ManualRelationType.INCLUDED_IN,
+            subject_workno="RJ00000002",
+            target_workno="RJ00000001",
+        )
+    )
+
+    assert repository.reviews_for_work("RJ00000001") == (saved,)
+    assert repository.reviews_for_work("RJ00000002") == (saved,)
+    database.dispose()
+
+
+def test_relation_correction_is_append_only_and_latest_keeps_included_direction(
+    tmp_path: Path,
+) -> None:
+    database, repository = repository_for(tmp_path / "relation-correction.sqlite3")
+    first = repository.append(
+        event(
+            CandidateReviewOutcome.RELATED,
+            relation_type=ManualRelationType.BUNDLED_WITH,
+            reviewed_at=WHEN,
+        )
+    )
+    second = repository.append(
+        event(
+            CandidateReviewOutcome.RELATED,
+            relation_type=ManualRelationType.INCLUDED_IN,
+            subject_workno="RJ00000002",
+            target_workno="RJ00000001",
+            reviewed_at=LATER,
+        )
+    )
+
+    history = repository.history_for_pair("RJ00000001", "RJ00000002")
+    assert history == (first, second)
+    latest = repository.latest_for_pair("RJ00000001", "RJ00000002")
+    assert latest == second
+    assert latest is not None
+    assert latest.relation_type is ManualRelationType.INCLUDED_IN
+    assert latest.subject_workno == "RJ00000002"
+    assert latest.target_workno == "RJ00000001"
+    database.dispose()
+
+
 def test_malformed_snapshot_rows_are_skipped_without_hiding_valid_history(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

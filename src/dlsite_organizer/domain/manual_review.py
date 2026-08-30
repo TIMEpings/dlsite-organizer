@@ -11,6 +11,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -33,10 +34,43 @@ class ManualRelationType(StrEnum):
     BUNDLED_WITH = "bundled_with"
     OTHER = "other"
     UNKNOWN = "unknown"
+    SAME_SERIES = "same_series"
+    SAME_WORK_VARIANT = "same_work_variant"
+    SAME_WORK_LANGUAGE_VARIANT = "same_work_language_variant"
+    INCLUDED_IN = "included_in"
 
     @property
     def is_directional(self) -> bool:
-        return self not in {self.BUNDLED_WITH, self.OTHER, self.UNKNOWN}
+        return is_manual_relation_directional(self)
+
+
+# This is the authoritative directionality contract for manual relation
+# labels.  Validation, UI behavior, and consumers should use this mapping (or
+# ``ManualRelationType.is_directional``) rather than maintaining their own
+# relation-type sets.
+MANUAL_RELATION_DIRECTIONALITY: Mapping[ManualRelationType, bool] = MappingProxyType(
+    {
+        ManualRelationType.TRANSLATION_OF: True,
+        ManualRelationType.BONUS_OF: True,
+        ManualRelationType.LIMITED_BONUS_OF: True,
+        ManualRelationType.CHILD_OF: True,
+        ManualRelationType.INCLUDED_IN: True,
+        ManualRelationType.BUNDLED_WITH: False,
+        ManualRelationType.OTHER: False,
+        ManualRelationType.UNKNOWN: False,
+        ManualRelationType.SAME_SERIES: False,
+        ManualRelationType.SAME_WORK_VARIANT: False,
+        ManualRelationType.SAME_WORK_LANGUAGE_VARIANT: False,
+    }
+)
+
+
+def is_manual_relation_directional(relation_type: ManualRelationType) -> bool:
+    """Return whether a manual relation stores an explicit subject/target."""
+    try:
+        return MANUAL_RELATION_DIRECTIONALITY[relation_type]
+    except KeyError as exc:  # Keep additions from silently bypassing validation.
+        raise ValueError(f"Unsupported manual relation type: {relation_type!r}") from exc
 
 
 class ManualReviewProvenance(StrEnum):
