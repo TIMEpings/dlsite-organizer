@@ -3,6 +3,7 @@
 from __future__ import annotations
 # ruff: noqa
 
+from dataclasses import replace
 from typing import cast
 
 from PySide6.QtCore import Qt, QThread, Slot
@@ -27,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer.domain.relation import RelationType, TranslationRole
-from dlsite_organizer.domain.manual_review import ManualReviewEvent
+from dlsite_organizer.domain.manual_review import ManualReviewEvent, canonical_pair
 from dlsite_organizer.domain.candidate import (
     CandidateEvidenceKind,
     CandidateSearchResult,
@@ -387,6 +388,7 @@ class LookupPage(QWidget):
         self._show_manual_reviews(getattr(self, "_current_result", None))
 
     def _show_candidates(self, result: CandidateSearchResult | None) -> None:
+        self._clear_review_buttons()
         if result is None:
             self.candidate_relations_value.setText("候选发现不可用（未配置本地元数据）")
             return
@@ -401,7 +403,6 @@ class LookupPage(QWidget):
         if not result.candidates:
             self.candidate_relations_value.setText("候选结果为空")
             return
-        self._clear_review_buttons()
         lines: list[str] = []
         for candidate in result.candidates:
             title = candidate.target_snapshot.title if candidate.target_snapshot else ""
@@ -428,17 +429,16 @@ class LookupPage(QWidget):
             )
             if group_size is not None:
                 label += f" · 本地已知同社团同日作品数：{group_size}"
-            review_service = self._lookup_service.manual_review_service
-            if review_service is not None:
-                review = review_service.latest_review_for_pair(
-                    candidate.source_workno, candidate.target_workno
-                )
-                if review is not None:
-                    label += {
-                        "not_related": " · 人工已否决",
-                        "unsure": " · 人工判断：不确定",
-                        "related": " · 人工确认",
-                    }.get(review.outcome.value, "")
+            review = self._latest_manual_review(
+                candidate.source_workno, candidate.target_workno
+            )
+            if review is not None and review.outcome.value == "related":
+                continue
+            if review is not None:
+                label += {
+                    "not_related": " · 人工已否决",
+                    "unsure": " · 人工判断：不确定",
+                }.get(review.outcome.value, "")
             lines.append(label)
             button = QPushButton(f"Review {candidate.target_workno}")
             button.clicked.connect(lambda _checked=False, c=candidate: self._open_review_dialog(c))
@@ -454,7 +454,13 @@ class LookupPage(QWidget):
             return
         latest: dict[tuple[str, str], ManualReviewEvent] = {}
         for review in result.manual_reviews:
-            latest[(review.workno_a, review.workno_b)] = review
+            pair = (review.workno_a, review.workno_b)
+            previous = latest.get(pair)
+            if previous is None or (review.reviewed_at, review.id or -1) >= (
+                previous.reviewed_at,
+                previous.id or -1,
+            ):
+                latest[pair] = review
         lines = []
         for review in latest.values():
             if review.outcome.value != "related":
@@ -463,6 +469,23 @@ class LookupPage(QWidget):
             direction = f"（{review.subject_workno} → {review.target_workno}）" if review.subject_workno else ""
             lines.append(f"{review.workno_a} / {review.workno_b}：人工确认 · {relation}{direction}")
         self.manual_relations_value.setText("\n".join(lines) if lines else "暂无人工确认关系")
+
+    def _latest_manual_review(self, workno_a: str, workno_b: str) -> ManualReviewEvent | None:
+        reviews: list[ManualReviewEvent] = []
+        current = getattr(self, "_current_result", None)
+        if current is not None:
+            pair = canonical_pair(workno_a, workno_b)
+            reviews.extend(
+                review
+                for review in current.manual_reviews
+                if (review.workno_a, review.workno_b) == pair
+            )
+        service = self._lookup_service.manual_review_service
+        if service is not None:
+            review = service.latest_review_for_pair(workno_a, workno_b)
+            if review is not None:
+                reviews.append(review)
+        return max(reviews, key=lambda item: (item.reviewed_at, item.id or -1), default=None)
 
     def _clear_review_buttons(self) -> None:
         while self.review_buttons.count():
@@ -517,6 +540,15 @@ class LookupPage(QWidget):
         buttons.accepted.connect(save)
         buttons.rejected.connect(dialog.reject)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            current = getattr(self, "_current_result", None)
+            if current is not None:
+                refreshed = replace(
+                    current,
+                    manual_reviews=service.reviews_for_work(candidate.source_workno),
+                )
+                self._current_result = refreshed
+                self._show_candidates(refreshed.candidate_relations)
+                self._show_manual_reviews(refreshed)
             self.status_label.setText("人工 review 已保存")
 
     def _clear_relations(self) -> None:

@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from dlsite_organizer.domain.work_code import WorkCode
 
@@ -85,6 +85,13 @@ class ManualReviewEvent(BaseModel):
     updated_at: datetime | None = None
     provenance: ManualReviewProvenance = ManualReviewProvenance.MANUAL_USER_REVIEW
 
+    @field_validator("subject_workno", "target_workno")
+    @classmethod
+    def normalize_direction_workno(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(WorkCode.parse(value, allowed_prefixes={"RJ"}))
+
     @model_validator(mode="before")
     @classmethod
     def canonicalize_pair(cls, values: Any) -> Any:
@@ -114,6 +121,8 @@ class ManualReviewEvent(BaseModel):
                     raise ValueError(
                         "Directional relations require subject and target work numbers"
                     )
+                if self.subject_workno == self.target_workno:
+                    raise ValueError("Directional relation subject and target must differ")
             elif self.subject_workno is not None or self.target_workno is not None:
                 raise ValueError("Symmetric relations must not include direction")
         elif (

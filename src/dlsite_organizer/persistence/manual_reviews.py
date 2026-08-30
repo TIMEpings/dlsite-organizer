@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, Index, Integer, String, Text, select
@@ -69,6 +70,13 @@ class ManualReviewRepository:
             session.add(row)
             session.commit()
             session.refresh(row)
+            logger.info(
+                "Manual review saved for %s/%s outcome=%s relation_type=%s",
+                event.workno_a,
+                event.workno_b,
+                event.outcome.value,
+                event.relation_type.value if event.relation_type else None,
+            )
             return _to_domain(row)
 
     # Alias emphasizing event semantics.
@@ -88,7 +96,7 @@ class ManualReviewRepository:
                     ManualRelationReviewRecord.id.asc(),
                 )
             ).all()
-            return tuple(_to_domain(row) for row in rows)
+            return _valid_events(rows)
 
     def latest_for_pair(self, workno_a: str, workno_b: str) -> ManualReviewEvent | None:
         history = self.history_for_pair(workno_a, workno_b)
@@ -104,7 +112,7 @@ class ManualReviewRepository:
                     ManualRelationReviewRecord.id.asc(),
                 )
             ).all()
-            return tuple(_to_domain(row) for row in rows)
+            return _valid_events(rows)
 
     list_manual_reviews = list_reviews
 
@@ -122,7 +130,7 @@ class ManualReviewRepository:
                     ManualRelationReviewRecord.id.asc(),
                 )
             ).all()
-            return tuple(_to_domain(row) for row in rows)
+            return _valid_events(rows)
 
 
 def _to_domain(row: ManualRelationReviewRecord) -> ManualReviewEvent:
@@ -137,8 +145,18 @@ def _to_domain(row: ManualRelationReviewRecord) -> ManualReviewEvent:
         notes=row.notes,
         evidence_snapshot=CandidateEvidenceSnapshot.model_validate(json.loads(row.evidence_snapshot_json)),
         reviewed_at=_utc(row.reviewed_at),
-        provenance=ManualReviewProvenance.MANUAL_USER_REVIEW,
+        provenance=ManualReviewProvenance(row.provenance),
     )
+
+
+def _valid_events(rows: Sequence[ManualRelationReviewRecord]) -> tuple[ManualReviewEvent, ...]:
+    events: list[ManualReviewEvent] = []
+    for row in rows:
+        try:
+            events.append(_to_domain(row))
+        except Exception:
+            logger.warning("Skipping malformed manual review row %s", row.id, exc_info=True)
+    return tuple(events)
 
 
 def _utc(value: datetime) -> datetime:

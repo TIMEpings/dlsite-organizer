@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDialogButtonBox, QLabel
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.domain.candidate import (
@@ -13,6 +13,13 @@ from dlsite_organizer.domain.candidate import (
     CandidateSearchState,
     CandidateSnapshotSource,
     KnownWorkSnapshot,
+)
+from dlsite_organizer.domain.manual_review import (
+    CandidateEvidenceSnapshot,
+    CandidateReviewOutcome,
+    ManualRelationType,
+    ManualReviewEvent,
+    canonical_pair,
 )
 from dlsite_organizer.domain.relation import (
     Confidence,
@@ -29,6 +36,7 @@ from dlsite_organizer.services.historical_relations import (
     HistoricalRelations,
 )
 from dlsite_organizer.services.lookup import LookupFreshness, LookupResult, LookupService
+from dlsite_organizer.services.manual_reviews import ManualReviewService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.translation_relations import (
     TranslationAnalysis,
@@ -117,6 +125,71 @@ def historical_relation(target: str) -> HistoricalRelation:
         observation_count=1,
         evidence=(),
     )
+
+
+class ReviewStore:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.events: list[ManualReviewEvent] = []
+        self.fail = fail
+
+    def append(self, event: ManualReviewEvent) -> ManualReviewEvent:
+        if self.fail:
+            raise RuntimeError("simulated commit failure")
+        saved = event.model_copy(update={"id": len(self.events) + 1})
+        self.events.append(saved)
+        return saved
+
+    def latest_for_pair(self, workno_a: str, workno_b: str) -> ManualReviewEvent | None:
+        pair = canonical_pair(workno_a, workno_b)
+        values = [item for item in self.events if (item.workno_a, item.workno_b) == pair]
+        return values[-1] if values else None
+
+    def history_for_pair(self, workno_a: str, workno_b: str) -> tuple[ManualReviewEvent, ...]:
+        pair = canonical_pair(workno_a, workno_b)
+        return tuple(item for item in self.events if (item.workno_a, item.workno_b) == pair)
+
+    def list_reviews(self) -> tuple[ManualReviewEvent, ...]:
+        return tuple(self.events)
+
+    def reviews_for_work(self, workno: str) -> tuple[ManualReviewEvent, ...]:
+        return tuple(item for item in self.events if workno in (item.workno_a, item.workno_b))
+
+
+def manual_review(
+    outcome: CandidateReviewOutcome,
+    *,
+    relation_type: ManualRelationType | None = None,
+    subject_workno: str | None = None,
+    target_workno: str | None = None,
+    reviewed_at: datetime = datetime(2026, 8, 30, 10, 0, tzinfo=UTC),
+) -> ManualReviewEvent:
+    return ManualReviewEvent(
+        workno_a="RJ01636949",
+        workno_b="RJ01637033",
+        outcome=outcome,
+        relation_type=relation_type,
+        subject_workno=subject_workno,
+        target_workno=target_workno,
+        evidence_snapshot=CandidateEvidenceSnapshot(),
+        reviewed_at=reviewed_at,
+    )
+
+
+def review_page(store: ReviewStore) -> LookupPage:
+    return LookupPage(
+        LookupService(
+            FakeProvider(),
+            NamingService(),
+            manual_review_service=ManualReviewService(store),
+        ),
+        CoverService(),
+    )
+
+
+def emit_save(dialog: QDialog) -> None:
+    buttons = dialog.findChild(QDialogButtonBox)
+    assert buttons is not None
+    buttons.accepted.emit()
 
 
 def test_lookup_page_renders_application_relation_result(qapp: QApplication) -> None:
@@ -321,4 +394,215 @@ def test_lookup_page_explains_truncated_candidate_results(qapp: QApplication) ->
     page._show_candidates(candidate_result(truncated=True, total_candidate_count=5))
 
     assert "仅显示 1/5 项" in page.candidate_relations_value.text()
+    page.close()
+
+
+def test_lookup_page_keeps_manual_related_separate_from_candidate_layer(
+    qapp: QApplication,
+) -> None:
+    page = review_page(
+        ReviewStore(),
+    )
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ01636949", title="源作品"),
+            formatted_name="[RJ01636949] 源作品",
+            translation=TranslationAnalysis(
+                role=TranslationRole.TRANSLATION_PARENT,
+                relations=(
+                    WorkRelation(
+                        source_workno="RJ01636949",
+                        target_workno="RJ01609020",
+                        relation_type=RelationType.TRANSLATION_OF,
+                        confidence=Confidence.CONFIRMED,
+                        evidence=[],
+                        detection_source="fixture",
+                    ),
+                ),
+                status=TranslationAnalysisStatus.CONFIRMED,
+            ),
+            historical_relations=HistoricalRelations(
+                outgoing=(historical_relation("RJ01636950"),)
+            ),
+            candidate_relations=candidate_result(),
+            manual_reviews=(
+                manual_review(
+                    CandidateReviewOutcome.RELATED,
+                    relation_type=ManualRelationType.BONUS_OF,
+                    subject_workno="RJ01636949",
+                    target_workno="RJ01637033",
+                ),
+            ),
+        )
+    )
+
+    assert "RJ01609020" in page.relation_details_value.text()
+    assert "RJ01636950" in page.historical_relations_value.text()
+    assert "RJ01637033" not in page.candidate_relations_value.text()
+    assert "人工确认" in page.manual_relations_value.text()
+    assert "RJ01636949 → RJ01637033" in page.manual_relations_value.text()
+    page.close()
+
+
+def test_lookup_page_shows_latest_manual_state_and_keeps_unsure_distinct(
+    qapp: QApplication,
+) -> None:
+    page = review_page(ReviewStore())
+    old = manual_review(
+        CandidateReviewOutcome.RELATED,
+        relation_type=ManualRelationType.BONUS_OF,
+        subject_workno="RJ01636949",
+        target_workno="RJ01637033",
+    )
+    latest = manual_review(
+        CandidateReviewOutcome.UNSURE,
+        reviewed_at=datetime(2026, 8, 30, 10, 1, tzinfo=UTC),
+    )
+    result = LookupResult(
+        work=Work(workno="RJ01636949", title="源作品"),
+        formatted_name="[RJ01636949] 源作品",
+        candidate_relations=candidate_result(),
+        manual_reviews=(old, latest),
+    )
+    page._show_result(result)
+
+    assert page.manual_relations_value.text() == "暂无人工确认关系"
+    assert "人工判断：不确定" not in page.manual_relations_value.text()
+    assert "人工判断：不确定" in page.candidate_relations_value.text()
+    page.close()
+
+
+def test_lookup_page_preserves_dlsite_fact_and_manual_not_related_annotation(
+    qapp: QApplication,
+) -> None:
+    page = review_page(ReviewStore())
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ01636949", title="源作品"),
+            formatted_name="[RJ01636949] 源作品",
+            translation=TranslationAnalysis(
+                role=TranslationRole.TRANSLATION_PARENT,
+                relations=(
+                    WorkRelation(
+                        source_workno="RJ01636949",
+                        target_workno="RJ01637033",
+                        relation_type=RelationType.TRANSLATION_OF,
+                        confidence=Confidence.CONFIRMED,
+                        evidence=[],
+                        detection_source="fixture",
+                    ),
+                ),
+                status=TranslationAnalysisStatus.CONFIRMED,
+            ),
+            candidate_relations=candidate_result(),
+            manual_reviews=(manual_review(CandidateReviewOutcome.NOT_RELATED),),
+        )
+    )
+
+    assert "翻译原作：RJ01637033" in page.relation_details_value.text()
+    assert "人工已否决" in page.candidate_relations_value.text()
+    assert page.manual_relations_value.text() == "暂无人工确认关系"
+    page.close()
+
+
+def test_review_dialog_related_saves_direction_and_symmetric_relation_needs_no_direction(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ReviewStore()
+    page = review_page(store)
+
+    def drive_related(dialog: QDialog) -> int:
+        combos = dialog.findChildren(QComboBox)
+        relation = combos[1]
+        relation.setCurrentIndex(relation.findData("bonus_of"))
+        combos[2].setCurrentIndex(0)
+        combos[3].setCurrentIndex(1)
+        emit_save(dialog)
+        return int(dialog.result())
+
+    monkeypatch.setattr(QDialog, "exec", drive_related)
+    page._open_review_dialog(candidate_result().candidates[0])
+    assert len(store.events) == 1
+    assert store.events[0].outcome is CandidateReviewOutcome.RELATED
+    assert store.events[0].relation_type is ManualRelationType.BONUS_OF
+    assert store.events[0].subject_workno == "RJ01636949"
+    assert store.events[0].target_workno == "RJ01637033"
+
+    def drive_symmetric(dialog: QDialog) -> int:
+        combos = dialog.findChildren(QComboBox)
+        relation = combos[1]
+        relation.setCurrentIndex(relation.findData("bundled_with"))
+        assert combos[2].isHidden()
+        assert combos[3].isHidden()
+        emit_save(dialog)
+        return int(dialog.result())
+
+    monkeypatch.setattr(QDialog, "exec", drive_symmetric)
+    page._open_review_dialog(candidate_result(target_workno="RJ01637034").candidates[0])
+    assert store.events[-1].relation_type is ManualRelationType.BUNDLED_WITH
+    assert store.events[-1].subject_workno is None
+    assert store.events[-1].target_workno is None
+    page.close()
+
+
+def test_review_dialog_switching_to_not_related_clears_direction_and_type(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ReviewStore()
+    page = review_page(store)
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ01636949", title="源作品"),
+            formatted_name="[RJ01636949] 源作品",
+            candidate_relations=candidate_result(),
+        )
+    )
+
+    def drive(dialog: QDialog) -> int:
+        combos = dialog.findChildren(QComboBox)
+        relation = combos[1]
+        relation.setCurrentIndex(relation.findData("bonus_of"))
+        combos[2].setCurrentIndex(1)
+        combos[3].setCurrentIndex(0)
+        combos[0].setCurrentIndex(1)
+        assert not relation.isEnabled()
+        assert combos[2].isHidden()
+        assert combos[3].isHidden()
+        emit_save(dialog)
+        return int(dialog.result())
+
+    monkeypatch.setattr(QDialog, "exec", drive)
+    page._open_review_dialog(candidate_result().candidates[0])
+
+    assert store.events[-1].outcome is CandidateReviewOutcome.NOT_RELATED
+    assert store.events[-1].relation_type is None
+    assert store.events[-1].subject_workno is None
+    assert store.events[-1].target_workno is None
+    assert "已否决" in page.candidate_relations_value.text()
+    page.close()
+
+
+def test_review_dialog_save_failure_is_visible_and_does_not_mark_candidate_reviewed(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = review_page(ReviewStore(fail=True))
+    errors: list[str] = []
+    monkeypatch.setattr(
+        "dlsite_organizer.ui.pages.lookup_page.QMessageBox.critical",
+        lambda _parent, _title, message: errors.append(message),
+    )
+
+    def drive(dialog: QDialog) -> int:
+        emit_save(dialog)
+        return int(dialog.result())
+
+    monkeypatch.setattr(QDialog, "exec", drive)
+    page._open_review_dialog(candidate_result().candidates[0])
+
+    assert errors and "保存失败" in errors[0]
+    assert "人工已否决" not in page.candidate_relations_value.text()
+    assert "人工判断：不确定" not in page.candidate_relations_value.text()
     page.close()

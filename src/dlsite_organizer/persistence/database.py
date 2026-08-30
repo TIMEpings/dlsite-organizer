@@ -86,7 +86,12 @@ class Database:
         core_tables = [
             t
             for t in Base.metadata.tables.values()
-            if t.name not in {"work_metadata_cache", "metadata_observations"}
+            if t.name
+            not in {
+                "work_metadata_cache",
+                "metadata_observations",
+                "manual_relation_reviews",
+            }
         ]
         Base.metadata.create_all(self._engine, tables=core_tables)
         # Lightweight forward migration for development databases created by v0.4.
