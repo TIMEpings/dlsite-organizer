@@ -24,6 +24,9 @@ def test_real_original_response_maps_metadata_and_preserves_regist_datetime() ->
     assert source.requested_workno == "RJ01609020"
     assert source.envelope_workno == "RJ01609020"
     assert source.product_id is None
+    assert source.bonuses == []
+    assert source.bonus_evidence is not None
+    assert source.bonus_evidence.entries == ()
     assert source.maker_id == "RG01058997"
     assert source.maker_name is None
     assert source.regist_datetime == datetime(2026, 5, 26)

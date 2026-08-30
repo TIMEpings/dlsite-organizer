@@ -122,6 +122,20 @@ class Database:
                 if t.name in {"work_metadata_cache", "metadata_observations"}
             ],
         )
+        # Additive migration for metadata history created before transient
+        # bonus evidence was retained.  Existing rows remain NULL/unknown.
+        with self._engine.begin() as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(metadata_observations)"))
+            }
+            if "bonus_evidence_json" not in columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE metadata_observations "
+                        "ADD COLUMN bonus_evidence_json TEXT"
+                    )
+                )
         # Manual review events are initialized with the metadata subsystem so
         # the v0.7 minimum-core schema remains backwards compatible.
         from dlsite_organizer.persistence.manual_reviews import ManualRelationReviewRecord

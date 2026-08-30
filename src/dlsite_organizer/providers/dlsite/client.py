@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import httpx
 
+from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.domain.work_code import WorkCode
 from dlsite_organizer.providers.dlsite.exceptions import (
@@ -74,6 +75,11 @@ class DlsiteWorkLookup:
     def translation_info(self) -> TranslationInfoSource | None:
         """Expose only the provider source object needed by relation mapping."""
         return self.product_info.translation_info if self.product_info is not None else None
+
+    @property
+    def bonus_evidence(self) -> BonusEvidenceSnapshot | None:
+        """Expose normalized transient evidence without leaking the AJAX DTO."""
+        return self.product_info.bonus_evidence if self.product_info is not None else None
 
 
 class DlsiteProvider:

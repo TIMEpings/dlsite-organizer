@@ -78,6 +78,9 @@ migrated. `work_metadata_cache` stores one current row per work number, while
 `metadata_observations` appends one row for each successful live provider response. The cache and
 observation schemas are initialized separately from the v0.4 `rename_transactions` and
 `rename_operations` journal tables.
+The nullable `metadata_observations.bonus_evidence_json` field is an additive,
+versioned snapshot of bonus evidence reported by that response; `NULL` remains
+distinct from an explicitly empty bonus list. See [historical bonus evidence](bonus-evidence-history.md).
 Lookup results use the cache for current metadata and preserve provider provenance separately from
 delivery freshness. Translation relations are reconstructed from the normalized cached
 `translation_info`; no relation-history query or inference is implemented.

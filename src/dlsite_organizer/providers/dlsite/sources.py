@@ -8,16 +8,138 @@ verified by reviewed, user-captured responses, not the ``Work`` domain model.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from urllib.parse import urljoin
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
+from dlsite_organizer.domain.bonus import BonusEvidence, BonusEvidenceSnapshot
 from dlsite_organizer.domain.work import Availability, Work
 from dlsite_organizer.domain.work_code import WorkCode, WorkCodeError
 from dlsite_organizer.providers.dlsite.exceptions import DlsiteParseError
+
+logger = logging.getLogger(__name__)
+
+
+class BonusEvidenceSource(BaseModel):
+    """Provider-local representation of one optional bonus entry.
+
+    The known aliases cover the fields needed for historical evidence while
+    accepting storefront additions at the provider boundary.  Malformed
+    optional scalar values degrade to missing values; they never become
+    fabricated dates, identifiers, or URLs.
+    """
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    title: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("title", "name", "bonus_title", "bonus_name"),
+    )
+    description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("description", "body", "bonus_description"),
+    )
+    start_at: date | datetime | None = Field(
+        default=None,
+        validation_alias=AliasChoices("start_at", "start_datetime", "start_date"),
+    )
+    end_at: date | datetime | None = Field(
+        default=None,
+        validation_alias=AliasChoices("end_at", "end_datetime", "end_date"),
+    )
+    workno: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("workno", "work_no", "bonus_workno"),
+    )
+    product_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("product_id", "bonus_product_id"),
+    )
+    url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("url", "href", "link", "bonus_url", "detail_url"),
+    )
+    bonus_type: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("bonus_type", "type", "kind"),
+    )
+    label: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("label", "bonus_label"),
+    )
+
+    @field_validator(
+        "title",
+        "description",
+        "workno",
+        "product_id",
+        "url",
+        "bonus_type",
+        "label",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            stripped = str(value).strip()
+            return stripped or None
+        return None
+
+    @field_validator("start_at", "end_at", mode="before")
+    @classmethod
+    def normalize_optional_temporal(
+        cls,
+        value: Any,
+        info: ValidationInfo,
+    ) -> date | datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return value
+        if not isinstance(value, str):
+            return None
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            if "T" not in raw and " " not in raw:
+                return date.fromisoformat(raw.replace("/", "-"))
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Ignoring malformed optional bonus %s value", info.field_name)
+            return None
+
+    def to_domain(self) -> BonusEvidence:
+        """Normalize provider aliases into the infrastructure-free model."""
+        return BonusEvidence.model_validate(
+            {
+                "title": self.title,
+                "description": self.description,
+                "start_at": self.start_at,
+                "end_at": self.end_at,
+                "workno": self.workno,
+                "product_id": self.product_id,
+                "url": self.url,
+                "bonus_type": self.bonus_type,
+                "label": self.label,
+            }
+        )
 
 
 class TranslationInfoSource(BaseModel):
@@ -90,7 +212,25 @@ class ProductInfoAjaxSource(BaseModel):
     work_image: str | None = None
     work_type: str | None = None
     age_category: str | int | None = None
+    bonuses: list[BonusEvidenceSource] | None = None
     translation_info: TranslationInfoSource | None = None
+
+    @field_validator("bonuses", mode="before")
+    @classmethod
+    def tolerate_malformed_bonus_collection(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, list) and all(isinstance(item, Mapping) for item in value):
+            return value
+        logger.warning("Ignoring malformed optional product bonuses collection")
+        return None
+
+    @property
+    def bonus_evidence(self) -> BonusEvidenceSnapshot | None:
+        """Return normalized bonus evidence while preserving absent vs empty."""
+        if self.bonuses is None:
+            return None
+        return BonusEvidenceSnapshot(entries=tuple(item.to_domain() for item in self.bonuses))
 
     @field_validator("requested_workno", "envelope_workno", "work_name")
     @classmethod

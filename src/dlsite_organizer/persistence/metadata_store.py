@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime
 from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column
 
+from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
 from dlsite_organizer.domain.work import Availability, Work
 from dlsite_organizer.domain.candidate import CandidateSnapshotSource, KnownWorkSnapshot
 from dlsite_organizer.persistence.database import Base, Database
@@ -53,7 +54,13 @@ class MetadataObservation(Base):
     availability: Mapped[str] = mapped_column(String(32), default=Availability.UNKNOWN.value)
     source: Mapped[str] = mapped_column(String(64))
     translation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bonus_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    @property
+    def bonus_evidence(self) -> BonusEvidenceSnapshot | None:
+        """Decode the optional typed bonus snapshot without changing legacy rows."""
+        return _parse_bonus_evidence(self.bonus_evidence_json)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +70,17 @@ class CachedMetadata:
     source: str
     fetched_at: datetime
     regist_datetime: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BonusObservation:
+    """Local-only historical bonus evidence tied to one observation row."""
+
+    observation_id: int
+    workno: str
+    observed_at: datetime
+    source: str
+    evidence: BonusEvidenceSnapshot | None
 
 
 class MetadataStore:
@@ -127,6 +145,19 @@ class MetadataStore:
         except Exception:
             logger.exception("Metadata observations read failed for %s", workno)
             return ()
+
+    def list_bonus_observations(self, workno: str) -> tuple[BonusObservation, ...]:
+        """Return typed bonus evidence from local history without provider calls."""
+        return tuple(
+            BonusObservation(
+                observation_id=row.id,
+                workno=row.workno,
+                observed_at=row.observed_at,
+                source=row.source,
+                evidence=_parse_bonus_evidence(row.bonus_evidence_json),
+            )
+            for row in self.list_observations(workno)
+        )
 
     def list_all_observations(self) -> tuple[MetadataObservation, ...]:
         """Return all persisted observations for historical relation derivation."""
@@ -279,6 +310,7 @@ class MetadataStore:
         work_type: str | None = None,
         age_category: str | int | None = None,
         regist_datetime: datetime | None = None,
+        bonus_evidence: BonusEvidenceSnapshot | None = None,
     ) -> None:
         normalized_observed_at = _as_utc(observed_at) or datetime.now(UTC)
         normalized_regist_datetime = _as_utc(regist_datetime)
@@ -298,6 +330,9 @@ class MetadataStore:
                         source=source,
                         translation_json=translation_info.model_dump_json()
                         if translation_info
+                        else None,
+                        bonus_evidence_json=bonus_evidence.model_dump_json()
+                        if bonus_evidence is not None
                         else None,
                         observed_at=normalized_observed_at,
                     )
@@ -319,3 +354,14 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _parse_bonus_evidence(value: str | None) -> BonusEvidenceSnapshot | None:
+    """Parse a snapshot while treating absent/legacy or corrupt data as unknown."""
+    if not value:
+        return None
+    try:
+        return BonusEvidenceSnapshot.model_validate_json(value)
+    except Exception:
+        logger.warning("Ignoring malformed persisted bonus evidence snapshot", exc_info=True)
+        return None

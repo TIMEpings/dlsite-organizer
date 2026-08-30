@@ -92,6 +92,12 @@ Each sample has `bonuses: []`, `is_limit_work: false`, and
 interpreted as a bonus or limited-sale mechanism. `RJ01636949` also has a
 `translators` field; it is not modeled in this release.
 
+The observed `bonuses` field is now retained when a successful AJAX lookup
+contains it. The retention schema and its `NULL` versus explicit-empty
+semantics are documented in [Historical bonus evidence](bonus-evidence-history.md).
+The reviewed samples contain only empty arrays, so they do not establish the
+shape or longitudinal behavior of non-empty bonus entries.
+
 ## Remaining uncertainty
 
 This small set does not establish that the envelope is universal, whether a

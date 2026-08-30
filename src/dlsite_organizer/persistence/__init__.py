@@ -7,6 +7,7 @@ from dlsite_organizer.persistence.database import (
     RenameTransactionRecord,
 )
 from dlsite_organizer.persistence.metadata_store import (
+    BonusObservation,
     MetadataObservation,
     MetadataStore,
     WorkMetadataCache,
@@ -28,6 +29,7 @@ __all__ = [
     "JournalError",
     "JournalUnavailableError",
     "MetadataObservation",
+    "BonusObservation",
     "MetadataStore",
     "RenameJournal",
     "RenameOperationRecord",

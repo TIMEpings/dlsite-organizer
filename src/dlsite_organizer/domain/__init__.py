@@ -1,5 +1,6 @@
 """Domain models and rules independent of UI and infrastructure."""
 
+from dlsite_organizer.domain.bonus import BonusEvidence, BonusEvidenceSnapshot
 from dlsite_organizer.domain.candidate import (
     CandidateEvidence,
     CandidateEvidenceKind,
@@ -60,6 +61,8 @@ from dlsite_organizer.domain.work_code import WorkCode, WorkCodeError, extract_w
 
 __all__ = [
     "MANUAL_RELATION_DIRECTIONALITY",
+    "BonusEvidence",
+    "BonusEvidenceSnapshot",
     "CandidateEvidence",
     "CandidateEvidenceKind",
     "CandidateEvidencePolarity",

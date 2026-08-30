@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Callable, Protocol, cast, runtime_checkable
 
+from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
 from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
 from dlsite_organizer.domain.candidate import CandidateSearchResult
 from dlsite_organizer.domain.manual_review import ManualReviewEvent
@@ -59,6 +60,9 @@ class _SourceAwareLookup(Protocol):
     def work(self) -> Work: ...
     @property
     def translation_info(self) -> TranslationInfoSource | None: ...
+
+    @property
+    def bonus_evidence(self) -> BonusEvidenceSnapshot | None: ...
 
 
 @runtime_checkable
@@ -183,6 +187,10 @@ class LookupService:
             raise LookupFailure(LookupFailureKind.UNEXPECTED, "Unexpected lookup failure") from exc
         if self._metadata_store:
             product = getattr(obj, "product_info", None)
+            bonus_evidence = cast(
+                BonusEvidenceSnapshot | None,
+                getattr(obj, "bonus_evidence", None),
+            )
             regist_datetime = cast(datetime | None, getattr(product, "regist_datetime", None))
             work_type = cast(str | None, getattr(product, "work_type", None))
             age_category = cast(str | int | None, getattr(product, "age_category", None))
@@ -207,6 +215,7 @@ class LookupService:
                     work_type=work_type,
                     age_category=age_category,
                     regist_datetime=regist_datetime,
+                    bonus_evidence=bonus_evidence,
                 )
             except Exception:
                 logger.exception("Metadata observation persistence failed for %s", workno)
