@@ -70,6 +70,9 @@ class EvaluationRecord(BaseModel):
     evidence_snapshot: CandidateEvidenceSnapshot | None = None
     snapshot_schema_version: int | None = None
     snapshot_error: str | None = None
+    candidate_policy_id: str | None = None
+    candidate_policy_version: int | None = None
+    application_version: str | None = None
 
     @property
     def candidate_evaluated_at(self) -> datetime | None:
@@ -126,6 +129,20 @@ class EvidenceGroupSummary(BaseModel):
     metric_state: EvaluationMetricState
 
 
+class PolicyDistributionSummary(BaseModel):
+    """Descriptive distribution of latest labels by discovery policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_id: str
+    policy_version: int | None = None
+    record_count: int = Field(ge=0)
+    decided_count: int = Field(ge=0)
+    related_count: int = Field(ge=0)
+    not_related_count: int = Field(ge=0)
+    unsure_count: int = Field(ge=0)
+
+
 class EvaluationSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -150,6 +167,9 @@ class EvaluationSummary(BaseModel):
     pairs_reviewed_once: int = 0
     pairs_reviewed_more_than_once: int = 0
     evidence_groups: tuple[EvidenceGroupSummary, ...] = ()
+    legacy_snapshot_count: int = Field(default=0, ge=0)
+    policy_provenance_available_count: int = Field(default=0, ge=0)
+    policy_distribution: tuple[PolicyDistributionSummary, ...] = ()
 
     @property
     def relation_type_distribution(self) -> dict[ManualRelationType, int]:
@@ -173,6 +193,9 @@ class EvaluationExportRecord(BaseModel):
     provenance: ManualReviewProvenance
     state: EvaluationRecordState
     snapshot_schema_version: int | None
+    candidate_policy_id: str | None
+    candidate_policy_version: int | None
+    application_version: str | None
     candidate_evaluated_at: datetime | None
     same_maker_id: str | None
     same_maker_name: str | None

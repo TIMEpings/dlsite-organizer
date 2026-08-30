@@ -4,6 +4,8 @@ from dlsite_organizer.domain.candidate import (
     CandidateEvidence,
     CandidateEvidenceKind,
     CandidateEvidencePolarity,
+    CandidatePolicyDescriptor,
+    CandidatePolicyProvenance,
     CandidateRelation,
     CandidateSearchResult,
     CandidateSearchState,
@@ -19,6 +21,7 @@ from dlsite_organizer.domain.evaluation import (
     EvaluationSummary,
     EvidenceGroupSummary,
     InvalidSnapshotReview,
+    PolicyDistributionSummary,
     RelationTypeCount,
 )
 from dlsite_organizer.domain.manual_review import (
@@ -28,6 +31,7 @@ from dlsite_organizer.domain.manual_review import (
     ManualRelationType,
     ManualReviewEvent,
     ManualReviewProvenance,
+    parse_candidate_evidence_snapshot,
 )
 from dlsite_organizer.domain.organizer import (
     RenamePlan,
@@ -57,6 +61,8 @@ __all__ = [
     "CandidateEvidenceKind",
     "CandidateEvidencePolarity",
     "CandidateEvidenceSnapshot",
+    "CandidatePolicyDescriptor",
+    "CandidatePolicyProvenance",
     "CandidateRelation",
     "CandidateReviewOutcome",
     "CandidateSearchResult",
@@ -77,6 +83,7 @@ __all__ = [
     "ManualRelationType",
     "ManualReviewEvent",
     "ManualReviewProvenance",
+    "PolicyDistributionSummary",
     "RelationTypeCount",
     "RenameExecutionResult",
     "RenameOperation",
@@ -97,4 +104,5 @@ __all__ = [
     "WorkCodeError",
     "WorkRelation",
     "extract_work_codes",
+    "parse_candidate_evidence_snapshot",
 ]

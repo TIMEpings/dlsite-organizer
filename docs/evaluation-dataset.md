@@ -25,6 +25,14 @@ types; `UNKNOWN` and `OTHER` remain generic related labels. A bonus subset is
 only a count/list of manually labelled `BONUS_OF` and `LIMITED_BONUS_OF` pairs;
 it is not bonus accuracy.
 
+Schema v2 snapshots expose candidate discovery provenance through
+`candidate_policy_id`, `candidate_policy_version`, and `application_version` on
+each `EvaluationRecord`. Schema v1 snapshots expose `None` for all three. The
+summary reports the number of legacy and provenance-bearing latest records and
+groups valid records by `(policy_id, policy_version)` for descriptive
+distribution only. Schema v1 records use the display key
+`LEGACY_UNKNOWN_POLICY`; this does not infer a historical policy.
+
 CSV export is latest-only, deterministic, UTF-8 with BOM for spreadsheet
 compatibility, and excludes review notes by default. Export does not mutate the
 database.
@@ -35,5 +43,8 @@ candidate discovery policy (`same maker + same registration date`) also limits
 the covered recall space; the dataset does not evaluate unobserved policies.
 There are no confidence intervals, random sampling, automatic learning, score,
 probability, policy tuning, or automatic confirmation. Older snapshots do not
-carry a policy-version field, so historical policy grouping is a known
-limitation.
+carry policy provenance, so historical policy grouping is a known limitation.
+CSV export adds the deterministic columns `snapshot_schema_version`,
+`candidate_policy_id`, `candidate_policy_version`, and `application_version`;
+v1 rows leave the provenance columns empty. The `manual_relation_reviews` table
+is unchanged and stored snapshot JSON is never migrated.

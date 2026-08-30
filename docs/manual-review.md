@@ -8,12 +8,23 @@ explicit subject and target selected by the user, while `BUNDLED_WITH`,
 `OTHER`, and `UNKNOWN` are symmetric.
 
 Each event stores a versioned evidence snapshot (maker identity, registration
-date, RJ distance, local group counts, and candidate evaluation time). This is
-review-time provenance and is never rewritten when metadata changes. The
-latest event is the application view; history remains available for future
-ground-truth analysis. These labels are local user annotations, not official
-DLsite evidence. They do not produce scores, probabilities, automatic
-confirmation, or model training.
+date, RJ distance, local group counts, and candidate evaluation time). New
+reviews of candidates produced by the discovery service use snapshot schema
+v2 and include `policy_provenance`:
+
+* `policy_id` identifies the discovery policy (`same-maker-same-date`), not an
+  implementation class;
+* `policy_version` is the manually maintained semantic version of that policy;
+* `application_version` is the software version when the review snapshot was
+  created.
+
+Snapshots created by v0.8/v0.9 use schema v1. Their policy provenance is
+unavailable, remains `None`, and is never inferred or rewritten. Snapshot
+application version is review-time provenance; it is not a Git SHA. This
+provenance is never rewritten when metadata changes. The latest event is the
+application view; history remains available for future ground-truth analysis.
+These labels are local user annotations, not official DLsite evidence. They do
+not produce scores, probabilities, automatic confirmation, or model training.
 
 ## Evaluation dataset
 
@@ -24,3 +35,10 @@ evidence snapshot. A damaged latest snapshot is reported as invalid evidence,
 without falling back to an older review or current metadata. Derived records
 are exportable as a notes-free deterministic CSV and are not stored as a new
 database table.
+
+Evaluation records expose optional `candidate_policy_id`,
+`candidate_policy_version`, and `application_version`. Summary statistics
+report legacy/provenance-bearing counts and a descriptive latest-record
+distribution by `(policy_id, policy_version)`. The legacy display group is
+`LEGACY_UNKNOWN_POLICY`; its underlying fields remain empty. This is not a
+policy performance comparison.

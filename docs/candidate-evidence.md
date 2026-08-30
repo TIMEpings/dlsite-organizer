@@ -21,6 +21,16 @@ The default discovery policy is `same maker + same registration date`. Search
 policy is intentionally separate from evidence evaluation, so future recall
 policies can change without redefining what an observation means.
 
+## Candidate policy provenance
+
+Every result produced by the current discovery policy carries the stable
+business descriptor `policy_id = same-maker-same-date` and
+`policy_version = 1`. The ID names the discovery semantics, not the Python
+class; the integer version changes only when those semantics change. The
+result also records the application version from the single package version
+source. This provenance records facts about discovery and does not add a
+score, probability, tuning, learning, or automatic confirmation.
+
 ## Calibration linkage
 
 The v0.7A calibration found maker equality to be a broad filter, while

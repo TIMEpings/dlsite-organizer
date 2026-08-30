@@ -38,6 +38,25 @@ class CandidateSearchState(StrEnum):
     INSUFFICIENT_METADATA = "insufficient_metadata"
 
 
+class CandidatePolicyDescriptor(BaseModel):
+    """Stable business identity and semantic version of a discovery policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_id: str = Field(min_length=1)
+    policy_version: int = Field(ge=1)
+
+
+class CandidatePolicyProvenance(BaseModel):
+    """Discovery policy identity captured alongside a candidate review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_id: str = Field(min_length=1)
+    policy_version: int = Field(ge=1)
+    application_version: str = Field(min_length=1)
+
+
 class CandidateSnapshotSource(StrEnum):
     CURRENT_CACHE = "current_cache"
     HISTORICAL_OBSERVATION = "historical_observation"
@@ -106,6 +125,7 @@ class CandidateRelation(BaseModel):
     provenance: str = "generated from local metadata"
     source_snapshot: KnownWorkSnapshot | None = None
     target_snapshot: KnownWorkSnapshot | None = None
+    policy_provenance: CandidatePolicyProvenance | None = None
 
     @field_validator("source_workno", "target_workno")
     @classmethod
@@ -130,4 +150,4 @@ class CandidateSearchResult(BaseModel):
     evaluated_at: datetime
     truncated: bool = False
     total_candidate_count: int = 0
-
+    policy_provenance: CandidatePolicyProvenance | None = None

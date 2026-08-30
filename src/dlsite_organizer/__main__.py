@@ -7,6 +7,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from dlsite_organizer import __version__
 from dlsite_organizer.app.bootstrap import build_components
 from dlsite_organizer.app.logging_config import configure_logging
 from dlsite_organizer.app.settings import SettingsError, default_data_dir, load_settings
@@ -21,7 +22,7 @@ def main() -> int:
     application.setApplicationName("DLsite Organizer")
     application.setOrganizationName("dlsite-organizer")
     configure_logging(default_data_dir() / "logs")
-    logger.info("Starting DLsite Organizer v0.4.0")
+    logger.info("Starting DLsite Organizer v%s", __version__)
 
     try:
         settings = load_settings()

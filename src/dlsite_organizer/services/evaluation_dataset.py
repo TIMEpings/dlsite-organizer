@@ -18,6 +18,7 @@ from dlsite_organizer.domain.evaluation import (
     EvaluationSummary,
     EvidenceGroupSummary,
     InvalidSnapshotReview,
+    PolicyDistributionSummary,
     RelationTypeCount,
 )
 from dlsite_organizer.domain.manual_review import (
@@ -90,6 +91,17 @@ class EvaluationDatasetService:
             r.state is not EvaluationRecordState.INVALID_SNAPSHOT for r in records
         )
         invalid_snapshots = sum(r.state is EvaluationRecordState.INVALID_SNAPSHOT for r in records)
+        legacy_snapshot_count = sum(
+            r.state is not EvaluationRecordState.INVALID_SNAPSHOT
+            and r.snapshot_schema_version == 1
+            for r in records
+        )
+        policy_provenance_available_count = sum(
+            r.state is not EvaluationRecordState.INVALID_SNAPSHOT
+            and r.candidate_policy_id is not None
+            and r.candidate_policy_version is not None
+            for r in records
+        )
         metric_state = _metric_state(decided, self._minimum_decided_labels)
         relation_counts = Counter(
             r.relation_type
@@ -130,7 +142,47 @@ class EvaluationDatasetService:
             pairs_reviewed_once=sum(v == 1 for v in values),
             pairs_reviewed_more_than_once=sum(v > 1 for v in values),
             evidence_groups=self._evidence_groups(records),
+            legacy_snapshot_count=legacy_snapshot_count,
+            policy_provenance_available_count=policy_provenance_available_count,
+            policy_distribution=self._policy_distribution(records),
         )
+
+    @staticmethod
+    def _policy_distribution(
+        records: Sequence[EvaluationRecord],
+    ) -> tuple[PolicyDistributionSummary, ...]:
+        groups: dict[tuple[str, int | None], list[EvaluationRecord]] = defaultdict(list)
+        for record in records:
+            if record.state is EvaluationRecordState.INVALID_SNAPSHOT:
+                continue
+            key = (
+                record.candidate_policy_id or "LEGACY_UNKNOWN_POLICY",
+                record.candidate_policy_version,
+            )
+            groups[key].append(record)
+        return tuple(
+            PolicyDistributionSummary(
+                policy_id=policy_id,
+                policy_version=policy_version,
+                record_count=len(items),
+                decided_count=sum(
+                    item.outcome
+                    in {CandidateReviewOutcome.RELATED, CandidateReviewOutcome.NOT_RELATED}
+                    for item in items
+                ),
+                related_count=sum(
+                    item.outcome is CandidateReviewOutcome.RELATED for item in items
+                ),
+                not_related_count=sum(
+                    item.outcome is CandidateReviewOutcome.NOT_RELATED for item in items
+                ),
+                unsure_count=sum(item.outcome is CandidateReviewOutcome.UNSURE for item in items),
+            )
+            for (policy_id, policy_version), items in sorted(groups.items())
+        )
+
+    def summary_by_policy(self) -> tuple[PolicyDistributionSummary, ...]:
+        return self.summary().policy_distribution
 
     def summary_by_rj_threshold(self) -> tuple[EvidenceGroupSummary, ...]:
         return tuple(
@@ -153,7 +205,8 @@ class EvaluationDatasetService:
         fieldnames = [
             "workno_a", "workno_b", "outcome", "relation_type", "subject_workno",
             "target_workno", "reviewed_at", "review_event_id", "provenance", "state",
-            "snapshot_schema_version", "candidate_evaluated_at", "same_maker_id",
+            "snapshot_schema_version", "candidate_policy_id", "candidate_policy_version",
+            "application_version", "candidate_evaluated_at", "same_maker_id",
             "same_maker_name", "same_regist_date", "rj_numeric_distance",
             "local_maker_day_group_size", "local_known_maker_work_count",
         ]
@@ -223,6 +276,9 @@ class EvaluationDatasetService:
             provenance=record.provenance,
             state=record.state,
             snapshot_schema_version=record.snapshot_schema_version,
+            candidate_policy_id=record.candidate_policy_id,
+            candidate_policy_version=record.candidate_policy_version,
+            application_version=record.application_version,
             candidate_evaluated_at=record.candidate_evaluated_at,
             same_maker_id=record.same_maker_id,
             same_maker_name=record.same_maker_name,
@@ -242,6 +298,9 @@ def _event_key(event: ManualReviewEvent | InvalidSnapshotReview) -> tuple:
 
 def _record_from_review(event: ManualReviewEvent | InvalidSnapshotReview) -> EvaluationRecord:
     invalid = isinstance(event, InvalidSnapshotReview)
+    policy_id: str | None = None
+    policy_version: int | None = None
+    application_version: str | None = None
     if invalid:
         snapshot = None
         state = EvaluationRecordState.INVALID_SNAPSHOT
@@ -256,6 +315,19 @@ def _record_from_review(event: ManualReviewEvent | InvalidSnapshotReview) -> Eva
         )
         schema_version = snapshot.schema_version
         snapshot_error = None
+        policy_id = snapshot.policy_provenance.policy_id if snapshot.policy_provenance else None
+        policy_version = (
+            snapshot.policy_provenance.policy_version if snapshot.policy_provenance else None
+        )
+        application_version = (
+            snapshot.policy_provenance.application_version
+            if snapshot.policy_provenance
+            else None
+        )
+    if invalid:
+        policy_id = None
+        policy_version = None
+        application_version = None
     return EvaluationRecord(
         workno_a=event.workno_a,
         workno_b=event.workno_b,
@@ -270,6 +342,9 @@ def _record_from_review(event: ManualReviewEvent | InvalidSnapshotReview) -> Eva
         evidence_snapshot=snapshot,
         snapshot_schema_version=schema_version,
         snapshot_error=snapshot_error,
+        candidate_policy_id=policy_id,
+        candidate_policy_version=policy_version,
+        application_version=application_version,
     )
 
 

@@ -18,6 +18,7 @@ from dlsite_organizer.domain.manual_review import (
     ManualReviewEvent,
     ManualReviewProvenance,
     canonical_pair,
+    parse_candidate_evidence_snapshot,
 )
 from dlsite_organizer.domain.work_code import WorkCode
 from dlsite_organizer.persistence.database import Base, Database
@@ -210,7 +211,7 @@ def _to_domain(row: ManualRelationReviewRecord) -> ManualReviewEvent:
         subject_workno=row.subject_workno,
         target_workno=row.target_workno,
         notes=row.notes,
-        evidence_snapshot=CandidateEvidenceSnapshot.model_validate(json.loads(row.evidence_snapshot_json)),
+        evidence_snapshot=parse_candidate_evidence_snapshot(row.evidence_snapshot_json),
         reviewed_at=_utc(row.reviewed_at),
         provenance=ManualReviewProvenance(row.provenance),
     )

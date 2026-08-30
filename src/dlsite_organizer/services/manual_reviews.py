@@ -103,7 +103,7 @@ class ManualReviewService:
 def snapshot_from_candidate(candidate: CandidateRelation) -> CandidateEvidenceSnapshot:
     values = {item.kind.value: item.value for item in candidate.supporting_evidence}
     context = {item.kind.value: item.value for item in candidate.context}
-    return CandidateEvidenceSnapshot(
+    snapshot_values: dict[str, object] = dict(
         same_maker_id=values.get("same_maker_id"),
         same_maker_name=values.get("same_maker_name"),
         same_regist_date=values.get("same_regist_date"),
@@ -116,3 +116,7 @@ def snapshot_from_candidate(candidate: CandidateRelation) -> CandidateEvidenceSn
         ),
         context=tuple(item.model_dump(mode="json") for item in candidate.context),
     )
+    if candidate.policy_provenance is not None:
+        snapshot_values["schema_version"] = 2
+        snapshot_values["policy_provenance"] = candidate.policy_provenance
+    return CandidateEvidenceSnapshot.model_validate(snapshot_values)

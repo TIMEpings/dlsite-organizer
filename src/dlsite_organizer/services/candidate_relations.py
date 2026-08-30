@@ -8,10 +8,13 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
+from dlsite_organizer import __version__
 from dlsite_organizer.domain.candidate import (
     CandidateEvidence,
     CandidateEvidenceKind,
     CandidateEvidencePolarity,
+    CandidatePolicyDescriptor,
+    CandidatePolicyProvenance,
     CandidateRelation,
     CandidateSearchResult,
     CandidateSearchState,
@@ -32,6 +35,15 @@ class ManualReviewLookup(Protocol):
 
 class CandidateSearchPolicy:
     """Recall policy, deliberately separate from evidence interpretation."""
+
+    descriptor = CandidatePolicyDescriptor(
+        policy_id="same-maker-same-date",
+        policy_version=1,
+    )
+
+    @property
+    def policy_descriptor(self) -> CandidatePolicyDescriptor:
+        return self.descriptor
 
     def eligible(self, source: KnownWorkSnapshot, target: KnownWorkSnapshot) -> bool:
         return (
@@ -96,8 +108,21 @@ class CandidateRelationService:
         self._max_results = max(1, max_results)
         self._manual_reviews = manual_reviews
 
+    @property
+    def policy_descriptor(self) -> CandidatePolicyDescriptor:
+        return self._policy.policy_descriptor
+
+    def _policy_provenance(self) -> CandidatePolicyProvenance:
+        descriptor = self._policy.policy_descriptor
+        return CandidatePolicyProvenance(
+            policy_id=descriptor.policy_id,
+            policy_version=descriptor.policy_version,
+            application_version=__version__,
+        )
+
     def for_work(self, workno: str) -> CandidateSearchResult:
         evaluated_at = self._now()
+        policy_provenance = self._policy_provenance()
         try:
             normalized = normalize_rjcode(workno)
         except WorkCodeError as exc:
@@ -105,6 +130,7 @@ class CandidateRelationService:
                 state=CandidateSearchState.INSUFFICIENT_METADATA,
                 reason=str(exc),
                 evaluated_at=evaluated_at,
+                policy_provenance=policy_provenance,
             )
         snapshots = self._repository.list_known_work_summaries()
         source = next((item for item in snapshots if item.workno == normalized), None)
@@ -114,6 +140,7 @@ class CandidateRelationService:
                 state=CandidateSearchState.INSUFFICIENT_METADATA,
                 reason="Source work metadata lacks a comparable maker identity.",
                 evaluated_at=evaluated_at,
+                policy_provenance=policy_provenance,
             )
 
         excluded = self._confirmed_pairs(normalized)
@@ -157,6 +184,7 @@ class CandidateRelationService:
                     evaluated_at=evaluated_at,
                     source_snapshot=source,
                     target_snapshot=target,
+                    policy_provenance=policy_provenance,
                 )
             )
         found.sort(
@@ -175,6 +203,7 @@ class CandidateRelationService:
             evaluated_at=evaluated_at,
             truncated=truncated,
             total_candidate_count=total,
+            policy_provenance=policy_provenance,
         )
 
     def _confirmed_pairs(self, source_workno: str) -> set[tuple[str, str]]:

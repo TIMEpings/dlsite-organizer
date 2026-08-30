@@ -1,3 +1,5 @@
 """DLsite Organizer package."""
 
-__version__ = "0.9.0"
+from dlsite_organizer.version import __version__
+
+__all__ = ["__version__"]

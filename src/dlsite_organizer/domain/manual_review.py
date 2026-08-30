@@ -7,12 +7,15 @@ canonical unordered pair when they need the current annotation.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from dlsite_organizer.domain.candidate import CandidatePolicyProvenance
 from dlsite_organizer.domain.work_code import WorkCode
 
 
@@ -46,6 +49,7 @@ class CandidateEvidenceSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: int = 1
+    policy_provenance: CandidatePolicyProvenance | None = None
     same_maker_id: str | None = None
     same_maker_name: str | None = None
     same_regist_date: str | None = None
@@ -58,6 +62,14 @@ class CandidateEvidenceSnapshot(BaseModel):
 
     @model_validator(mode="after")
     def normalize_time(self) -> CandidateEvidenceSnapshot:
+        if self.schema_version not in {1, 2}:
+            raise ValueError(
+                f"Unsupported candidate evidence snapshot schema: {self.schema_version}"
+            )
+        if self.schema_version == 1 and self.policy_provenance is not None:
+            raise ValueError("Schema v1 snapshots must not contain policy provenance")
+        if self.schema_version == 2 and self.policy_provenance is None:
+            raise ValueError("Schema v2 snapshots require policy provenance")
         if self.candidate_evaluated_at is not None and self.candidate_evaluated_at.tzinfo is None:
             object.__setattr__(
                 self,
@@ -65,6 +77,26 @@ class CandidateEvidenceSnapshot(BaseModel):
                 self.candidate_evaluated_at.replace(tzinfo=UTC),
             )
         return self
+
+
+def parse_candidate_evidence_snapshot(
+    payload: str | Mapping[str, Any],
+) -> CandidateEvidenceSnapshot:
+    """Parse supported snapshot schemas explicitly; never migrate stored JSON."""
+    raw: Mapping[str, Any]
+    if isinstance(payload, str):
+        decoded = json.loads(payload)
+        if not isinstance(decoded, dict):
+            raise ValueError("Candidate evidence snapshot must be a JSON object")
+        raw = decoded
+    else:
+        raw = payload
+    schema_version = raw.get("schema_version")
+    if schema_version == 1:
+        return CandidateEvidenceSnapshot.model_validate(raw)
+    if schema_version == 2:
+        return CandidateEvidenceSnapshot.model_validate(raw)
+    raise ValueError(f"Unsupported candidate evidence snapshot schema: {schema_version!r}")
 
 
 class ManualReviewEvent(BaseModel):

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dlsite_organizer import __version__
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
@@ -60,7 +61,7 @@ class MainWindow(QMainWindow):
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
         nav_layout.addWidget(self.navigation_list, 1)
-        version = QLabel("v0.8.0 · 安全重命名")
+        version = QLabel(f"v{__version__} · 安全重命名")
         version.setObjectName("versionLabel")
         nav_layout.addWidget(version)
 
