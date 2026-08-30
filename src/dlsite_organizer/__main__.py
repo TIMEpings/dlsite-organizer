@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from dlsite_organizer import __version__
@@ -45,10 +47,36 @@ def main() -> int:
         components.candidate_review_queue_service,
     )
     window.show()
+    _schedule_startup_smoke(application, window)
     exit_code = application.exec()
     components.database.dispose()
     logger.info("DLsite Organizer stopped")
     return exit_code
+
+
+def _schedule_startup_smoke(application: QApplication, window: MainWindow) -> None:
+    """Run the bounded packaged-startup probe when explicitly requested.
+
+    This hook is intentionally opt-in and has no effect during normal use.  It
+    lets the release process launch the exact executable in a fresh profile,
+    verify that the user-facing pages were constructed, and exit cleanly
+    without requiring GUI automation or a live DLsite connection.
+    """
+    if os.environ.get("DLSITE_ORGANIZER_STARTUP_SMOKE") != "1":
+        return
+
+    expected_pages = ["整理", "查询", "候选审阅", "关系", "设置"]
+    actual_pages = [
+        window.navigation_list.item(index).text()
+        for index in range(window.navigation_list.count())
+    ]
+    if actual_pages != expected_pages:
+        logger.error("Startup smoke failed: unexpected navigation pages: %s", actual_pages)
+        QTimer.singleShot(0, lambda: application.exit(3))
+        return
+
+    logger.info("Startup smoke passed: MainWindow pages=%s", actual_pages)
+    QTimer.singleShot(250, application.quit)
 
 
 if __name__ == "__main__":

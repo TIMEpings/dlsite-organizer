@@ -23,6 +23,9 @@ dev = [
   "pytest>=8.3",
   "ruff>=0.9",
 ]
+package = [
+  "pyinstaller>=6.14,<7",
+]
 
 [project.gui-scripts]
 dlsite-organizer = "dlsite_organizer.__main__:main"

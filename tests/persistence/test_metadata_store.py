@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, inspect
 
 from dlsite_organizer.domain.candidate import CandidateEvidenceKind, CandidateSnapshotSource
+from dlsite_organizer.domain.manual_review import CandidateEvidenceSnapshot
 from dlsite_organizer.domain.work import Availability, Work
 from dlsite_organizer.persistence.database import (
     Database,
@@ -13,6 +14,7 @@ from dlsite_organizer.persistence.database import (
     RenameTransactionRecord,
     WorkObservation,
 )
+from dlsite_organizer.persistence.manual_reviews import ManualReviewRepository
 from dlsite_organizer.persistence.metadata_store import (
     MetadataObservation,
     MetadataStore,
@@ -288,6 +290,169 @@ def test_v041_schema_migration_keeps_rename_journal_rows_and_adds_v05_metadata_t
         assert old_observation is not None and old_observation.title == "old observation"
         assert transaction is not None and transaction.status == "COMPLETED"
         assert operation is not None and operation.status == "SUCCESS"
+    database.dispose()
+
+
+def test_legacy_database_upgrade_preserves_metadata_reviews_journal_and_unknown_bonus_state(
+    tmp_path: Path,
+) -> None:
+    """The release migration is additive and does not reinterpret old rows."""
+    path = tmp_path / "legacy-v0103.sqlite3"
+    translation_json = make_translation().model_dump_json()
+    review_snapshot = CandidateEvidenceSnapshot(
+        schema_version=1,
+        same_maker_id="RG01058997",
+        same_regist_date="2026-07-07",
+        candidate_evaluated_at=datetime(2026, 8, 1, tzinfo=UTC),
+    ).model_dump_json()
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE work_observations (
+            id INTEGER PRIMARY KEY,
+            workno VARCHAR(16) NOT NULL,
+            title VARCHAR NOT NULL,
+            maker_id VARCHAR(32),
+            maker_name VARCHAR,
+            source_section VARCHAR(32),
+            observed_at DATETIME NOT NULL
+        );
+        CREATE TABLE rename_transactions (
+            id VARCHAR(64) PRIMARY KEY,
+            root VARCHAR NOT NULL,
+            created_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            status VARCHAR(32) NOT NULL
+        );
+        CREATE TABLE rename_operations (
+            id INTEGER PRIMARY KEY,
+            transaction_id VARCHAR(64) NOT NULL,
+            sequence INTEGER NOT NULL,
+            source_path VARCHAR NOT NULL,
+            target_path VARCHAR NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            error VARCHAR,
+            executed_at DATETIME,
+            undo_status VARCHAR(32) NOT NULL,
+            undo_error VARCHAR,
+            undone_at DATETIME,
+            UNIQUE(transaction_id, sequence)
+        );
+        CREATE TABLE work_metadata_cache (
+            workno VARCHAR(16) PRIMARY KEY,
+            title VARCHAR NOT NULL,
+            maker_id VARCHAR(32),
+            maker_name VARCHAR,
+            release_date DATE,
+            regist_datetime DATETIME,
+            series_name VARCHAR,
+            cvs_json TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            cover_url VARCHAR,
+            availability VARCHAR(32) NOT NULL,
+            source_section VARCHAR(32),
+            translation_json TEXT,
+            source VARCHAR(64) NOT NULL,
+            fetched_at DATETIME NOT NULL
+        );
+        CREATE TABLE metadata_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workno VARCHAR(16) NOT NULL,
+            title VARCHAR NOT NULL,
+            maker_id VARCHAR(32),
+            maker_name VARCHAR,
+            release_date DATE,
+            regist_datetime DATETIME,
+            work_type VARCHAR,
+            age_category VARCHAR,
+            availability VARCHAR(32) NOT NULL,
+            source VARCHAR(64) NOT NULL,
+            translation_json TEXT,
+            observed_at DATETIME NOT NULL
+        );
+        CREATE TABLE manual_relation_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workno_a VARCHAR(16) NOT NULL,
+            workno_b VARCHAR(16) NOT NULL,
+            outcome VARCHAR(32) NOT NULL,
+            relation_type VARCHAR(32),
+            subject_workno VARCHAR(16),
+            target_workno VARCHAR(16),
+            notes TEXT,
+            evidence_snapshot_json TEXT NOT NULL,
+            reviewed_at DATETIME NOT NULL,
+            provenance VARCHAR(64) NOT NULL
+        );
+        INSERT INTO work_observations
+            VALUES (1, 'RJ01609020', 'placeholder history', 'RG-old', '同名社团', 'maniax',
+                    '2026-07-01 00:00:00');
+        INSERT INTO rename_transactions
+            VALUES ('tx-legacy', 'C:/works', '2026-07-01 00:00:00',
+                    '2026-07-01 00:01:00', 'COMPLETED');
+        INSERT INTO rename_operations
+            VALUES (1, 'tx-legacy', 1, 'C:/works/old', 'C:/works/new', 'SUCCESS', NULL,
+                    '2026-07-01 00:01:00', 'PENDING', NULL, NULL);
+        INSERT INTO work_metadata_cache
+            VALUES ('RJ01609020', 'cached legacy title', 'RG01058997', '同名社团',
+                    '2026-07-07', '2026-07-07 12:34:56', '系列名', '["CV A"]',
+                    '["标签 A"]', NULL, 'available', 'maniax', 'legacy-translation',
+                    'DLSITE_PRODUCT_INFO_AJAX', '2026-08-01 00:00:00');
+        INSERT INTO metadata_observations
+            VALUES (1, 'RJ01609020', 'observed legacy title', 'RG01058997', '同名社团',
+                    '2026-07-07', '2026-07-07 12:34:56', 'game', '18', 'available',
+                    'DLSITE_PRODUCT_INFO_AJAX', 'legacy-translation', '2026-08-01 00:00:00');
+        INSERT INTO manual_relation_reviews
+            VALUES (1, 'RJ01609020', 'RJ01637033', 'related', 'same_series', NULL, NULL,
+                    'legacy note', 'legacy-snapshot', '2026-08-01 00:00:00', 'MANUAL_USER_REVIEW');
+        """,
+    )
+    connection.execute(
+        "UPDATE work_metadata_cache SET translation_json = ? WHERE workno = ?",
+        (translation_json, "RJ01609020"),
+    )
+    connection.execute(
+        "UPDATE metadata_observations SET translation_json = ? WHERE id = 1",
+        (translation_json,),
+    )
+    connection.execute(
+        "UPDATE manual_relation_reviews SET evidence_snapshot_json = ? WHERE id = 1",
+        (review_snapshot,),
+    )
+    connection.commit()
+    connection.close()
+
+    database = Database(path)
+    database.initialize()
+    store = MetadataStore(database)
+    reviews = ManualReviewRepository(database)
+
+    engine = create_engine(f"sqlite:///{path.as_posix()}")
+    assert "bonus_evidence_json" in {
+        column["name"] for column in inspect(engine).get_columns("metadata_observations")
+    }
+    engine.dispose()
+
+    observation = store.list_observations("RJ01609020")[0]
+    assert observation.title == "observed legacy title"
+    assert observation.translation_json == translation_json
+    assert observation.bonus_evidence_json is None
+    assert observation.bonus_evidence is None
+    assert store.list_bonus_observations("RJ01609020")[0].evidence is None
+
+    cached = store.get("RJ01609020")
+    assert cached is not None and cached.translation_info == make_translation()
+    review = reviews.latest_for_pair("RJ01609020", "RJ01637033")
+    assert review is not None
+    assert review.notes == "legacy note"
+    assert review.evidence_snapshot.schema_version == 1
+
+    with database.session() as session:
+        transaction = session.get(RenameTransactionRecord, "tx-legacy")
+        operation = session.get(RenameOperationRecord, 1)
+        placeholder = session.get(WorkObservation, 1)
+        assert transaction is not None and transaction.status == "COMPLETED"
+        assert operation is not None and operation.status == "SUCCESS"
+        assert placeholder is not None and placeholder.title == "placeholder history"
     database.dispose()
 
 

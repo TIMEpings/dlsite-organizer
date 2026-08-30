@@ -501,7 +501,10 @@ def _absolute_path(path: Path | str) -> Path:
 
 
 def _path_key(path: Path, case_insensitive: bool) -> str:
-    value = ntpath.normpath(str(path.absolute()))
+    # Windows may present the same directory as an 8.3 short path or a long
+    # path.  Resolve only for comparison; filesystem checks and mutations keep
+    # the original absolute path so symlink/junction validation is preserved.
+    value = ntpath.normpath(str(path.resolve(strict=False)))
     return value.casefold() if case_insensitive else value
 
 

@@ -1,3 +1,4 @@
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -61,6 +62,27 @@ def test_ready_plan_executes_and_journals_then_undoes(tmp_path: Path) -> None:
     assert undo.transaction is not None
     assert undo.transaction.operations[0].undo_status is UndoStatus.SUCCESS
     assert undo.transaction.operations[0].undone_at is not None
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows path spelling regression')
+def test_short_and_long_root_spellings_are_equivalent_for_real_rename(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / 'root'
+    root.mkdir()
+    (root / 'A').mkdir()
+    long_root = root.resolve(strict=False)
+    short_root = Path(os.path.abspath(root))
+    journal = _journal(tmp_path)
+
+    result = RenameExecutor(journal).execute(
+        short_root,
+        [_plan(long_root, 'A', 'B')],
+        confirmed=True,
+    )
+
+    assert result.status is TransactionStatus.COMPLETED
+    assert (root / 'B').is_dir()
 
 
 def test_no_confirmation_does_not_mutate_or_create_journal(tmp_path: Path) -> None:
