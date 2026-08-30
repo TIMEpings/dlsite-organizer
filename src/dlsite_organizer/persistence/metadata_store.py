@@ -160,27 +160,41 @@ class MetadataStore:
                 ).all()
                 snapshots: dict[str, KnownWorkSnapshot] = {}
                 for row in caches:
-                    snapshots[row.workno] = KnownWorkSnapshot(
-                        workno=row.workno,
-                        title=row.title,
-                        maker_id=row.maker_id,
-                        maker_name=row.maker_name,
-                        regist_datetime=_as_utc(row.regist_datetime),
-                        source=CandidateSnapshotSource.CURRENT_CACHE,
-                        fetched_at=_as_utc(row.fetched_at),
-                    )
+                    try:
+                        snapshots[row.workno] = KnownWorkSnapshot(
+                            workno=row.workno,
+                            title=row.title,
+                            maker_id=row.maker_id,
+                            maker_name=row.maker_name,
+                            regist_datetime=_as_utc(row.regist_datetime),
+                            source=CandidateSnapshotSource.CURRENT_CACHE,
+                            fetched_at=_as_utc(row.fetched_at),
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Skipping malformed current metadata cache %s",
+                            row.workno,
+                            exc_info=True,
+                        )
                 for row in observations:
                     if row.workno in snapshots:
                         continue
-                    snapshots[row.workno] = KnownWorkSnapshot(
-                        workno=row.workno,
-                        title=row.title,
-                        maker_id=row.maker_id,
-                        maker_name=row.maker_name,
-                        regist_datetime=_as_utc(row.regist_datetime),
-                        source=CandidateSnapshotSource.HISTORICAL_OBSERVATION,
-                        observed_at=_as_utc(row.observed_at),
-                    )
+                    try:
+                        snapshots[row.workno] = KnownWorkSnapshot(
+                            workno=row.workno,
+                            title=row.title,
+                            maker_id=row.maker_id,
+                            maker_name=row.maker_name,
+                            regist_datetime=_as_utc(row.regist_datetime),
+                            source=CandidateSnapshotSource.HISTORICAL_OBSERVATION,
+                            observed_at=_as_utc(row.observed_at),
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Skipping malformed historical metadata observation %s",
+                            row.id,
+                            exc_info=True,
+                        )
                 return tuple(sorted(snapshots.values(), key=lambda item: item.workno))
         except Exception:
             logger.exception("Known metadata summary read failed")

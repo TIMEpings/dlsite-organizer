@@ -173,14 +173,14 @@ class CandidateRelationService:
         if self._historical_relations is not None:
             historical = self._historical_relations.for_work(source_workno)
             pairs.update(
-                tuple(sorted((item.subject_workno, item.target_workno)))
+                _canonical_pair(item.subject_workno, item.target_workno)
                 for item in (*historical.outgoing, *historical.incoming)
             )
         current_pairs = getattr(self._repository, "list_current_relation_pairs", None)
         if callable(current_pairs):
             with suppress(Exception):
                 provider = cast(Callable[[], tuple[tuple[str, str], ...]], current_pairs)
-                pairs.update(provider())
+                pairs.update(_canonical_pair(left, right) for left, right in provider())
         return pairs
 
     def _now(self) -> datetime:
@@ -204,6 +204,10 @@ def rj_numeric_distance(left: str, right: str) -> int | None:
     except (TypeError, ValueError, WorkCodeError):
         return None
     return abs(a - b)
+
+
+def _canonical_pair(left: str, right: str) -> tuple[str, str]:
+    return (left, right) if left <= right else (right, left)
 
 
 def _maker_identity(snapshot: KnownWorkSnapshot) -> tuple[str, str] | None:

@@ -22,7 +22,12 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer.domain.relation import RelationType, TranslationRole
-from dlsite_organizer.domain.candidate import CandidateSearchResult, CandidateSearchState
+from dlsite_organizer.domain.candidate import (
+    CandidateEvidenceKind,
+    CandidateSearchResult,
+    CandidateSearchState,
+    CandidateSnapshotSource,
+)
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupFreshness, LookupResult, LookupService
 from dlsite_organizer.services.translation_relations import (
@@ -375,8 +380,13 @@ class LookupPage(QWidget):
         if result.state is CandidateSearchState.INSUFFICIENT_METADATA:
             self.candidate_relations_value.setText("无法生成候选：源作品缺少可比较的社团身份")
             return
+        if result.state is CandidateSearchState.NONE:
+            self.candidate_relations_value.setText(
+                "当前本地元数据中暂无符合筛选条件的关联作品候选"
+            )
+            return
         if not result.candidates:
-            self.candidate_relations_value.setText("暂无关联作品候选")
+            self.candidate_relations_value.setText("候选结果为空")
             return
         lines: list[str] = []
         for candidate in result.candidates:
@@ -390,6 +400,20 @@ class LookupPage(QWidget):
                 label += f" {title}"
             if distance is not None:
                 label += f" — RJ 编号距离：{distance}"
+            if candidate.target_snapshot is not None and (
+                candidate.target_snapshot.source is CandidateSnapshotSource.HISTORICAL_OBSERVATION
+            ):
+                label += " · 本地历史元数据"
+            group_size = next(
+                (
+                    e.value
+                    for e in candidate.context
+                    if e.kind is CandidateEvidenceKind.LOCAL_MAKER_DAY_GROUP_SIZE
+                ),
+                None,
+            )
+            if group_size is not None:
+                label += f" · 本地已知同社团同日作品数：{group_size}"
             lines.append(label)
         if result.truncated:
             lines.append(f"（仅显示 {len(result.candidates)}/{result.total_candidate_count} 项）")
