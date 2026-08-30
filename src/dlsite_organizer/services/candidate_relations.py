@@ -17,12 +17,17 @@ from dlsite_organizer.domain.candidate import (
     CandidateSearchState,
     KnownWorkSnapshot,
 )
+from dlsite_organizer.domain.manual_review import CandidateReviewOutcome, ManualReviewEvent
 from dlsite_organizer.domain.work_code import WorkCodeError, normalize_rjcode
 from dlsite_organizer.services.historical_relations import HistoricalRelationService
 
 
 class KnownWorkRepository(Protocol):
     def list_known_work_summaries(self) -> tuple[KnownWorkSnapshot, ...]: ...
+
+
+class ManualReviewLookup(Protocol):
+    def latest_review_for_pair(self, workno_a: str, workno_b: str) -> ManualReviewEvent | None: ...
 
 
 class CandidateSearchPolicy:
@@ -81,6 +86,7 @@ class CandidateRelationService:
         historical_relations: HistoricalRelationService | None = None,
         clock=None,
         max_results: int = 100,
+        manual_reviews: ManualReviewLookup | None = None,
     ) -> None:
         self._repository = repository
         self._policy = policy or CandidateSearchPolicy()
@@ -88,6 +94,7 @@ class CandidateRelationService:
         self._historical_relations = historical_relations
         self._clock = clock or (lambda: datetime.now(UTC))
         self._max_results = max(1, max_results)
+        self._manual_reviews = manual_reviews
 
     def for_work(self, workno: str) -> CandidateSearchResult:
         evaluated_at = self._now()
@@ -121,6 +128,8 @@ class CandidateRelationService:
             if target.workno == normalized or not self._policy.eligible(source, target):
                 continue
             if tuple(sorted((normalized, target.workno))) in excluded:
+                continue
+            if self._is_manually_related(normalized, target.workno):
                 continue
             supporting = self._evaluator.evaluate(source, target)
             context = (
@@ -182,6 +191,12 @@ class CandidateRelationService:
                 provider = cast(Callable[[], tuple[tuple[str, str], ...]], current_pairs)
                 pairs.update(_canonical_pair(left, right) for left, right in provider())
         return pairs
+
+    def _is_manually_related(self, left: str, right: str) -> bool:
+        if self._manual_reviews is None:
+            return False
+        review = self._manual_reviews.latest_review_for_pair(left, right)
+        return review is not None and review.outcome is CandidateReviewOutcome.RELATED
 
     def _now(self) -> datetime:
         value = self._clock()

@@ -117,6 +117,11 @@ class Database:
                 if t.name in {"work_metadata_cache", "metadata_observations"}
             ],
         )
+        # Manual review events are initialized with the metadata subsystem so
+        # the v0.7 minimum-core schema remains backwards compatible.
+        from dlsite_organizer.persistence.manual_reviews import ManualRelationReviewRecord
+
+        Base.metadata.create_all(self._engine, tables=[ManualRelationReviewRecord.__table__])  # pyright: ignore[reportArgumentType]
 
     @property
     def initialized(self) -> bool:

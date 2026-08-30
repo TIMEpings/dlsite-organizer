@@ -11,6 +11,10 @@ from dlsite_organizer.persistence.metadata_store import (
     MetadataStore,
     WorkMetadataCache,
 )
+from dlsite_organizer.persistence.manual_reviews import (
+    ManualRelationReviewRecord,
+    ManualReviewRepository,
+)
 from dlsite_organizer.persistence.rename_journal import (
     JournalError,
     JournalUnavailableError,
@@ -31,4 +35,6 @@ __all__ = [
     "TransactionJournal",
     "UnavailableRenameJournal",
     "WorkMetadataCache",
+    "ManualRelationReviewRecord",
+    "ManualReviewRepository",
 ]

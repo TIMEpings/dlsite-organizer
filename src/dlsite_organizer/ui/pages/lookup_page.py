@@ -9,11 +9,16 @@ from PySide6.QtCore import Qt, QThread, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -22,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer.domain.relation import RelationType, TranslationRole
+from dlsite_organizer.domain.manual_review import ManualReviewEvent
 from dlsite_organizer.domain.candidate import (
     CandidateEvidenceKind,
     CandidateSearchResult,
@@ -180,6 +186,11 @@ class LookupPage(QWidget):
         relation_layout.addWidget(QLabel("候选关系（非确认）"))
         self.candidate_relations_value = _value_label()
         relation_layout.addWidget(self.candidate_relations_value)
+        relation_layout.addWidget(QLabel("人工确认关系"))
+        self.manual_relations_value = _value_label()
+        relation_layout.addWidget(self.manual_relations_value)
+        self.review_buttons = QVBoxLayout()
+        relation_layout.addLayout(self.review_buttons)
         layout.addWidget(relation_frame)
         self._clear_relations()
         scroll_area.setWidget(content)
@@ -247,6 +258,7 @@ class LookupPage(QWidget):
     @Slot(object)
     def _show_result(self, value: object) -> None:
         result = cast(LookupResult, value)
+        self._current_result = result
         work = result.work
         self.code_input.setText(work.workno)
         self.workno_value.setText(work.workno)
@@ -372,6 +384,7 @@ class LookupPage(QWidget):
             lines += [f"传入：{r.subject_workno} · {_relation_label(r.relation_type)} · 首次 {r.first_seen.date()} · 最近 {r.last_seen.date()} · {r.observation_count} 次" for r in historical.incoming]
             self.historical_relations_value.setText("\n".join(lines))
         self._show_candidates(candidates)
+        self._show_manual_reviews(getattr(self, "_current_result", None))
 
     def _show_candidates(self, result: CandidateSearchResult | None) -> None:
         if result is None:
@@ -388,6 +401,7 @@ class LookupPage(QWidget):
         if not result.candidates:
             self.candidate_relations_value.setText("候选结果为空")
             return
+        self._clear_review_buttons()
         lines: list[str] = []
         for candidate in result.candidates:
             title = candidate.target_snapshot.title if candidate.target_snapshot else ""
@@ -414,11 +428,96 @@ class LookupPage(QWidget):
             )
             if group_size is not None:
                 label += f" · 本地已知同社团同日作品数：{group_size}"
+            review_service = self._lookup_service.manual_review_service
+            if review_service is not None:
+                review = review_service.latest_review_for_pair(
+                    candidate.source_workno, candidate.target_workno
+                )
+                if review is not None:
+                    label += {
+                        "not_related": " · 人工已否决",
+                        "unsure": " · 人工判断：不确定",
+                        "related": " · 人工确认",
+                    }.get(review.outcome.value, "")
             lines.append(label)
+            button = QPushButton(f"Review {candidate.target_workno}")
+            button.clicked.connect(lambda _checked=False, c=candidate: self._open_review_dialog(c))
+            self.review_buttons.addWidget(button)
         if result.truncated:
             lines.append(f"（仅显示 {len(result.candidates)}/{result.total_candidate_count} 项）")
         lines.append("根据本地元数据筛选，仅供检查，不代表 DLsite 已确认关系。")
         self.candidate_relations_value.setText("\n".join(lines))
+
+    def _show_manual_reviews(self, result: LookupResult | None) -> None:
+        if result is None or not result.manual_reviews:
+            self.manual_relations_value.setText("暂无人工确认关系")
+            return
+        latest: dict[tuple[str, str], ManualReviewEvent] = {}
+        for review in result.manual_reviews:
+            latest[(review.workno_a, review.workno_b)] = review
+        lines = []
+        for review in latest.values():
+            if review.outcome.value != "related":
+                continue
+            relation = review.relation_type.value if review.relation_type else "unknown"
+            direction = f"（{review.subject_workno} → {review.target_workno}）" if review.subject_workno else ""
+            lines.append(f"{review.workno_a} / {review.workno_b}：人工确认 · {relation}{direction}")
+        self.manual_relations_value.setText("\n".join(lines) if lines else "暂无人工确认关系")
+
+    def _clear_review_buttons(self) -> None:
+        while self.review_buttons.count():
+            item = self.review_buttons.takeAt(0)
+            widget = item.widget()  # pyright: ignore[reportOptionalMemberAccess]
+            if widget is not None:  # pyright: ignore[reportOptionalMemberAccess]
+                widget.deleteLater()
+
+    def _open_review_dialog(self, candidate) -> None:
+        service = self._lookup_service.manual_review_service
+        if service is None:
+            QMessageBox.warning(self, "无法保存", "人工 review 存储不可用。")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("人工标记候选关系")
+        form = QFormLayout(dialog)
+        outcome = QComboBox()
+        outcome.addItem("有关联", "related")
+        outcome.addItem("无关联", "not_related")
+        outcome.addItem("不确定", "unsure")
+        relation = QComboBox()
+        for value, label in (("unknown", "类型未知"), ("translation_of", "翻译"), ("bonus_of", "特典"), ("limited_bonus_of", "限时/限定特典"), ("child_of", "子作品"), ("bundled_with", "捆绑/套装"), ("other", "其他")):
+            relation.addItem(label, value)
+        notes = QPlainTextEdit()
+        subject = QComboBox(); subject.addItems([candidate.source_workno, candidate.target_workno])
+        target = QComboBox(); target.addItems([candidate.source_workno, candidate.target_workno]); target.setCurrentIndex(1)
+        form.addRow("判断", outcome)
+        form.addRow("关系类型", relation)
+        form.addRow("关系主体", subject)
+        form.addRow("关系目标", target)
+        form.addRow("备注", notes)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        form.addRow(buttons)
+        def update_visibility(index: int) -> None:
+            relation.setEnabled(index == 0)
+            directional = index == 0 and relation.currentData() not in {"bundled_with", "other", "unknown"}
+            subject.setVisible(directional); target.setVisible(directional)
+        relation.currentIndexChanged.connect(lambda _index: update_visibility(outcome.currentIndex()))
+        outcome.currentIndexChanged.connect(update_visibility)
+        update_visibility(0)
+        def save() -> None:
+            try:
+                from dlsite_organizer.domain.manual_review import CandidateReviewOutcome, ManualRelationType
+                related = outcome.currentData() == "related"
+                rtype = ManualRelationType(relation.currentData()) if related else None
+                directional = related and rtype is not None and rtype.is_directional
+                service.submit_review(candidate.source_workno, candidate.target_workno, CandidateReviewOutcome(outcome.currentData()), relation_type=rtype, subject_workno=subject.currentText() if directional else None, target_workno=target.currentText() if directional else None, notes=notes.toPlainText() or None, candidate=candidate)
+            except Exception as exc:
+                QMessageBox.critical(dialog, "保存失败", f"人工 review 保存失败：{exc}")
+                return
+            dialog.accept()
+        buttons.accepted.connect(save)
+        buttons.rejected.connect(dialog.reject)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.status_label.setText("人工 review 已保存")
 
     def _clear_relations(self) -> None:
         self.relation_role_value.setText("—")
@@ -428,6 +527,8 @@ class LookupPage(QWidget):
         self.relation_details_value.setText("—")
         self.historical_relations_value.setText("—")
         self.candidate_relations_value.setText("—")
+        self.manual_relations_value.setText("—")
+        self._clear_review_buttons()
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)

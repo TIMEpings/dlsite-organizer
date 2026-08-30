@@ -32,3 +32,10 @@ the application makes no probability or precision claims.
 Candidates use only local current cache or the latest valid historical snapshot;
 the research XLSX is not a production data source. No crawling, fuzzy maker
 matching, arbitrary RJ scanning, or background discovery is performed.
+## Manual review
+
+Users can label a displayed candidate as related, not related, or unsure.
+Reviews are stored separately from DLsite-confirmed relations and do not
+alter candidate generation, scoring, or confirmation semantics. A versioned
+snapshot of the evidence shown at review time is retained for future manual
+label analysis.

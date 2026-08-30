@@ -11,6 +11,14 @@ from dlsite_organizer.domain.candidate import (
     CandidateType,
     KnownWorkSnapshot,
 )
+from dlsite_organizer.domain.manual_review import (
+    CandidateEvidenceSnapshot,
+    CandidateReviewOutcome,
+    ManualRelationReview,
+    ManualRelationType,
+    ManualReviewEvent,
+    ManualReviewProvenance,
+)
 from dlsite_organizer.domain.organizer import (
     RenamePlan,
     RenamePlanStatus,
@@ -38,7 +46,9 @@ __all__ = [
     "CandidateEvidence",
     "CandidateEvidenceKind",
     "CandidateEvidencePolarity",
+    "CandidateEvidenceSnapshot",
     "CandidateRelation",
+    "CandidateReviewOutcome",
     "CandidateSearchResult",
     "CandidateSearchState",
     "CandidateSnapshotSource",
@@ -46,6 +56,10 @@ __all__ = [
     "ExecutionResult",
     "ExecutionStatus",
     "KnownWorkSnapshot",
+    "ManualRelationReview",
+    "ManualRelationType",
+    "ManualReviewEvent",
+    "ManualReviewProvenance",
     "RenameExecutionResult",
     "RenameOperation",
     "RenamePlan",

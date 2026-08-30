@@ -9,6 +9,7 @@ from typing import Callable, Protocol, cast, runtime_checkable
 
 from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
 from dlsite_organizer.domain.candidate import CandidateSearchResult
+from dlsite_organizer.domain.manual_review import ManualReviewEvent
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.domain.work_code import WorkCodeError, normalize_rjcode
 from dlsite_organizer.persistence.metadata_store import MetadataStore
@@ -27,6 +28,7 @@ from dlsite_organizer.services.translation_relations import (
 )
 from dlsite_organizer.services.historical_relations import HistoricalRelationService, HistoricalRelations
 from dlsite_organizer.services.candidate_relations import CandidateRelationService
+from dlsite_organizer.services.manual_reviews import ManualReviewService
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,7 @@ class LookupResult:
     fetched_at: datetime | None = None
     historical_relations: HistoricalRelations = field(default_factory=HistoricalRelations)
     candidate_relations: CandidateSearchResult | None = None
+    manual_reviews: tuple[ManualReviewEvent, ...] = ()
 
     @property
     def translation_role(self) -> TranslationRole | None:
@@ -101,6 +104,7 @@ class LookupService:
         metadata_store: MetadataStore | None = None,
         historical_relations: HistoricalRelationService | None = None,
         candidate_relations: CandidateRelationService | None = None,
+        manual_review_service: ManualReviewService | None = None,
         cache_ttl_hours: float = 24.0,
         allow_stale_on_error: bool = True,
         clock: LookupClock | None = None,
@@ -110,7 +114,16 @@ class LookupService:
         self._translation_relations = translation_relations or TranslationRelationService()
         self._metadata_store = metadata_store
         self._historical_relations = historical_relations or (HistoricalRelationService(metadata_store, self._translation_relations) if metadata_store else None)
-        self._candidate_relations = candidate_relations or (CandidateRelationService(metadata_store, historical_relations=self._historical_relations) if metadata_store else None)
+        self._manual_review_service = manual_review_service
+        self._candidate_relations = candidate_relations or (
+            CandidateRelationService(
+                metadata_store,
+                historical_relations=self._historical_relations,
+                manual_reviews=manual_review_service,
+            )
+            if metadata_store
+            else None
+        )
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
         self._allow_stale_on_error = allow_stale_on_error
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -199,6 +212,10 @@ class LookupService:
                 logger.exception("Metadata observation persistence failed for %s", workno)
         return self._result(workno, work, info, LookupFreshness.LIVE, source, fetched)
 
+    @property
+    def manual_review_service(self) -> ManualReviewService | None:
+        return self._manual_review_service
+
     def _fetch_work(self, workno):
         if isinstance(self._provider, _SourceAwareProvider):
             x = self._provider.fetch_work_lookup(workno)
@@ -221,4 +238,5 @@ class LookupService:
             fetched_at=fetched,
             historical_relations=self._historical_relations.for_work(workno) if self._historical_relations else HistoricalRelations(),
             candidate_relations=self._candidate_relations.for_work(workno) if self._candidate_relations else None,
+            manual_reviews=(self._manual_review_service.reviews_for_work(workno) if self._manual_review_service else ()),
         )

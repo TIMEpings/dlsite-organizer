@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dlsite-organizer"
-version = "0.7.0"
+version = "0.8.0"
 description = "A desktop tool for looking up and organizing DLsite works"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -39,6 +39,7 @@ markers = ["integration: tests requiring live network access (deselected by defa
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["research", ".venv_validation"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
