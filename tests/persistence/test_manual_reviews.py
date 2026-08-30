@@ -147,6 +147,7 @@ def test_append_only_history_latest_and_reverse_pair_queries(tmp_path: Path) -> 
         "RJ00000001",
         CandidateReviewOutcome.UNSURE,
         evidence_snapshot=SNAPSHOT,
+        reviewed_at=WHEN,
     )
     second = service.submit_review(
         "RJ00000001",

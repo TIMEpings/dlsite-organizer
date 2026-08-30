@@ -81,6 +81,14 @@ class HistoricalRelationService:
         key = lambda r: (r.relation_type.value, r.target_workno if r.subject_workno == workno else r.subject_workno)
         return HistoricalRelations(tuple(sorted(outgoing, key=key)), tuple(sorted(incoming, key=key)))
 
+    def known_confirmed_pair_set(self) -> set[tuple[str, str]]:
+        """Return all canonical confirmed edges from persisted observations in one pass."""
+        pairs: set[tuple[str, str]] = set()
+        for observation in self._store.list_all_observations():
+            for relation in self._relations_for_observation(observation):
+                pairs.add((min(relation.source_workno, relation.target_workno), max(relation.source_workno, relation.target_workno)))
+        return pairs
+
     def _relations_for_observation(self, observation: MetadataObservation) -> tuple[WorkRelation, ...]:
         if not observation.translation_json:
             return ()

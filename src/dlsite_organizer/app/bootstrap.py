@@ -20,11 +20,13 @@ from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.manual_reviews import ManualReviewService
+from dlsite_organizer.services.historical_relations import HistoricalRelationService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_planner import RenamePlanner
 from dlsite_organizer.services.undo_service import UndoService
+from dlsite_organizer.services.candidate_review_queue import CandidateReviewQueueService
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ class ApplicationComponents:
     undo_service: UndoService
     rename_journal: RenameJournal
     manual_review_service: ManualReviewService | None = None
+    candidate_review_queue_service: CandidateReviewQueueService | None = None
 
 
 def build_components(settings: AppSettings) -> ApplicationComponents:
@@ -60,11 +63,18 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
     else:
         metadata_store = MetadataStore(database) if settings.cache.enabled else None
     manual_review_service = None
+    candidate_review_queue_service = None
     if database.initialized:
         try:
             manual_review_service = ManualReviewService(ManualReviewRepository(database))
         except Exception:
             logger.exception("Manual review persistence unavailable")
+    if metadata_store is not None:
+        candidate_review_queue_service = CandidateReviewQueueService(
+            metadata_store,
+            manual_reviews=manual_review_service,
+            historical_relations=(HistoricalRelationService(metadata_store) if database.initialized else None),
+        )
     lookup_service = LookupService(
         provider,
         naming,
@@ -93,4 +103,5 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         undo_service=undo_service,
         rename_journal=journal,
         manual_review_service=manual_review_service,
+        candidate_review_queue_service=candidate_review_queue_service,
     )

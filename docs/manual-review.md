@@ -42,3 +42,7 @@ report legacy/provenance-bearing counts and a descriptive latest-record
 distribution by `(policy_id, policy_version)`. The legacy display group is
 `LEGACY_UNKNOWN_POLICY`; its underlying fields remain empty. This is not a
 policy performance comparison.
+
+The local candidate review queue is an additional entry point for the same
+manual review service. Persistence remains append-only, local-only, and uses
+the existing review-time evidence snapshot contract.

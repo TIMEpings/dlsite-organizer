@@ -152,3 +152,8 @@ Candidates are non-confirmed suggestions for review, not DLsite-confirmed
 relations, and the feature intentionally provides no score or probability.
 See [`docs/candidate-evidence.md`](docs/candidate-evidence.md) for the evidence
 contract and calibration limitations.
+
+### 候选审阅队列
+
+从本地已缓存或历史元数据中整理未审候选，便于人工标注。队列是派生的
+本地视图，不执行批量网络访问、不评分、不计算概率，也不会自动确认关系。

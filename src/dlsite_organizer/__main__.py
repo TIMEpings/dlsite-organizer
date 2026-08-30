@@ -42,6 +42,7 @@ def main() -> int:
         components.organizer_service,
         components.rename_executor,
         components.undo_service,
+        components.candidate_review_queue_service,
     )
     window.show()
     exit_code = application.exec()

@@ -42,6 +42,7 @@ the application makes no probability or precision claims.
 Candidates use only local current cache or the latest valid historical snapshot;
 the research XLSX is not a production data source. No crawling, fuzzy maker
 matching, arbitrary RJ scanning, or background discovery is performed.
+
 ## Manual review
 
 Users can label a displayed candidate as related, not related, or unsure.
@@ -53,3 +54,11 @@ label analysis.
 v0.9 only reads manual review events to build a descriptive evaluation dataset;
 it does not change this candidate policy or promote candidates to confirmed
 relations.
+
+## Lookup and review queue contract
+
+Single-work lookup and the v0.10 local review queue use the same
+`CandidateSearchPolicy` (`same-maker-same-date`, version 1) and
+`CandidateEvidenceEvaluator`. The queue only batches and presents those
+derived candidates; it adds no score, probability, heuristic weighting, or
+automatic confirmation.

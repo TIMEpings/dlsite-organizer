@@ -54,6 +54,20 @@ class CandidateSearchPolicy:
         )
 
 
+def pair_is_eligible(
+    source: KnownWorkSnapshot,
+    target: KnownWorkSnapshot,
+    policy: CandidateSearchPolicy | None = None,
+) -> bool:
+    """Shared eligibility contract for lookup and batch queue callers."""
+    return (policy or CandidateSearchPolicy()).eligible(source, target)
+
+
+def maker_identity_key(snapshot: KnownWorkSnapshot) -> tuple[str, str] | None:
+    """Return the explicit ID/name identity key used by the policy groups."""
+    return _maker_identity(snapshot)
+
+
 class CandidateEvidenceEvaluator:
     """Produce structured observations without scores or confidence values."""
 

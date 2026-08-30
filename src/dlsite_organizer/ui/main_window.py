@@ -25,6 +25,7 @@ from dlsite_organizer.services.rename_planner import RenamePlanner
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
+from dlsite_organizer.ui.pages.review_queue_page import ReviewQueuePage
 
 
 class MainWindow(QMainWindow):
@@ -37,6 +38,7 @@ class MainWindow(QMainWindow):
         organizer_service: OrganizerService | None = None,
         rename_executor: RenameExecutor | None = None,
         undo_service: UndoService | None = None,
+        candidate_review_queue_service=None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("DLsite Organizer")
@@ -77,9 +79,14 @@ class MainWindow(QMainWindow):
             execution_service=rename_executor,
             undo_service=undo_service,
         )
+        self.review_queue_page = ReviewQueuePage(
+            candidate_review_queue_service,
+            lookup_service.manual_review_service,
+        )
         page_definitions = [
             ("整理", self.organizer_page),
             ("查询", self.lookup_page),
+            ("候选审阅", self.review_queue_page),
             (
                 "关系",
                 _placeholder(

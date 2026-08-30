@@ -151,3 +151,106 @@ class CandidateSearchResult(BaseModel):
     truncated: bool = False
     total_candidate_count: int = 0
     policy_provenance: CandidatePolicyProvenance | None = None
+
+
+class CandidateQueueReviewState(StrEnum):
+    """Latest manual state of a derived queue pair."""
+
+    UNREVIEWED = "unreviewed"
+    RELATED = "related"
+    NOT_RELATED = "not_related"
+    UNSURE = "unsure"
+
+
+class CandidateQueueFilter(StrEnum):
+    UNREVIEWED = "unreviewed"
+    UNSURE = "unsure"
+    REVIEWED = "reviewed"
+    ALL = "all"
+    RELATED = "related"
+    NOT_RELATED = "not_related"
+
+
+class CandidateReviewQueueItem(BaseModel):
+    """Typed, derived presentation item for one canonical candidate pair."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workno_a: str
+    workno_b: str
+    canonical_pair: tuple[str, str]
+    work_a_title: str
+    work_b_title: str
+    maker_identity: str
+    maker_display: str
+    regist_date: date
+    rj_numeric_distance: int | None = None
+    supporting_evidence: tuple[CandidateEvidence, ...] = ()
+    context: tuple[CandidateEvidence, ...] = ()
+    policy_provenance: CandidatePolicyProvenance
+    # Kept as an object here to avoid the candidate/manual-review import cycle;
+    # queue construction always supplies a ManualReviewEvent.
+    latest_manual_review: Any = None
+    review_event_count: int = 0
+    source_snapshot: KnownWorkSnapshot
+    target_snapshot: KnownWorkSnapshot
+
+    @property
+    def review_state(self) -> CandidateQueueReviewState:
+        if self.latest_manual_review is None:
+            return CandidateQueueReviewState.UNREVIEWED
+        return CandidateQueueReviewState(self.latest_manual_review.outcome.value)
+
+    @property
+    def candidate_policy_id(self) -> str:
+        return self.policy_provenance.policy_id
+
+    @property
+    def candidate_policy_version(self) -> int:
+        return self.policy_provenance.policy_version
+
+    @property
+    def application_version(self) -> str:
+        return self.policy_provenance.application_version
+
+
+class CandidateReviewQueueResult(BaseModel):
+    """One deterministic, paginated build of the local review queue."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_provenance: CandidatePolicyProvenance
+    filter: CandidateQueueFilter
+    items: tuple[CandidateReviewQueueItem, ...] = ()
+    total_count: int = 0
+    returned_count: int = 0
+    generated_at: datetime
+    known_work_count: int = 0
+    eligible_work_count: int = 0
+    excluded_insufficient_metadata_count: int = 0
+    unreviewed_count: int = 0
+    related_count: int = 0
+    not_related_count: int = 0
+    unsure_count: int = 0
+    truncated: bool = False
+
+    @property
+    def total_pair_count(self) -> int:
+        return self.total_count
+
+    @property
+    def candidate_policy_id(self) -> str:
+        return self.policy_provenance.policy_id
+
+    @property
+    def candidate_policy_version(self) -> int:
+        return self.policy_provenance.policy_version
+
+    @property
+    def application_version(self) -> str:
+        return self.policy_provenance.application_version
+
+
+# Explicit aliases keep the application vocabulary readable at call sites.
+CandidateReviewQueueFilter = CandidateQueueFilter
+CandidateReviewState = CandidateQueueReviewState

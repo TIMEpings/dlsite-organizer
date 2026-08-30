@@ -10,16 +10,12 @@ from PySide6.QtCore import Qt, QThread, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -42,6 +38,7 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysisStatus,
 )
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
+from dlsite_organizer.ui.manual_review_dialog import open_manual_review_dialog
 
 
 class LookupPage(QWidget):
@@ -495,53 +492,14 @@ class LookupPage(QWidget):
                 widget.deleteLater()
 
     def _open_review_dialog(self, candidate) -> None:
-        service = self._lookup_service.manual_review_service
-        if service is None:
-            QMessageBox.warning(self, "无法保存", "人工 review 存储不可用。")
-            return
-        dialog = QDialog(self)
-        dialog.setWindowTitle("人工标记候选关系")
-        form = QFormLayout(dialog)
-        outcome = QComboBox()
-        outcome.addItem("有关联", "related")
-        outcome.addItem("无关联", "not_related")
-        outcome.addItem("不确定", "unsure")
-        relation = QComboBox()
-        for value, label in (("unknown", "类型未知"), ("translation_of", "翻译"), ("bonus_of", "特典"), ("limited_bonus_of", "限时/限定特典"), ("child_of", "子作品"), ("bundled_with", "捆绑/套装"), ("other", "其他")):
-            relation.addItem(label, value)
-        notes = QPlainTextEdit()
-        subject = QComboBox(); subject.addItems([candidate.source_workno, candidate.target_workno])
-        target = QComboBox(); target.addItems([candidate.source_workno, candidate.target_workno]); target.setCurrentIndex(1)
-        form.addRow("判断", outcome)
-        form.addRow("关系类型", relation)
-        form.addRow("关系主体", subject)
-        form.addRow("关系目标", target)
-        form.addRow("备注", notes)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        form.addRow(buttons)
-        def update_visibility(index: int) -> None:
-            relation.setEnabled(index == 0)
-            directional = index == 0 and relation.currentData() not in {"bundled_with", "other", "unknown"}
-            subject.setVisible(directional); target.setVisible(directional)
-        relation.currentIndexChanged.connect(lambda _index: update_visibility(outcome.currentIndex()))
-        outcome.currentIndexChanged.connect(update_visibility)
-        update_visibility(0)
-        def save() -> None:
-            try:
-                from dlsite_organizer.domain.manual_review import CandidateReviewOutcome, ManualRelationType
-                related = outcome.currentData() == "related"
-                rtype = ManualRelationType(relation.currentData()) if related else None
-                directional = related and rtype is not None and rtype.is_directional
-                service.submit_review(candidate.source_workno, candidate.target_workno, CandidateReviewOutcome(outcome.currentData()), relation_type=rtype, subject_workno=subject.currentText() if directional else None, target_workno=target.currentText() if directional else None, notes=notes.toPlainText() or None, candidate=candidate)
-            except Exception as exc:
-                QMessageBox.critical(dialog, "保存失败", f"人工 review 保存失败：{exc}")
-                return
-            dialog.accept()
-        buttons.accepted.connect(save)
-        buttons.rejected.connect(dialog.reject)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        if open_manual_review_dialog(
+            self,
+            self._lookup_service.manual_review_service,
+            candidate,
+        ):
             current = getattr(self, "_current_result", None)
-            if current is not None:
+            service = self._lookup_service.manual_review_service
+            if current is not None and service is not None:
                 refreshed = replace(
                     current,
                     manual_reviews=service.reviews_for_work(candidate.source_workno),

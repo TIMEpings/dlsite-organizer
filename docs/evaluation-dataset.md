@@ -48,3 +48,11 @@ CSV export adds the deterministic columns `snapshot_schema_version`,
 `candidate_policy_id`, `candidate_policy_version`, and `application_version`;
 v1 rows leave the provenance columns empty. The `manual_relation_reviews` table
 is unchanged and stored snapshot JSON is never migrated.
+
+## v0.10 queue selection bias
+
+The local candidate review queue continues to select pairs using
+`same-maker-same-date` policy version 1. Labels entered from that queue are
+therefore subject to the same candidate-policy selection bias as lookup
+reviews. The queue writes no evaluation rows or metrics; rebuilding the
+evaluation dataset consumes the append-only manual review events.
