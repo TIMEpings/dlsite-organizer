@@ -78,7 +78,9 @@ class OrganizerPage(QWidget):
 
         heading = QLabel("整理")
         heading.setObjectName("pageTitle")
-        description = QLabel("扫描作品根目录，查询 RJcode 并生成重命名预览；执行前需要明确确认。")
+        description = QLabel(
+            "可选择根目录，也可将文件夹拖入此窗口。完整模式拖入只生成预览，不会立即重命名。"
+        )
         description.setObjectName("pageDescription")
         description.setWordWrap(True)
         layout.addWidget(heading)
@@ -277,8 +279,8 @@ class OrganizerPage(QWidget):
         conflict = preview.count(RenamePlanStatus.CONFLICT)
         failed = preview.count(RenamePlanStatus.LOOKUP_FAILED)
         self.summary_label.setText(
-            f"共 {len(preview.plans)} 个 · Ready {ready} · Unchanged {unchanged} · "
-            f"Conflict {conflict} · Failed {failed} · Skipped {preview.skipped_count}"
+            f"共 {len(preview.plans)} 个 · 可执行 {ready} · 无需重命名 {unchanged} · "
+            f"冲突 {conflict} · 查询失败 {failed} · 已跳过 {preview.skipped_count}"
         )
 
     def set_preview(self, preview: OrganizerPreview) -> None:
@@ -490,7 +492,7 @@ class OrganizerPage(QWidget):
         title = work.title if work is not None else "—"
         details = plan.error or "；".join(plan.warnings) or "—"
         values = (
-            plan.status.name,
+            _plan_status_label(plan.status),
             plan.current_name,
             work_code,
             maker,
@@ -573,7 +575,7 @@ class OrganizerPage(QWidget):
         self._preview_stale = True
         self.table.setEnabled(False)
         self.execute_button.setEnabled(False)
-        self.summary_label.setText("Preview stale: 请重新扫描以刷新状态。")
+        self.summary_label.setText("预览已失效：请重新扫描以刷新状态。")
 
     def _refresh_recent_transaction(self) -> None:
         if self._undo_service is None:
@@ -624,3 +626,17 @@ class OrganizerPage(QWidget):
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
+
+
+def _plan_status_label(status: RenamePlanStatus) -> str:
+    """Translate internal plan states into clear user-facing labels."""
+    return {
+        RenamePlanStatus.READY: "可执行",
+        RenamePlanStatus.UNCHANGED: "无需重命名",
+        RenamePlanStatus.CONFLICT: "冲突",
+        RenamePlanStatus.LOOKUP_FAILED: "查询失败",
+        RenamePlanStatus.INVALID_CODE: "无效 RJcode",
+        RenamePlanStatus.AMBIGUOUS_CODE: "RJcode 不唯一",
+        RenamePlanStatus.INVALID_TARGET: "目标名称无效",
+        RenamePlanStatus.CANCELLED: "已取消",
+    }.get(status, "需检查")

@@ -65,12 +65,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     window = MainWindow(
         components.lookup_service,
         components.cover_service,
-        components.organizer_service,
-        components.rename_executor,
-        components.undo_service,
-        components.candidate_review_queue_service,
-        components.settings_service,
-        components.quick_rename_service,
+        organizer_service=components.organizer_service,
+        rename_executor=components.rename_executor,
+        undo_service=components.undo_service,
+        settings_service=components.settings_service,
+        quick_rename_service=components.quick_rename_service,
+        explorer_integration_service=components.explorer_integration_service,
     )
     lightweight_window = LightweightWindow(
         components.quick_rename_service,
@@ -149,7 +149,7 @@ def _schedule_startup_smoke(application: QApplication, window: MainWindow) -> No
     if os.environ.get("DLSITE_ORGANIZER_STARTUP_SMOKE") != "1":
         return
 
-    expected_pages = ["整理", "查询", "候选审阅", "关系", "设置"]
+    expected_pages = ["整理", "查询", "设置", "关于"]
     actual_pages = [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())

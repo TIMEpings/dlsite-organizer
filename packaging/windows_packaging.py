@@ -7,6 +7,7 @@ PowerShell build driver, PyInstaller spec files, and packaging-level tests.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -26,6 +27,30 @@ FOREIGN_PATH_COMPONENTS = frozenset(
     }
 )
 TEMPORARY_PATH_COMPONENTS = frozenset({".cache", ".tmp", "tmp", "temp", "temporary"})
+NATIVE_ARTIFACT_SUFFIXES = frozenset({".dll", ".exe", ".pyd"})
+FORBIDDEN_ARTIFACT_COMPONENTS = frozenset({"codex", "codex-runtimes", "poppler"})
+
+# These are the runtime distributions named in THIRD_PARTY_NOTICES.md.  The
+# version part is intentionally matched separately because the canonical
+# environment can be refreshed between two verification builds.
+REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS = (
+    "pyside6_essentials",
+    "shiboken6",
+    "sqlalchemy",
+    "selectolax",
+    "httpx",
+    "httpcore",
+    "certifi",
+    "idna",
+    "anyio",
+    "h11",
+    "pydantic",
+    "pydantic_core",
+    "greenlet",
+    "annotated_types",
+    "typing_extensions",
+    "typing_inspection",
+)
 
 
 class ForeignIcuContaminationError(RuntimeError):
@@ -195,6 +220,90 @@ def audit_distribution(distribution: Path, provenance_path: Path) -> list[Path]:
     return bundled_icu
 
 
+def audit_packaged_resources(distribution: Path) -> tuple[Path, ...]:
+    """Verify application and runtime license resources in an onedir build."""
+    runtime_root = distribution / "_internal"
+    roots = (runtime_root, distribution) if runtime_root.is_dir() else (distribution,)
+
+    required_files: list[Path] = []
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+        resource = next((root / name for root in roots if (root / name).is_file()), None)
+        if resource is None:
+            raise FileNotFoundError(f"Packaged resource missing: {name}")
+        required_files.append(resource)
+
+    license_roots = tuple(
+        root / "licenses"
+        for root in (distribution, runtime_root)
+        if (root / "licenses").is_dir()
+    )
+    if not license_roots:
+        raise FileNotFoundError("Packaged resource missing: licenses directory")
+
+    resources = list(required_files)
+    for distribution_name in REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS:
+        matches = [
+            directory
+            for license_root in license_roots
+            for directory in license_root.iterdir()
+            if directory.is_dir()
+            and fnmatch.fnmatchcase(
+                directory.name.casefold(), f"{distribution_name.casefold()}-*.dist-info"
+            )
+        ]
+        if not matches:
+            raise FileNotFoundError(
+                f"Packaged third-party license directory missing: {distribution_name}"
+            )
+        license_files = [
+            path
+            for directory in matches
+            for path in directory.rglob("*")
+            if path.is_file()
+            and ("license" in path.name.casefold() or "notice" in path.name.casefold())
+        ]
+        if not license_files:
+            raise FileNotFoundError(
+                f"Packaged third-party license file missing: {distribution_name}"
+            )
+        resources.extend(license_files)
+    return tuple(resources)
+
+
+def audit_native_binaries(distribution: Path) -> tuple[Path, ...]:
+    """Verify that bundled native files are x64 and contain no foreign runtime."""
+    binaries = tuple(
+        sorted(
+            (
+                path
+                for path in distribution.rglob("*")
+                if path.is_file() and path.suffix.casefold() in NATIVE_ARTIFACT_SUFFIXES
+            ),
+            key=lambda path: path.as_posix().casefold(),
+        )
+    )
+    if not binaries:
+        raise FileNotFoundError("Native PE audit found no executable or native library")
+
+    for path in binaries:
+        relative = path.relative_to(distribution)
+        components = {part.casefold() for part in relative.parts}
+        if components & FORBIDDEN_ARTIFACT_COMPONENTS:
+            raise RuntimeError(f"Foreign runtime found in artifact: {relative}")
+        header = path.read_bytes()[:4096]
+        if len(header) < 64 or header[:2] != b"MZ":
+            raise RuntimeError(f"Native PE audit failed: invalid DOS header in {relative}")
+        pe_offset = int.from_bytes(header[0x3C:0x40], "little")
+        if pe_offset + 6 > len(header) or header[pe_offset : pe_offset + 4] != b"PE\0\0":
+            raise RuntimeError(f"Native PE audit failed: invalid PE header in {relative}")
+        machine = int.from_bytes(header[pe_offset + 4 : pe_offset + 6], "little")
+        if machine != 0x8664:
+            raise RuntimeError(
+                f"Native PE audit failed: {relative} is not x64 (machine=0x{machine:04x})"
+            )
+    return binaries
+
+
 def _command_clean_path(args: argparse.Namespace) -> int:
     path, kept, removed = isolated_build_path(
         args.path,
@@ -224,6 +333,26 @@ def _command_audit_dist(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_audit_resources(args: argparse.Namespace) -> int:
+    try:
+        resources = audit_packaged_resources(Path(args.dist))
+    except (FileNotFoundError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Packaged resource audit: PASS ({len(resources)} resources)")
+    return 0
+
+
+def _command_audit_native(args: argparse.Namespace) -> int:
+    try:
+        binaries = audit_native_binaries(Path(args.dist))
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Native PE audit: PASS ({len(binaries)} x64 binaries)")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -238,6 +367,14 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_dist.add_argument("--dist", required=True)
     audit_dist.add_argument("--provenance", required=True)
     audit_dist.set_defaults(handler=_command_audit_dist)
+
+    audit_resources = subparsers.add_parser("audit-resources")
+    audit_resources.add_argument("--dist", required=True)
+    audit_resources.set_defaults(handler=_command_audit_resources)
+
+    audit_native = subparsers.add_parser("audit-native")
+    audit_native.add_argument("--dist", required=True)
+    audit_native.set_defaults(handler=_command_audit_native)
     return parser
 
 

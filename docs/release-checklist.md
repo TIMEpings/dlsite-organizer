@@ -1,100 +1,59 @@
-# v1.0.0 Release Checklist
+# v1.0.0 Release Readiness Checklist
 
-This checklist is for the first public Windows release. A checked automated item
-must have a reproducible command or recorded artifact. Do not count an
-unavailable manual gate as PASS.
+这是 `dlsite-organizer` 的发布前核验清单。Phase E 完成后停止功能开发，先由用户验收，再决定是否创建 tag、发布 portable ZIP 或进行其他发行操作。本清单不会代替真实 Windows 桌面验收。
 
-## Release gates
+## Automated gates
 
-- [x] Full tests: `QT_QPA_PLATFORM=offscreen python -m pytest` — 301 passed
+- [x] Full offline tests: `QT_QPA_PLATFORM=offscreen python -m pytest`
 - [x] Ruff: `ruff check .`
 - [x] Pyright: `pyright`
 - [x] Compile: `python -m compileall src`
 - [x] Dependency health: `python -m pip check`
-- [x] selectolax import/parser smoke
+- [x] selectolax parser smoke
 - [x] `git diff --check`
-- [x] Version source is exactly `1.0.0`
-- [x] Intended release tree is clean after the release commit; `research/`
-      remains local and ignored
-- [x] User-selected `LICENSE` is present (MIT; holder: `dlsite-organizer contributors`)
-- [x] Fresh-profile startup: no DB, cache, or config; schema initializes; MainWindow opens and exits
-- [x] Fresh-profile restart succeeds
-- [x] Legacy SQLite upgrade preserves metadata observations, translation history,
-      manual reviews, bonus evidence state, and rename journal rows
-- [x] `bonus_evidence_json = NULL` remains unknown/legacy, not `bonuses = []`
-- [x] Offline startup succeeds without a provider call (source smoke; 0 startup provider requests)
-- [x] Packaged offline startup under blocked HTTP(S)/ALL_PROXY: fresh profile and restart exit cleanly
-- [x] PyInstaller artifact build completes from canonical `.venv` (`1.0.0`)
-- [x] Artifact imports/runs PySide6, SQLAlchemy, selectolax, and packaged dependencies
-- [x] Packaged artifact does not depend on `src/`, `tests/`, `research/`, or `.venv/`
-- [x] Packaged fresh-profile startup and restart
-- [x] Packaged Lookup page, Review Queue, Relations, and Settings navigation smoke
-- [x] PyInstaller foreign ICU contamination regression guard: build-time PATH
-      isolation, provenance rejection, and final dist audit
-- [x] Manual Windows rename smoke: scan → preview → execute → verify → journal (temporary directory)
-- [x] Manual Windows Undo smoke: undo → verify restoration (temporary directory)
-- [x] Network lookup smoke against approved live test work `RJ01609020`
-- [x] README, CHANGELOG, and this checklist updated
-- [x] Security/repository hygiene audit completed: no tracked secret patterns or local DB/log/private data
-- [x] SHA-256 recorded for the final artifact: `dlsite-organizer-1.0.0-windows-x64.zip`,
-      57,598,016 bytes, `C089454D147BABC3034768DA42B32B844FA594A1ED18695265AFE54782F51164`
-- [x] Local annotated tag `v1.0.0` created after every gate is checked
-- [x] No push and no remote GitHub release from this procedure
+- [x] Version source is `1.0.0`
+- [x] Candidate, manual-review, relation, bonus-observation and journal backend tests remain green
+- [x] PyInstaller onedir development verification artifact builds from canonical `.venv`
+- [x] Packaged fresh-profile startup/navigation smoke
+- [x] Packaged artifact excludes source, tests, research and `.venv`
+- [x] `LICENSE`, `THIRD_PARTY_NOTICES.md` and required runtime license files are packaged
+- [x] ICU provenance audit passes with no foreign ICU DLL
+- [x] Native PE audit passes for x64 `.exe`, `.dll` and `.pyd` files
 
-## Required manual report when a gate cannot run
+## Current packaged artifact
 
-Use an explicit status such as:
-
-```text
-MANUAL WINDOWS SMOKE REQUIRED
-```
-
-Do not convert skipped manual work into an automated PASS. The release report
-must separate automated evidence from manual evidence and list every skip.
-
-## Artifact procedure
-
-From a Windows checkout with the canonical environment:
+The verification build is produced by:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
 .\packaging\build-windows.ps1
-Get-ChildItem .\dist\dlsite-organizer-*-windows-x64.zip | Get-FileHash -Algorithm SHA256
 ```
 
-The output zip is a validation/release candidate only until the LICENSE and all
-manual gates are complete. Keep build output under ignored `build/` and `dist/`;
-never include `research/`, local databases, logs, private spreadsheets, or
-development caches.
+It writes `dist\dlsite-organizer\` and a versioned ZIP under ignored build output. The build is a validation artifact only; it is not a release. The About page resolves `LICENSE` and `THIRD_PARTY_NOTICES.md` through the application resource helper, and the dependency license directory is verified before the ZIP is created.
 
-## Current audit status
+## Manual gates pending user acceptance
 
-The source version is now `1.0.0`. The MIT `LICENSE` and runtime third-party
-notices are present. The Qt frozen-DLL blocker is fixed: the minimal sample and
-the full application build without bundled ICU DLLs and pass clean-PATH startup
-smoke. Release builds isolate build-time PATH from unrelated tool runtimes.
+```text
+REAL EXPLORER DRAG/DROP:
+MANUAL REQUIRED
 
-## Recorded release evidence
+REAL EXPLORER MENU CLICK:
+MANUAL REQUIRED
+```
 
-- Qt frozen-DLL root cause: PyInstaller was resolving `icuuc.dll` from the
-  foreign Poppler runtime on the inherited build PATH. The release build now
-  isolates PATH for the canonical Python child process, rejects foreign ICU
-  provenance during Analysis, and audits the final dist before creating ZIP.
-- Minimal Qt sample: build PASS; normal PATH run PASS; clean system PATH run
-  PASS; no `icu*.dll` bundled.
-- 0.10.3 verification artifact: build PASS; fresh-profile MainWindow/navigation
-  smoke PASS; normal PATH launch PASS; clean system PATH restart PASS; no
-  `icu*.dll`, Codex, Poppler, source, tests, research, or `.venv` paths in the
-  artifact. Validation ZIP: `dist/dlsite-organizer-0.10.3-windows-x64.zip`.
-- Approved live lookup smoke `RJ01609020`: PASS. Default automated tests remain
-  offline.
-- Packaged legacy DB gate: PASS in an isolated temporary profile; metadata
-  observations, translation history, manual review, and rename journal rows
-  survived additive upgrade; `bonus_evidence_json = NULL` remained unknown.
-- Packaged rename gate: PASS in an isolated temporary works directory; GUI scan,
-  preview, explicit confirmation, execute, journal verification, Undo, and full
-  filename/content restoration all completed.
-- Final v1.0.0 artifact: fresh-profile startup, MainWindow/navigation, blocked-
-  network startup, restart, and clean exit all PASS. Startup log reported
-  `v1.0.0`; final ZIP checksum is recorded above.
-- Release scope stops at `1.0.0`; no v1.1 work is included.
+The automated `--quick-rename` boundary and HKCU register/update/remove checks are covered; the two gates above require the user's real desktop Explorer because the connected automation environment does not share the host Explorer registry/session.
+
+Before release, also perform the visible GUI walkthrough:
+
+```text
+启动 → 整理 → 查询 → 设置 → 关于
+→ 完整模式 / 轻量模式 → clean exit → restart
+```
+
+Verify real lookup examples `RJ01609020`, `RJ01636949` and `RJ01637033`, preview-before-mutation in full mode, immediate safe rename in lightweight mode, Undo, About resources, and Explorer integration wording.
+
+## Git and release status
+
+- Branch: `codex/bootstrap-v0.1`
+- Phase E must be an independent commit.
+- `v1.0.0` tag: absent until explicitly authorized after user acceptance.
+- Push, GitHub Release, upload and auto-updater: not performed.

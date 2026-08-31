@@ -410,7 +410,7 @@ def _preflight(
         if _path_key(target.parent, case_insensitive) != _path_key(root, case_insensitive):
             add(index, 'target 不是 Organizer root 下的直接子目录。')
         if _path_key(source, case_insensitive) == _path_key(target, case_insensitive):
-            add(index, 'case-only 或相同路径 rename 在 v0.4 中被拒绝。')
+            add(index, '相同路径或仅大小写不同的目录名不执行重命名。')
         if _link_like(source):
             add(index, 'source 是 symlink/junction，已拒绝。')
         elif not _lexists(source):

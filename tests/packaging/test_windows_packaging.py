@@ -80,3 +80,57 @@ def test_audit_distribution_accepts_no_icu_bundle(tmp_path: Path) -> None:
     provenance.write_text(json.dumps({"format": 1, "entries": []}), encoding="utf-8")
 
     assert windows_packaging.audit_distribution(distribution, provenance) == []
+
+
+def test_audit_packaged_resources_requires_application_and_runtime_licenses(
+    tmp_path: Path,
+) -> None:
+    distribution = tmp_path / "dist"
+    internal = distribution / "_internal"
+    internal.mkdir(parents=True)
+    (internal / "LICENSE").write_text("MIT", encoding="utf-8")
+    (internal / "THIRD_PARTY_NOTICES.md").write_text("notices", encoding="utf-8")
+    license_root = distribution / "licenses"
+    for name in windows_packaging.REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS:
+        package_dir = license_root / f"{name}-1.0.dist-info"
+        package_dir.mkdir(parents=True)
+        (package_dir / "LICENSE").write_text(name, encoding="utf-8")
+
+    resources = windows_packaging.audit_packaged_resources(distribution)
+
+    assert internal / "LICENSE" in resources
+    assert license_root / "httpx-1.0.dist-info" / "LICENSE" in resources
+
+
+def test_audit_packaged_resources_rejects_missing_runtime_license(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    internal = distribution / "_internal"
+    internal.mkdir(parents=True)
+    (internal / "LICENSE").write_text("MIT", encoding="utf-8")
+    (internal / "THIRD_PARTY_NOTICES.md").write_text("notices", encoding="utf-8")
+    (distribution / "licenses").mkdir()
+
+    with pytest.raises(FileNotFoundError, match="third-party license directory missing"):
+        windows_packaging.audit_packaged_resources(distribution)
+
+
+def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(
+    tmp_path: Path,
+) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+
+    x64 = bytearray(256)
+    x64[:2] = b"MZ"
+    x64[0x3C:0x40] = (128).to_bytes(4, "little")
+    x64[128:132] = b"PE\0\0"
+    x64[132:134] = (0x8664).to_bytes(2, "little")
+    (distribution / "ok.dll").write_bytes(x64)
+
+    assert windows_packaging.audit_native_binaries(distribution) == (distribution / "ok.dll",)
+
+    x86 = bytearray(x64)
+    x86[132:134] = (0x014C).to_bytes(2, "little")
+    (distribution / "wrong.pyd").write_bytes(x86)
+    with pytest.raises(RuntimeError, match="not x64"):
+        windows_packaging.audit_native_binaries(distribution)

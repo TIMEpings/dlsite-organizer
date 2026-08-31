@@ -1,9 +1,8 @@
-"""Complete v0.2 manual RJcode lookup page."""
+"""Public RJcode lookup page."""
 
 from __future__ import annotations
 # ruff: noqa
 
-from dataclasses import replace
 from typing import cast
 
 from PySide6.QtCore import Qt, QThread, Slot
@@ -24,14 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer.domain.relation import RelationType, TranslationRole
-from dlsite_organizer.domain.manual_review import ManualReviewEvent, canonical_pair
 from dlsite_organizer.domain.work import AgeCategory, TranslationAttribution, WorkLanguage
-from dlsite_organizer.domain.candidate import (
-    CandidateEvidenceKind,
-    CandidateSearchResult,
-    CandidateSearchState,
-    CandidateSnapshotSource,
-)
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupFreshness, LookupResult, LookupService
 from dlsite_organizer.services.translation_relations import (
@@ -39,7 +31,6 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysisStatus,
 )
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
-from dlsite_organizer.ui.manual_review_dialog import open_manual_review_dialog
 
 
 class LookupPage(QWidget):
@@ -135,12 +126,12 @@ class LookupPage(QWidget):
         form.addRow("标题", self.title_value)
         form.addRow("社团", self.maker_value)
         form.addRow("社团编号", self.maker_id_value)
-        form.addRow("发售日期", self.release_value)
         form.addRow("系列", self.series_value)
         form.addRow("CV", self.cvs_value)
         form.addRow("标签", self.tags_value)
-        form.addRow("作品语言", self.language_value)
+        form.addRow("语言", self.language_value)
         form.addRow("年龄分级", self.age_value)
+        form.addRow("发售日期", self.release_value)
         details.addLayout(form)
         details.addStretch(1)
         result_layout.addLayout(details, 1)
@@ -163,6 +154,7 @@ class LookupPage(QWidget):
         layout.addLayout(output_row)
 
         relation_frame = QFrame()
+        self.relation_frame = relation_frame
         relation_frame.setObjectName("relationCard")
         relation_layout = QVBoxLayout(relation_frame)
         relation_layout.setContentsMargins(22, 18, 22, 18)
@@ -187,19 +179,12 @@ class LookupPage(QWidget):
         relation_layout.addLayout(relation_form)
         self.relation_details_value = _value_label()
         relation_layout.addWidget(self.relation_details_value)
-        relation_layout.addWidget(QLabel("历史已确认关系"))
+        relation_layout.addWidget(QLabel("历史确认关系"))
         self.historical_relations_value = _value_label()
         relation_layout.addWidget(self.historical_relations_value)
-        relation_layout.addWidget(QLabel("候选关系（非确认）"))
-        self.candidate_relations_value = _value_label()
-        relation_layout.addWidget(self.candidate_relations_value)
-        relation_layout.addWidget(QLabel("人工确认关系"))
-        self.manual_relations_value = _value_label()
-        relation_layout.addWidget(self.manual_relations_value)
-        self.review_buttons = QVBoxLayout()
-        relation_layout.addLayout(self.review_buttons)
         layout.addWidget(relation_frame)
         self._clear_relations()
+        relation_frame.setVisible(False)
         scroll_area.setWidget(content)
         page_layout.addWidget(scroll_area)
 
@@ -284,7 +269,6 @@ class LookupPage(QWidget):
         self._show_relations(
             result.translation,
             result.historical_relations,
-            result.candidate_relations,
             result.translation_attribution,
         )
         self.status_label.setProperty("state", "success")
@@ -366,14 +350,27 @@ class LookupPage(QWidget):
         self,
         analysis: TranslationAnalysis,
         historical=None,
-        candidates: CandidateSearchResult | None = None,
         attribution: TranslationAttribution | None = None,
     ) -> None:
-        """Render application-level relation facts without reading provider DTOs."""
+        """Render only explicit and historical confirmed relation facts."""
+        has_historical = bool(
+            historical is not None and (historical.outgoing or historical.incoming)
+        )
+        has_current = bool(
+            analysis.relations
+            or analysis.role is not None
+            or analysis.language
+            or attribution is not None
+            or analysis.status in {
+                TranslationAnalysisStatus.INVALID,
+                TranslationAnalysisStatus.INCOMPLETE,
+            }
+        )
+        self.relation_frame.setVisible(has_current or has_historical)
         self.relation_role_value.setText(_role_label(analysis.role))
         has_translation_info = analysis.status is not TranslationAnalysisStatus.NO_INFORMATION
         self.relation_source_value.setText(
-            "DLsite translation_info" if has_translation_info else "—"
+            "DLsite 明确提供" if has_translation_info else "—"
         )
         self.relation_confidence_value.setText(_confidence_label(analysis.status))
         self.relation_language_value.setText(analysis.language or "—")
@@ -384,13 +381,13 @@ class LookupPage(QWidget):
             for relation in analysis.relations
         ]
         if analysis.status is TranslationAnalysisStatus.NO_INFORMATION:
-            message = "未发现 DLsite 明确的翻译关系信息"
+            message = "作品关系：未发现明确关系"
         elif analysis.status is TranslationAnalysisStatus.INVALID:
-            message = "DLsite translation_info 存在矛盾，未生成不安全的关系。"
+            message = "DLsite 关系信息存在矛盾，未生成不安全的关系。"
         elif analysis.status is TranslationAnalysisStatus.INCOMPLETE:
-            message = "DLsite translation_info 不完整；仅显示已明确且安全的关系。"
+            message = "DLsite 关系信息不完整；仅显示已明确且安全的关系。"
         elif not relation_lines:
-            message = "当前 response 未列出具体的关联 RJcode。"
+            message = "当前响应未列出具体的关联 RJcode。"
         else:
             message = "\n".join(relation_lines)
         self.relation_details_value.setText(message)
@@ -400,135 +397,9 @@ class LookupPage(QWidget):
             lines = [f"传出：{r.target_workno} · {_relation_label(r.relation_type)} · 首次 {r.first_seen.date()} · 最近 {r.last_seen.date()} · {r.observation_count} 次" for r in historical.outgoing]
             lines += [f"传入：{r.subject_workno} · {_relation_label(r.relation_type)} · 首次 {r.first_seen.date()} · 最近 {r.last_seen.date()} · {r.observation_count} 次" for r in historical.incoming]
             self.historical_relations_value.setText("\n".join(lines))
-        self._show_candidates(candidates)
-        self._show_manual_reviews(getattr(self, "_current_result", None))
-
-    def _show_candidates(self, result: CandidateSearchResult | None) -> None:
-        self._clear_review_buttons()
-        if result is None:
-            self.candidate_relations_value.setText("候选发现不可用（未配置本地元数据）")
-            return
-        if result.state is CandidateSearchState.INSUFFICIENT_METADATA:
-            self.candidate_relations_value.setText("无法生成候选：源作品缺少可比较的社团身份")
-            return
-        if result.state is CandidateSearchState.NONE:
-            self.candidate_relations_value.setText(
-                "当前本地元数据中暂无符合筛选条件的关联作品候选"
-            )
-            return
-        if not result.candidates:
-            self.candidate_relations_value.setText("候选结果为空")
-            return
-        lines: list[str] = []
-        for candidate in result.candidates:
-            title = candidate.target_snapshot.title if candidate.target_snapshot else ""
-            distance = next(
-                (e.value for e in candidate.supporting_evidence if e.kind.value == "rj_numeric_distance"),
-                None,
-            )
-            label = f"{candidate.target_workno}"
-            if title:
-                label += f" {title}"
-            if distance is not None:
-                label += f" — RJ 编号距离：{distance}"
-            if candidate.target_snapshot is not None and (
-                candidate.target_snapshot.source is CandidateSnapshotSource.HISTORICAL_OBSERVATION
-            ):
-                label += " · 本地历史元数据"
-            group_size = next(
-                (
-                    e.value
-                    for e in candidate.context
-                    if e.kind is CandidateEvidenceKind.LOCAL_MAKER_DAY_GROUP_SIZE
-                ),
-                None,
-            )
-            if group_size is not None:
-                label += f" · 本地已知同社团同日作品数：{group_size}"
-            review = self._latest_manual_review(
-                candidate.source_workno, candidate.target_workno
-            )
-            if review is not None and review.outcome.value == "related":
-                continue
-            if review is not None:
-                label += {
-                    "not_related": " · 人工已否决",
-                    "unsure": " · 人工判断：不确定",
-                }.get(review.outcome.value, "")
-            lines.append(label)
-            button = QPushButton(f"Review {candidate.target_workno}")
-            button.clicked.connect(lambda _checked=False, c=candidate: self._open_review_dialog(c))
-            self.review_buttons.addWidget(button)
-        if result.truncated:
-            lines.append(f"（仅显示 {len(result.candidates)}/{result.total_candidate_count} 项）")
-        lines.append("根据本地元数据筛选，仅供检查，不代表 DLsite 已确认关系。")
-        self.candidate_relations_value.setText("\n".join(lines))
-
-    def _show_manual_reviews(self, result: LookupResult | None) -> None:
-        if result is None or not result.manual_reviews:
-            self.manual_relations_value.setText("暂无人工确认关系")
-            return
-        latest: dict[tuple[str, str], ManualReviewEvent] = {}
-        for review in result.manual_reviews:
-            pair = (review.workno_a, review.workno_b)
-            previous = latest.get(pair)
-            if previous is None or (review.reviewed_at, review.id or -1) >= (
-                previous.reviewed_at,
-                previous.id or -1,
-            ):
-                latest[pair] = review
-        lines = []
-        for review in latest.values():
-            if review.outcome.value != "related":
-                continue
-            relation = review.relation_type.value if review.relation_type else "unknown"
-            direction = f"（{review.subject_workno} → {review.target_workno}）" if review.subject_workno else ""
-            lines.append(f"{review.workno_a} / {review.workno_b}：人工确认 · {relation}{direction}")
-        self.manual_relations_value.setText("\n".join(lines) if lines else "暂无人工确认关系")
-
-    def _latest_manual_review(self, workno_a: str, workno_b: str) -> ManualReviewEvent | None:
-        reviews: list[ManualReviewEvent] = []
-        current = getattr(self, "_current_result", None)
-        if current is not None:
-            pair = canonical_pair(workno_a, workno_b)
-            reviews.extend(
-                review
-                for review in current.manual_reviews
-                if (review.workno_a, review.workno_b) == pair
-            )
-        service = self._lookup_service.manual_review_service
-        if service is not None:
-            review = service.latest_review_for_pair(workno_a, workno_b)
-            if review is not None:
-                reviews.append(review)
-        return max(reviews, key=lambda item: (item.reviewed_at, item.id or -1), default=None)
-
-    def _clear_review_buttons(self) -> None:
-        while self.review_buttons.count():
-            item = self.review_buttons.takeAt(0)
-            widget = item.widget()  # pyright: ignore[reportOptionalMemberAccess]
-            if widget is not None:  # pyright: ignore[reportOptionalMemberAccess]
-                widget.deleteLater()
-
-    def _open_review_dialog(self, candidate) -> None:
-        if open_manual_review_dialog(
-            self,
-            self._lookup_service.manual_review_service,
-            candidate,
-        ):
-            current = getattr(self, "_current_result", None)
-            service = self._lookup_service.manual_review_service
-            if current is not None and service is not None:
-                refreshed = replace(
-                    current,
-                    manual_reviews=service.reviews_for_work(candidate.source_workno),
-                )
-                self._current_result = refreshed
-                self._show_candidates(refreshed.candidate_relations)
-                self._show_manual_reviews(refreshed)
-            self.status_label.setText("人工 review 已保存")
 
     def _clear_relations(self) -> None:
+        self.relation_frame.setVisible(False)
         self.relation_role_value.setText("—")
         self.relation_source_value.setText("—")
         self.relation_confidence_value.setText("—")
@@ -536,9 +407,6 @@ class LookupPage(QWidget):
         self.relation_attribution_value.setText("—")
         self.relation_details_value.setText("—")
         self.historical_relations_value.setText("—")
-        self.candidate_relations_value.setText("—")
-        self.manual_relations_value.setText("—")
-        self._clear_review_buttons()
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
@@ -558,8 +426,8 @@ def _role_label(role: TranslationRole | None) -> str:
         return "—"
     return {
         TranslationRole.ORIGINAL: "原作品",
-        TranslationRole.TRANSLATION_PARENT: "翻译作品 Parent",
-        TranslationRole.TRANSLATION_CHILD: "翻译作品 Child",
+        TranslationRole.TRANSLATION_PARENT: "翻译父条目",
+        TranslationRole.TRANSLATION_CHILD: "翻译子条目",
     }[role]
 
 
@@ -619,6 +487,6 @@ def _attribution_label(value: TranslationAttribution | None) -> str:
 def _relation_label(relation_type: RelationType) -> str:
     return {
         RelationType.TRANSLATION_OF: "翻译原作",
-        RelationType.HAS_TRANSLATION_CHILD: "翻译子作品",
-        RelationType.CHILD_OF_TRANSLATION: "所属翻译 Parent",
+        RelationType.HAS_TRANSLATION_CHILD: "翻译子条目",
+        RelationType.CHILD_OF_TRANSLATION: "翻译父条目",
     }.get(relation_type, relation_type.value)

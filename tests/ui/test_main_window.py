@@ -2,6 +2,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 
+from dlsite_organizer import __version__
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
@@ -22,8 +23,25 @@ def test_main_window_exposes_organizer_page_without_running_filesystem_work(
     lookup_service = LookupService(FakeProvider(), NamingService())
     window = MainWindow(lookup_service, CoverService())
 
-    assert window.navigation_list.item(0).text() == "整理"
+    assert [
+        window.navigation_list.item(index).text()
+        for index in range(window.navigation_list.count())
+    ] == ["整理", "查询", "设置", "关于"]
     assert window.pages.widget(0) is window.organizer_page
     assert window.organizer_page.table.rowCount() == 0
     assert not window.organizer_page.is_busy()
+    assert window.navigation_list.currentRow() == window.page_indices["organizer"]
+    assert window.about_page.version_value.text() == f"v{__version__}"
+    window.close()
+
+
+def test_main_window_lightweight_settings_selects_settings_page(
+    qapp: QApplication,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+
+    window.show_settings_page()
+
+    assert window.navigation_list.currentRow() == window.page_indices["settings"]
+    assert window.pages.currentWidget() is window.settings_page
     window.close()

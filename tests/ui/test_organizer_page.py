@@ -48,11 +48,11 @@ def test_organizer_page_initializes_and_renders_preview(qapp: QApplication, tmp_
     current_item = cast(QTableWidgetItem, page.table.item(0, 1))
     code_item = cast(QTableWidgetItem, page.table.item(0, 2))
     proposed_item = cast(QTableWidgetItem, page.table.item(0, 5))
-    assert status_item.text() == "READY"
+    assert status_item.text() == "可执行"
     assert current_item.text() == "old RJ01609020"
     assert code_item.text() == "RJ01609020"
     assert proposed_item.text() == "[Circle][RJ01609020] Preview Title"
-    assert "Ready 1" in page.summary_label.text()
+    assert "可执行 1" in page.summary_label.text()
     assert page.status_label.text() == "预览生成完成；未修改本地文件。"
     assert sorted(path.name for path in tmp_path.iterdir()) == before
     page.close()
@@ -120,7 +120,7 @@ def test_organizer_page_disables_execute_without_journal_and_marks_stale_after_a
     assert page.preview_stale
     assert not page.execute_button.isEnabled()
     assert not page.table.isEnabled()
-    assert 'stale' in page.summary_label.text().lower()
+    assert "预览已失效" in page.summary_label.text()
     page.close()
 
 

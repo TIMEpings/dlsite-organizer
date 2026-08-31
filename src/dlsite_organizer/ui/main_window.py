@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
@@ -28,14 +30,23 @@ from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_planner import RenamePlanner
 from dlsite_organizer.services.undo_service import UndoService
+from dlsite_organizer.ui.pages.about_page import AboutPage
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
-from dlsite_organizer.ui.pages.review_queue_page import ReviewQueuePage
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
 
 
+class MainPage(StrEnum):
+    """Stable identities for the four public pages."""
+
+    ORGANIZER = "organizer"
+    LOOKUP = "lookup"
+    SETTINGS = "settings"
+    ABOUT = "about"
+
+
 class MainWindow(QMainWindow):
-    """Host the organizer preview, lookup page, and honest future placeholders."""
+    """Host the four public pages of the full application."""
 
     lightweight_requested = Signal()
 
@@ -55,6 +66,10 @@ class MainWindow(QMainWindow):
         self._lookup_service = lookup_service
         self._settings_service = settings_service or SettingsService(AppSettings())
         self._quick_rename_service = quick_rename_service
+        # Kept in the constructor for callers from the research-era shell.
+        # Candidate services remain backend capabilities but are intentionally
+        # not mounted in the public application navigation.
+        self._candidate_review_queue_service = candidate_review_queue_service
         self.setWindowTitle("DLsite Organizer")
         self.resize(1080, 760)
         self.setMinimumSize(860, 640)
@@ -98,35 +113,26 @@ class MainWindow(QMainWindow):
             undo_service=undo_service,
             drop_input_service=DropInputService(),
         )
-        self.review_queue_page = ReviewQueuePage(
-            candidate_review_queue_service,
-            lookup_service.manual_review_service,
-            cover_service,
-        )
         self.settings_page = SettingsPage(
             self._settings_service,
             explorer_integration_service=explorer_integration_service,
         )
+        self.about_page = AboutPage()
         self._settings_service.subscribe(self._settings_saved)
-        page_definitions = [
-            ("整理", self.organizer_page),
-            ("查询", self.lookup_page),
-            ("候选审阅", self.review_queue_page),
-            (
-                "关系",
-                _placeholder(
-                    "关系",
-                    "请在“查询”页输入 RJcode，确认的翻译关系会显示在作品信息下方。",
-                ),
-            ),
-            ("设置", self.settings_page),
-        ]
-        for label, page in page_definitions:
+        page_definitions = (
+            (MainPage.ORGANIZER, "整理", self.organizer_page),
+            (MainPage.LOOKUP, "查询", self.lookup_page),
+            (MainPage.SETTINGS, "设置", self.settings_page),
+            (MainPage.ABOUT, "关于", self.about_page),
+        )
+        self.page_indices: dict[str, int] = {}
+        for index, (page_key, label, page) in enumerate(page_definitions):
+            self.page_indices[page_key.value] = index
             self.navigation_list.addItem(QListWidgetItem(label))
             self.pages.addWidget(page)
 
         self.navigation_list.currentRowChanged.connect(self.pages.setCurrentIndex)
-        self.navigation_list.setCurrentRow(1)
+        self.navigation_list.setCurrentRow(self.page_indices[MainPage.ORGANIZER.value])
         shell.addWidget(navigation)
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
@@ -143,7 +149,7 @@ class MainWindow(QMainWindow):
     def show_settings_page(self) -> None:
         """Select the shared Settings page for the lightweight settings action."""
         self.settings_page.refresh_explorer_registration()
-        self.navigation_list.setCurrentRow(self.navigation_list.count() - 1)
+        self.navigation_list.setCurrentRow(self.page_indices[MainPage.SETTINGS.value])
 
     def is_busy(self) -> bool:
         """Return whether any full-mode background operation is active."""
@@ -163,20 +169,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再退出。")
             return
         event.accept()
-
-
-def _placeholder(title: str, message: str) -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(40, 36, 40, 36)
-    heading = QLabel(title)
-    heading.setObjectName("pageTitle")
-    description = QLabel(message)
-    description.setObjectName("pageDescription")
-    layout.addWidget(heading)
-    layout.addWidget(description)
-    layout.addStretch(1)
-    return page
 
 
 _STYLE = """

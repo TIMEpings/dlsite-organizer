@@ -116,6 +116,11 @@ try {
         "--dist", $distribution,
         "--provenance", $provenance
     )
+    Invoke-IsolatedPython @(
+        $packagingHelper,
+        "audit-native",
+        "--dist", $distribution
+    )
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath $archive -Force
     }
@@ -155,6 +160,11 @@ try {
             }
         }
     }
+    Invoke-IsolatedPython @(
+        $packagingHelper,
+        "audit-resources",
+        "--dist", $distribution
+    )
     Compress-Archive -Path (Join-Path $distribution "*") -DestinationPath $archive
     Get-FileHash -Algorithm SHA256 -LiteralPath $archive
     Write-Output "Windows distribution: $archive"
