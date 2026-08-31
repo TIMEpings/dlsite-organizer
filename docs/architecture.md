@@ -115,9 +115,10 @@ illegal-character replacement symbol are settings. Reserved Windows device names
 dot/space protection remain in the shared sanitizer.
 
 When Settings saves successfully, `MainWindow` updates the existing NamingService, LookupService,
-provider timeout/locale, and cache policy without restarting. An existing Organizer preview is
-marked stale and execution remains disabled until a new scan creates a plan with the new naming
-configuration.
+provider timeout/locale, and cache policy without restarting. Only changes to settings that can
+alter generated directory names mark an existing Organizer preview stale; execution remains
+disabled until a new scan creates a plan with the new naming configuration. Provider timeout and
+cache-policy-only saves do not invalidate an otherwise unchanged preview.
 
 ## Organizer flow
 
@@ -153,7 +154,9 @@ using the shared normalized Windows path identity. Delete and clear only change 
 they never touch the filesystem or journal. Execution reads the collection's current plans, so a
 removed row cannot be executed. A drop result is committed atomically only after successful worker
 completion; cancellation or failure preserves the previous collection. A stale collection caused by
-naming-setting changes rejects new append drops until it is rescanned or cleared.
+naming-setting changes rejects new append drops until it is rescanned or cleared. A filesystem
+mutation from execution, undo, or the shared mutation-history signal uses a distinct filesystem
+stale reason; mode switches and show events do not create settings staleness.
 
 Plan status presentation is UI-only. Existing `RenamePlanStatus` values are grouped as normal
 (`READY`, `UNCHANGED` without warnings), warning (plan warnings or `CANCELLED`), or blocked/error

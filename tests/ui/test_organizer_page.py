@@ -22,10 +22,10 @@ from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.rename_journal import TransactionJournal, UnavailableRenameJournal
 from dlsite_organizer.services.lookup import LookupFreshness, LookupResult
-from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
-from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
+from dlsite_organizer.ui.pages.organizer_page import OrganizerPage, PreviewStaleReason
 
 
 class FakeLookupService:
@@ -429,6 +429,7 @@ def test_organizer_page_shows_recent_transaction_and_disables_undo_after_success
     page._show_execution_result(execution)
 
     assert page.preview_stale
+    assert page.preview_stale_reason is PreviewStaleReason.FILESYSTEM_CHANGED
     assert page.undo_button.isEnabled()
     assert '可撤销：1' in page.recent_transaction_label.text()
 
@@ -436,6 +437,8 @@ def test_organizer_page_shows_recent_transaction_and_disables_undo_after_success
     page._show_undo_result(undone)
 
     assert undone.status is TransactionStatus.UNDONE
+    assert page.preview_stale
+    assert page.preview_stale_reason is PreviewStaleReason.FILESYSTEM_CHANGED
     assert not page.undo_button.isEnabled()
     assert (tmp_path / 'old RJ01609020').exists()
     page.close()
@@ -786,6 +789,7 @@ def test_stale_preview_rejects_append_but_can_be_cleared(
     page.set_preview(service.preview_paths(tmp_path, (first,)))
     page.invalidate_preview()
 
+    assert page.preview_stale_reason is PreviewStaleReason.SETTINGS_CHANGED
     page._handle_drop_paths((second,))
     assert not page.is_busy()
     assert page.preview is not None
@@ -794,8 +798,77 @@ def test_stale_preview_rejects_append_but_can_be_cleared(
     assert page.clear_button.isEnabled()
 
     page.clear_button.click()
+    assert page.preview is None
+    assert not page.preview_stale
+    assert page.preview_stale_reason is None
     page._handle_drop_paths((second,))
     _wait_for_scan_idle(qapp, page)
-    assert page.preview is not None
-    assert [plan.source_path for plan in page.preview.plans] == [second]
+    preview = cast(OrganizerPreview, page.preview)
+    assert [plan.source_path for plan in preview.plans] == [second]
     page.close()
+
+
+def test_empty_preview_resets_settings_stale_and_accepts_new_root_drop(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    empty_root = tmp_path / "empty"
+    empty_root.mkdir()
+    new_root = tmp_path / "new"
+    source = new_root / "old RJ01609020"
+    source.mkdir(parents=True)
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_root_path(empty_root)
+    page.set_preview(service.preview(empty_root))
+    page.invalidate_preview()
+
+    try:
+        assert page.preview is not None
+        assert not page.preview.plans
+        assert not page.preview_stale
+        assert page.preview_stale_reason is None
+
+        page._handle_drop_paths((source,))
+        _wait_for_scan_idle(qapp, page)
+
+        assert page.preview is not None
+        assert page.preview.root_path == new_root.absolute()
+        assert [plan.source_path for plan in page.preview.plans] == [source.absolute()]
+        assert not page.preview_stale
+        assert page.preview_stale_reason is None
+    finally:
+        page.close()
+
+
+def test_stale_preview_explicit_scan_replaces_and_allows_later_append(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    first = tmp_path / "old RJ01609020"
+    second = tmp_path / "old RJ01636949"
+    third = tmp_path / "old RJ01637033"
+    for source in (first, second, third):
+        source.mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_root_path(tmp_path)
+    page.set_preview(service.preview_paths(tmp_path, (first,)))
+    page.invalidate_preview()
+
+    try:
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+
+        assert page.preview is not None
+        assert not page.preview_stale
+        assert page.preview_stale_reason is None
+        assert [plan.source_path for plan in page.preview.plans] == [
+            first.absolute(),
+            second.absolute(),
+            third.absolute(),
+        ]
+        page._handle_drop_paths((third,))
+        _wait_for_scan_idle(qapp, page)
+        assert page.preview is not None
+        assert not page.preview_stale
+    finally:
+        page.close()

@@ -11,6 +11,7 @@ from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.ui.main_window import MainWindow
+from dlsite_organizer.ui.pages.organizer_page import PreviewStaleReason
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
 
 
@@ -132,8 +133,38 @@ def test_settings_page_save_writes_config_and_main_window_invalidates_preview(
 
     assert load_settings(config_path).naming_template == "{title}"
     assert window.organizer_page.preview_stale
+    assert window.organizer_page.preview_stale_reason is PreviewStaleReason.SETTINGS_CHANGED
     assert window.settings_page.settings_status_label.text().startswith("设置已保存")
     window.close()
+
+
+def test_settings_save_without_naming_change_keeps_preview_fresh(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    settings_service = SettingsService(
+        AppSettings(database_path=tmp_path / "metadata.sqlite3"),
+        config_path=tmp_path / "config.toml",
+    )
+    lookup = LookupService(FakeProvider(), NamingService())
+    organizer = OrganizerService(lookup)
+    window = MainWindow(
+        lookup,
+        CoverService(),
+        organizer_service=organizer,
+        settings_service=settings_service,
+    )
+    root = tmp_path / "works"
+    root.mkdir()
+    (root / "old RJ01234567").mkdir()
+    window.organizer_page.set_preview(organizer.preview(root))
+
+    try:
+        window.settings_page.save_settings()
+
+        assert not window.organizer_page.preview_stale
+        assert window.organizer_page.preview_stale_reason is None
+    finally:
+        window.close()
 
 
 def test_reset_defaults_requires_confirmation_and_does_not_write(

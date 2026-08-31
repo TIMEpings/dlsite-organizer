@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -17,12 +18,13 @@ from dlsite_organizer.persistence.rename_journal import TransactionJournal
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupResult, LookupService
 from dlsite_organizer.services.naming import NamingService
-from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerService
 from dlsite_organizer.services.quick_rename import QuickRenameService, QuickRenameStatus
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.lightweight_window import LightweightWindow
 from dlsite_organizer.ui.main_window import MainWindow
+from dlsite_organizer.ui.pages.organizer_page import PreviewStaleReason
 
 
 class FakeOrganizerLookup:
@@ -156,6 +158,70 @@ def test_quick_rename_then_full_mode_undo_needs_no_restart(
         assert not target.exists()
         assert full.organizer_page._last_undo_result is not None
         assert full.organizer_page._last_undo_result.status is TransactionStatus.UNDONE
+        assert full.organizer_page.preview is None
+        assert not full.organizer_page.preview_stale
+        assert full.organizer_page.preview_stale_reason is None
+
+        # This is the reported regression: with no full-mode preview, a
+        # successful undo must not turn the next valid drop into a settings
+        # stale rejection.
+        full.organizer_page._handle_drop_paths((source,))
+        assert full.organizer_page.is_busy()
+        _wait_for(qapp, lambda: not full.organizer_page.is_busy())
+
+        preview = cast(OrganizerPreview, full.organizer_page.preview)
+        assert [plan.source_path for plan in preview.plans] == [source]
+        assert not full.organizer_page.preview_stale
+        assert "设置变化失效" not in full.organizer_page.status_label.text()
+    finally:
+        full.close()
+        lightweight.close()
+        database.dispose()
+
+
+def test_existing_full_preview_becomes_filesystem_stale_after_quick_undo(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database, _journal, _signals, full, lightweight = _windows(tmp_path)
+    _connect_mode_switch(full, lightweight)
+    source = tmp_path / "RJ01609020 old"
+    source.mkdir()
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    try:
+        full.show()
+        organizer = full.organizer_page
+        organizer.set_root_path(tmp_path)
+        organizer.set_preview(organizer._organizer_service.preview(tmp_path))
+        assert not organizer.preview_stale
+
+        full.lightweight_button.click()
+        _wait_for(qapp, lambda: lightweight.isVisible() and not full.isVisible())
+        lightweight.start_quick_rename(source)
+        _wait_for(qapp, lambda: lightweight._last_result is not None and not lightweight.is_busy())
+        assert lightweight._last_result is not None
+        assert lightweight._last_result.status is QuickRenameStatus.SUCCESS
+
+        lightweight.undo_recent()
+        _wait_for(qapp, lambda: not lightweight.is_busy())
+        assert source.is_dir()
+
+        lightweight.full_mode_button.click()
+        _wait_for(qapp, lambda: full.isVisible() and not lightweight.isVisible())
+
+        assert organizer.preview is not None
+        assert organizer.preview_stale
+        assert organizer.preview_stale_reason is PreviewStaleReason.FILESYSTEM_CHANGED
+        assert "设置变化失效" not in organizer.status_label.text()
+        organizer._handle_drop_paths((source,))
+        assert "文件系统变化失效" in organizer.status_label.text()
     finally:
         full.close()
         lightweight.close()

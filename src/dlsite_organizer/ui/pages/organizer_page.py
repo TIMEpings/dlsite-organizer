@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStyle,
     QTableWidget,
     QTableWidgetItem,
@@ -65,6 +66,13 @@ class _StatusPresentation(StrEnum):
     BLOCKED = "blocked"
 
 
+class PreviewStaleReason(StrEnum):
+    """Why the current organizer preview can no longer be used safely."""
+
+    SETTINGS_CHANGED = "settings_changed"
+    FILESYSTEM_CHANGED = "filesystem_changed"
+
+
 class OrganizerPage(QWidget):
     """Present scan results and expose explicit rename and undo actions."""
 
@@ -89,6 +97,7 @@ class OrganizerPage(QWidget):
         self._action_worker: RenameActionWorker | None = None
         self._preview: OrganizerPreview | None = None
         self._preview_stale = False
+        self._preview_stale_reason: PreviewStaleReason | None = None
         self._scan_mode = _ScanMode.REPLACE
         self._next_scan_mode = _ScanMode.REPLACE
         self._last_execution_result: RenameExecutionResult | None = None
@@ -187,12 +196,21 @@ class OrganizerPage(QWidget):
         self.table.setWordWrap(True)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.table.setMinimumHeight(260)
         layout.addWidget(self.table, 1)
 
+        self.footer = QWidget()
+        self.footer.setObjectName("organizerFooter")
+        footer_layout = QVBoxLayout(self.footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(14)
         self.summary_label = QLabel("尚未生成预览。")
         self.summary_label.setObjectName("pageDescription")
-        layout.addWidget(self.summary_label)
+        footer_layout.addWidget(self.summary_label)
         recent_row = QHBoxLayout()
         self.recent_transaction_label = QLabel("最近一次重命名：无")
         self.recent_transaction_label.setObjectName("pageDescription")
@@ -202,7 +220,8 @@ class OrganizerPage(QWidget):
         self.undo_button.setEnabled(False)
         recent_row.addWidget(self.recent_transaction_label, 1)
         recent_row.addWidget(self.undo_button)
-        layout.addLayout(recent_row)
+        footer_layout.addLayout(recent_row)
+        layout.addWidget(self.footer)
 
     @Slot()
     def choose_root(self) -> None:
@@ -314,7 +333,10 @@ class OrganizerPage(QWidget):
         if self._thread is not None:
             return
         if self._preview_stale:
-            self._show_error("当前预览已因设置变化失效；请先重新扫描或清空后再拖放。")
+            if self._preview_stale_reason is PreviewStaleReason.SETTINGS_CHANGED:
+                self._show_error("当前预览已因设置变化失效；请先重新扫描或清空后再拖放。")
+            else:
+                self._show_error("当前预览已因文件系统变化失效；请先重新扫描或清空后再拖放。")
             return
         paths = tuple(cast(Sequence[Path | str], value))
         try:
@@ -322,7 +344,8 @@ class OrganizerPage(QWidget):
         except DropInputError as exc:
             self._show_error(exc.user_message)
             return
-        if self._preview is not None and normalized_path_identity(
+        has_existing_preview = self._has_preview_content()
+        if self._preview is not None and has_existing_preview and normalized_path_identity(
             self._preview.root_path
         ) != normalized_path_identity(selection.root_path):
             self._show_error("追加预览必须来自当前预览的同一作品根目录。")
@@ -330,7 +353,7 @@ class OrganizerPage(QWidget):
         self.set_root_path(selection.root_path)
         # Keep start_scan compatible with existing callers while making this
         # drop explicitly append/merge instead of replacing the preview.
-        self._next_scan_mode = _ScanMode.APPEND
+        self._next_scan_mode = _ScanMode.APPEND if has_existing_preview else _ScanMode.REPLACE
         try:
             self.start_scan(selection.selected_paths)
         finally:
@@ -429,10 +452,13 @@ class OrganizerPage(QWidget):
     def preview_stale(self) -> bool:
         return self._preview_stale
 
+    @property
+    def preview_stale_reason(self) -> PreviewStaleReason | None:
+        return self._preview_stale_reason
+
     def invalidate_preview(self) -> None:
         """Invalidate an existing preview after a naming-settings change."""
-        if self._preview is not None:
-            self._invalidate_preview()
+        self._invalidate_preview(PreviewStaleReason.SETTINGS_CHANGED)
 
     def apply_settings(self, settings: object) -> None:
         """Apply validated settings to the organizer's next preview."""
@@ -449,6 +475,13 @@ class OrganizerPage(QWidget):
 
     def refresh_mutation_state(self) -> None:
         """Refresh only journal-backed controls after another UI entry point mutates."""
+        self._refresh_recent_transaction()
+        self._update_execute_button()
+
+    @Slot()
+    def mark_filesystem_changed(self) -> None:
+        """Invalidate an existing preview after a shared filesystem mutation."""
+        self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         self._refresh_recent_transaction()
         self._update_execute_button()
 
@@ -472,7 +505,7 @@ class OrganizerPage(QWidget):
     def _show_execution_result(self, value: object) -> None:
         result = cast(RenameExecutionResult, value)
         self._last_execution_result = result
-        self._invalidate_preview()
+        self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         if result.status.name == "COMPLETED":
             self.status_label.setProperty("state", "success")
             self.status_label.setText(
@@ -501,7 +534,7 @@ class OrganizerPage(QWidget):
     def _show_undo_result(self, value: object) -> None:
         result = cast(UndoResult, value)
         self._last_undo_result = result
-        self._invalidate_preview()
+        self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         if result.status.name == "UNDONE":
             self.status_label.setProperty("state", "success")
             self.status_label.setText(
@@ -688,7 +721,7 @@ class OrganizerPage(QWidget):
     @Slot(str)
     def _show_action_error(self, message: str) -> None:
         """Treat an escaped action exception as a stale preview as well."""
-        self._invalidate_preview()
+        self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         self._show_error(message)
         self._refresh_recent_transaction()
 
@@ -737,8 +770,13 @@ class OrganizerPage(QWidget):
             self.execute_button.setEnabled(False)
             self.undo_button.setEnabled(False)
 
-    def _invalidate_preview(self) -> None:
+    def _invalidate_preview(self, reason: PreviewStaleReason) -> None:
+        if not self._has_preview_content():
+            self._preview_stale = False
+            self._preview_stale_reason = None
+            return
         self._preview_stale = True
+        self._preview_stale_reason = reason
         self.table.setEnabled(False)
         self.execute_button.setEnabled(False)
         self.summary_label.setText("预览已失效：请重新扫描以刷新状态。")
@@ -786,10 +824,14 @@ class OrganizerPage(QWidget):
     def _clear_preview(self) -> None:
         self._preview = None
         self._preview_stale = False
+        self._preview_stale_reason = None
         self.table.setRowCount(0)
         self.table.setEnabled(True)
         self.summary_label.setText("尚未生成预览。")
         self._update_preview_controls()
+
+    def _has_preview_content(self) -> bool:
+        return self._preview is not None and bool(self._preview.plans)
 
     @Slot()
     def remove_selected(self) -> None:
@@ -843,6 +885,7 @@ class OrganizerPage(QWidget):
     ) -> None:
         self._preview = preview
         self._preview_stale = False
+        self._preview_stale_reason = None
         self._render_preview(preview, checked_source_keys=checked_source_keys)
 
     def _render_preview(

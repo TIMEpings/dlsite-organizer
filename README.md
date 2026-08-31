@@ -87,7 +87,7 @@ python -m dlsite_organizer
 `{tags_list}`、`{tags_list_str}`、`{age_category}` 和 `{language_code}`；这些 alias 不再作为
 新模板按钮展示。
 
-保存前会校验完整设置；已有 Organizer 预览会失效，必须重新扫描。缺失字段在界面中显示为 `—`，命名模板中的空分组会被清理。
+保存前会校验完整设置；只有会影响目标目录名的命名设置变化才会使已有 Organizer 预览失效，必须重新扫描。缺失字段在界面中显示为 `—`，命名模板中的空分组会被清理。
 
 ## 数据与隐私
 

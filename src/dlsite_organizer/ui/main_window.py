@@ -67,6 +67,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._lookup_service = lookup_service
         self._settings_service = settings_service or SettingsService(AppSettings())
+        self._settings_snapshot = self._settings_service.settings
         self._quick_rename_service = quick_rename_service
         self._runtime_signals = runtime_signals
         # Kept in the constructor for callers from the research-era shell.
@@ -143,9 +144,16 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
         self.setStyleSheet(_STYLE)
+        # Organizer's table and footer are both layout-managed.  Derive the
+        # supported vertical minimum from the assembled page instead of
+        # allowing a smaller hard-coded height to make Qt compress siblings
+        # below their layout minimum.
+        minimum_height = max(self.minimumHeight(), self.minimumSizeHint().height())
+        self.setMinimumHeight(minimum_height)
+        self.resize(self.width(), max(self.height(), minimum_height))
         if self._runtime_signals is not None:
             self._runtime_signals.mutation_history_changed.connect(
-                self.refresh_mutation_state
+                self.organizer_page.mark_filesystem_changed
             )
 
     @Slot()
@@ -189,9 +197,17 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _settings_saved(self, settings: object) -> None:
         """Apply validated values to live services and invalidate old plans."""
-        self._lookup_service.apply_settings(settings)
-        self.organizer_page.apply_settings(settings)
-        self.organizer_page.invalidate_preview()
+        saved_settings = (
+            settings
+            if isinstance(settings, AppSettings)
+            else AppSettings.model_validate(settings)
+        )
+        previous_settings = self._settings_snapshot
+        self._settings_snapshot = saved_settings
+        self._lookup_service.apply_settings(saved_settings)
+        self.organizer_page.apply_settings(saved_settings)
+        if _naming_settings_key(previous_settings) != _naming_settings_key(saved_settings):
+            self.organizer_page.invalidate_preview()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Avoid destroying a running QThread during a bounded network request."""
@@ -246,3 +262,19 @@ QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
 #modeButton { color: #c9d2e3; background: #222e43; border-color: #3b4a64; }
 #modeButton:hover { background: #2e3c55; color: white; }
 """
+
+
+def _naming_settings_key(settings: AppSettings) -> tuple[object, ...]:
+    """Return only settings that can change a generated target directory name."""
+    return (
+        settings.naming_template,
+        settings.cv_separator,
+        settings.cv_prefix,
+        settings.cv_suffix,
+        settings.tag_separator,
+        settings.max_tags,
+        settings.hide_general_age,
+        settings.date_format,
+        settings.illegal_char_replacement,
+        settings.provider.metadata_locale,
+    )

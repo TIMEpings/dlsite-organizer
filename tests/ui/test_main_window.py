@@ -1,4 +1,5 @@
 import pytest
+from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 
@@ -62,3 +63,41 @@ def test_main_window_lightweight_settings_selects_settings_page(
     assert window.navigation_list.currentRow() == window.page_indices["settings"]
     assert window.pages.currentWidget() is window.settings_page
     window.close()
+
+
+def test_organizer_minimum_height_keeps_table_and_footer_disjoint(
+    qapp: QApplication,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    page = window.organizer_page
+
+    try:
+        window.show()
+        qapp.processEvents()
+        assert window.minimumHeight() >= page.minimumSizeHint().height()
+
+        for width, height in (
+            (window.minimumWidth(), window.minimumHeight()),
+            (1080, 900),
+        ):
+            window.resize(width, height)
+            qapp.processEvents()
+
+            table_rect = page.table.geometry()
+            assert not table_rect.intersects(page.footer.geometry())
+            assert page.table.isVisible()
+            assert page.table.viewport().isVisible()
+            assert page.table.viewport().height() > 0
+            assert page.footer.isVisible()
+
+            footer_widgets = (
+                page.summary_label,
+                page.recent_transaction_label,
+                page.undo_button,
+            )
+            for widget in footer_widgets:
+                widget_rect = QRect(widget.mapTo(page, QPoint(0, 0)), widget.size())
+                assert not table_rect.intersects(widget_rect)
+                assert widget_rect.bottom() <= page.rect().bottom()
+    finally:
+        window.close()
