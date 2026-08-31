@@ -17,6 +17,7 @@ from dlsite_organizer.persistence.rename_journal import (
 )
 from dlsite_organizer.providers.dlsite.client import DlsiteProvider
 from dlsite_organizer.services.cover import CoverService
+from dlsite_organizer.services.explorer_integration import ExplorerIntegrationService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.manual_reviews import ManualReviewService
@@ -45,6 +46,7 @@ class ApplicationComponents:
     rename_journal: RenameJournal
     settings_service: SettingsService
     quick_rename_service: QuickRenameService
+    explorer_integration_service: ExplorerIntegrationService
     manual_review_service: ManualReviewService | None = None
     candidate_review_queue_service: CandidateReviewQueueService | None = None
 
@@ -119,6 +121,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         rename_journal=journal,
         settings_service=SettingsService(settings),
         quick_rename_service=quick_rename_service,
+        explorer_integration_service=ExplorerIntegrationService(),
         manual_review_service=manual_review_service,
         candidate_review_queue_service=candidate_review_queue_service,
     )

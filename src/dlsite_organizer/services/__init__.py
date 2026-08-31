@@ -13,6 +13,12 @@ from dlsite_organizer.services.evaluation_dataset import (
     MINIMUM_DECIDED_LABELS,
     EvaluationDatasetService,
 )
+from dlsite_organizer.services.explorer_integration import (
+    ExplorerIntegrationService,
+    ExplorerRegistration,
+    ExplorerRegistrationState,
+    build_quick_rename_command,
+)
 from dlsite_organizer.services.folder_scanner import (
     FolderScanFailure,
     FolderScanFailureKind,
@@ -47,6 +53,9 @@ __all__ = [
     "CandidateRelationService",
     "CandidateSearchPolicy",
     "EvaluationDatasetService",
+    "ExplorerIntegrationService",
+    "ExplorerRegistration",
+    "ExplorerRegistrationState",
     "FolderScanFailure",
     "FolderScanFailureKind",
     "FolderScanner",
@@ -63,6 +72,7 @@ __all__ = [
     "TranslationRelationService",
     "WorkLookup",
     "WorkLookupStatus",
+    "build_quick_rename_command",
     "normalize_maker_name",
     "rj_numeric_distance",
 ]

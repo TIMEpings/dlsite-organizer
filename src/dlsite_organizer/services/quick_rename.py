@@ -70,7 +70,7 @@ class QuickRenameResult:
             return "需要恢复"
         if self.mutated:
             return "部分操作已完成"
-        return "未执行任何文件修改"
+        return "未修改任何文件"
 
 
 class QuickRenameService:

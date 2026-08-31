@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QGroupBox, QMessageBox
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.app.settings import AppSettings, SettingsService, load_settings
@@ -43,6 +43,10 @@ def test_settings_page_has_live_preview_and_rejects_invalid_template(
     assert page.open_config_button is not None
     assert page.open_database_button is not None
     assert page.open_logs_button is not None
+    assert "资源管理器集成" in [box.title() for box in page.findChildren(QGroupBox)]
+    assert page.explorer_status_label.text() == "状态：不支持"
+    assert not page.register_explorer_button.isEnabled()
+    assert not page.remove_explorer_button.isEnabled()
     page.close()
 
 

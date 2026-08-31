@@ -5,12 +5,18 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Sequence
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from dlsite_organizer import __version__
 from dlsite_organizer.app.bootstrap import build_components
+from dlsite_organizer.app.invocation import (
+    InvocationParseError,
+    LaunchMode,
+    parse_invocation,
+)
 from dlsite_organizer.app.logging_config import configure_logging
 from dlsite_organizer.app.settings import (
     SettingsError,
@@ -24,13 +30,25 @@ from dlsite_organizer.ui.main_window import MainWindow
 logger = logging.getLogger(__name__)
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Start the Qt application and return its process exit code."""
-    application = QApplication(sys.argv)
-    application.setApplicationName("DLsite Organizer")
-    application.setOrganizationName("dlsite-organizer")
+    raw_argv = tuple(sys.argv[1:] if argv is None else argv)
+    try:
+        invocation = parse_invocation(raw_argv)
+    except InvocationParseError as exc:
+        application = _create_application(())
+        configure_logging(default_data_dir() / "logs")
+        logger.error("Invalid application invocation: %s", exc)
+        QMessageBox.critical(None, "启动参数错误", str(exc))
+        return 2
+
+    application = _create_application(raw_argv)
     configure_logging(default_data_dir() / "logs")
-    logger.info("Starting DLsite Organizer v%s", __version__)
+    logger.info(
+        "Starting DLsite Organizer v%s launch_mode=%s",
+        __version__,
+        invocation.mode.value,
+    )
 
     try:
         settings = load_settings()
@@ -83,15 +101,41 @@ def main() -> int:
     lightweight_window.full_mode_requested.connect(show_full_mode)
     lightweight_window.settings_requested.connect(show_settings)
 
-    if settings.startup_mode is StartupMode.LIGHTWEIGHT:
+    if invocation.mode is LaunchMode.QUICK_RENAME:
+        quick_rename_directory = invocation.quick_rename_directory
+        assert quick_rename_directory is not None
+        logger.info("launch mode = quick-rename path=%s", quick_rename_directory)
+        if os.environ.get("DLSITE_ORGANIZER_QUICK_RENAME_SMOKE") == "1":
+            lightweight_window.quick_action_finished.connect(
+                lambda _result: QTimer.singleShot(250, application.quit)
+            )
+            lightweight_window.quick_action_failed.connect(
+                lambda _message: QTimer.singleShot(250, application.quit)
+            )
+        lightweight_window.show()
+        QTimer.singleShot(
+            0,
+            lambda: lightweight_window.start_quick_rename(quick_rename_directory),
+        )
+    elif settings.startup_mode is StartupMode.LIGHTWEIGHT:
         lightweight_window.show()
     else:
         window.show()
-    _schedule_startup_smoke(application, window)
+    if invocation.mode is LaunchMode.NORMAL:
+        _schedule_startup_smoke(application, window)
     exit_code = application.exec()
     components.database.dispose()
     logger.info("DLsite Organizer stopped")
     return exit_code
+
+
+def _create_application(argv: Sequence[str]) -> QApplication:
+    """Create Qt with the parsed application arguments and stable app identity."""
+    program = sys.argv[0] if sys.argv else "dlsite-organizer"
+    application = QApplication([program, *argv])
+    application.setApplicationName("DLsite Organizer")
+    application.setOrganizationName("dlsite-organizer")
+    return application
 
 
 def _schedule_startup_smoke(application: QApplication, window: MainWindow) -> None:

@@ -82,6 +82,47 @@ TransactionJournal. Any batch-wide input, metadata, plan, journal, recovery, or 
 failure is fail-closed. The **撤销最近一次** button uses the existing UndoService and asks for
 explicit confirmation.
 
+## Explorer integration
+
+The **资源管理器集成** group is a live inspection of the application-owned Windows Registry verb;
+its state is not stored in `config.toml`. It shows one of:
+
+```text
+未注册
+已注册
+路径已失效 / 需要更新
+不支持
+读取失败
+```
+
+On a packaged Windows build, **注册 / 更新** writes only the current user's
+`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key and its `command` child. The
+command is generated as a direct executable invocation:
+
+```text
+"<current packaged exe>" --quick-rename "%1"
+```
+
+The executable path is quoted by the standard Windows argument formatter, so spaces and non-ASCII
+paths are preserved; no `cmd.exe`, PowerShell, or shell trampoline is used. The command passes one
+Explorer-selected directory per invocation. **移除** deletes only this verb and its `command` child,
+is idempotent, and never removes the parent `Directory\shell` key or unrelated verbs. Registration
+is explicit, per-user, and needs no administrator rights.
+
+The source/development run does not register a Python interpreter or source entry point; its buttons
+are disabled with a message that Explorer integration is available only in the packaged version.
+Because the distribution is a portable ZIP, moving the application makes an existing absolute path
+stale. Start the application from its new location and use **注册 / 更新**. Before deleting the
+portable application directory, use **移除** first. On Windows 11 and some Explorer configurations,
+the ordinary shell verb may appear under **显示更多选项**.
+
+The Explorer action opens the lightweight Quick Action window and calls the same `QuickRenameService`
+as drag-and-drop. It does not show a second ordinary confirmation dialog, but it still performs
+input validation, lookup, naming, planning, final preflight, durable journal creation, and executor
+mutation. A fresh metadata cache is reused, and an unresolved journal blocks the action. Concurrent
+quick invocations are serialized at journal transaction creation; a stale second invocation fails
+closed when its source is gone or its target has appeared.
+
 ## Persistence and paths
 
 Save performs this sequence:

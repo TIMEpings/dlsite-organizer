@@ -179,8 +179,59 @@ Partial executor results are surfaced as partial and remain undoable where the j
 The full and lightweight windows share SettingsService, LookupService, metadata cache, NamingService,
 OrganizerService, QuickRenameService, RenameExecutor, and UndoService. Settings saves therefore
 apply to the next lightweight drop without restarting. `startup_mode` controls only the next launch;
-runtime switching hides one window and shows the other in the same process. No tray, CLI, registry,
-single-instance IPC, Explorer integration, About page, or navigation cleanup is part of Phase C.
+runtime switching hides one window and shows the other in the same process. Phase C itself did not
+include a CLI, registry, single-instance IPC, Explorer integration, About page, or navigation cleanup.
+
+## Phase D Explorer context-menu invocation
+
+Phase D adds one typed application boundary around the existing lightweight flow:
+
+```text
+Explorer shell verb (HKCU, one %1 directory)
+        ↓ direct packaged exe command
+argparse → ApplicationInvocation(QUICK_RENAME)
+        ↓
+ApplicationComponents (same config.toml, cache, SQLite DB, naming and locale)
+        ↓
+LightweightWindow.start_quick_rename
+        ↓
+QuickRenameWorker → QuickRenameService
+                         ↓
+                 LookupService → NamingService → RenamePlanner
+                         ↓
+                 RenameExecutor → TransactionJournal → filesystem
+                         ↓
+                       UndoService
+```
+
+`--quick-rename <directory>` accepts exactly one directory argument. Normal launch with no
+arguments continues to select the configured full/lightweight startup window. Unknown arguments,
+missing values, and extra values are rejected by `argparse`; a packaged GUI reports the error in a
+dialog and logs it rather than leaving an invisible process.
+
+The Explorer verb is created only under the current user's
+`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key. Its command is generated from
+`sys.executable` in a frozen build and contains a quoted executable path plus the literal quoted
+Explorer `%1` placeholder. No source path, Python interpreter, `cmd /c`, PowerShell, or shell
+interpolation is registered. Windows path comparison is case-insensitive and expands 8.3 spelling
+when Windows can provide the long form, so portable relocation is reported as a typed stale state.
+Non-Windows and source/development contexts report `UNSUPPORTED` and cannot register.
+
+`ExplorerIntegrationService` is UI-independent and uses a small registry backend protocol. The
+Settings page renders its inspection result rather than guessing from button text or persisting a
+registry state in TOML. Register/update and remove are explicit; remove deletes only this verb and
+its command child and is idempotent. Ordinary Windows 11 shell-verb behavior may place the command
+under **显示更多选项**; no modern COM or MSIX shell extension is part of Phase D.
+
+The journal transaction-creation check uses SQLite `BEGIN IMMEDIATE` to serialize the health check
+and durable transaction intent across independent processes. SQLite WAL is not enabled as an
+automatic side effect. Thus two near-simultaneous invocations cannot both commit overlapping
+PENDING transactions; if the second reaches the filesystem after the first completed, the executor's
+last-mile source/target checks fail closed without overwrite. The invariant remains:
+
+```text
+NO JOURNAL = NO MUTATION
+```
 
 `WorkLookup` is an in-memory batch record. `OrganizerService` deduplicates RJcodes for one run,
 calls the existing `LookupService` sequentially, isolates failures, and emits progress through the

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from dlsite_organizer.domain.rename_execution import (
@@ -222,6 +222,26 @@ class TransactionJournal:
         normalized_root = _absolute_path(root)
         try:
             with self._database.session() as session:
+                # Serialize the health check and transaction intent.  Two
+                # independent Explorer launches must not both observe an
+                # empty journal and then commit overlapping PENDING rows.
+                session.execute(text('BEGIN IMMEDIATE'))
+                unresolved_id = session.scalar(
+                    select(RenameTransactionRecord.id)
+                    .where(
+                        RenameTransactionRecord.status.in_(
+                            [
+                                TransactionStatus.PENDING.value,
+                                TransactionStatus.RECOVERY_REQUIRED.value,
+                            ]
+                        )
+                    )
+                    .limit(1)
+                )
+                if unresolved_id is not None:
+                    raise JournalError(
+                        '已有未解决的重命名事务，已阻止新的文件系统修改。'
+                    )
                 session.add(
                     RenameTransactionRecord(
                         id=transaction_id,
@@ -247,6 +267,8 @@ class TransactionJournal:
                         )
                     )
                 session.commit()
+        except JournalError:
+            raise
         except Exception as exc:
             logger.exception('Could not create rename transaction journal %s', transaction_id)
             raise JournalError('无法建立重命名事务日志，未执行任何文件操作。') from exc

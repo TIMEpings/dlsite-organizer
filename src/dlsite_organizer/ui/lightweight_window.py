@@ -38,6 +38,8 @@ class LightweightWindow(QMainWindow):
 
     full_mode_requested = Signal()
     settings_requested = Signal()
+    quick_action_finished = Signal(object)
+    quick_action_failed = Signal(str)
 
     def __init__(
         self,
@@ -111,6 +113,10 @@ class LightweightWindow(QMainWindow):
         self.setCentralWidget(central)
         self.setStyleSheet(_STYLE)
 
+    def start_quick_rename(self, path: Path | str) -> None:
+        """Start one explicit quick action, used by the Explorer boundary."""
+        self._handle_drop((path,))
+
     @Slot(object)
     def _handle_drop(self, value: object) -> None:
         if self._thread is not None:
@@ -177,10 +183,11 @@ class LightweightWindow(QMainWindow):
         else:
             self.status_label.setProperty("state", "error")
             self.status_label.setText(
-                "未执行任何文件修改。" + (f" {result.error}" if result.error else "")
+                "未修改任何文件。" + (f" {result.error}" if result.error else "")
             )
         self._refresh_status_style()
         self._refresh_recent_transaction()
+        self.quick_action_finished.emit(result)
 
     @Slot()
     def undo_recent(self) -> None:
@@ -261,6 +268,7 @@ class LightweightWindow(QMainWindow):
         self.status_label.setProperty("state", "error")
         self.status_label.setText(message)
         self._refresh_status_style()
+        self.quick_action_failed.emit(message)
 
     @Slot()
     def _operation_finished(self) -> None:

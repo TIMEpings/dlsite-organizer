@@ -1,11 +1,20 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Barrier
 
 from dlsite_organizer.domain.rename_execution import TransactionStatus
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
+from dlsite_organizer.persistence.metadata_store import MetadataStore
 from dlsite_organizer.persistence.rename_journal import TransactionJournal, UnavailableRenameJournal
-from dlsite_organizer.services.lookup import LookupFailure, LookupFailureKind, LookupResult
+from dlsite_organizer.services.lookup import (
+    LookupFailure,
+    LookupFailureKind,
+    LookupResult,
+    LookupService,
+)
+from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.quick_rename import QuickRenameService, QuickRenameStatus
 from dlsite_organizer.services.rename_executor import RenameExecutor
@@ -24,6 +33,23 @@ class FakeLookup:
             raise self.failures[raw_workno]
         work = self.works[raw_workno]
         return LookupResult(work=work, formatted_name=f"[{work.workno}] {work.title}")
+
+
+class BarrierLookup:
+    def __init__(self, work: Work, barrier: Barrier) -> None:
+        self._work = work
+        self._barrier = barrier
+
+    def lookup(self, raw_workno: str) -> LookupResult:
+        self._barrier.wait(timeout=5)
+        return LookupResult(work=self._work, formatted_name=f"[{raw_workno}] {self._work.title}")
+
+
+class _ConcurrentFilesystem:
+    def rename(self, source: Path, target: Path) -> None:
+        if target.exists():
+            raise FileExistsError(str(target))
+        source.rename(target)
 
 
 def _quick(tmp_path: Path, lookup: FakeLookup) -> tuple[QuickRenameService, TransactionJournal]:
@@ -127,3 +153,69 @@ def test_quick_journal_unavailable_has_no_mutation(tmp_path: Path) -> None:
     assert result.status is QuickRenameStatus.EXECUTION_FAILED
     assert source.exists()
     assert lookup.requested == []
+
+
+def test_concurrent_same_folder_quick_invocations_fail_closed(tmp_path: Path) -> None:
+    source = tmp_path / "RJ01609020 old"
+    source.mkdir()
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    barrier = Barrier(2)
+    lookup = BarrierLookup(Work(workno="RJ01609020", title="Target"), barrier)
+    services = [
+        QuickRenameService(
+            OrganizerService(lookup),
+            RenameExecutor(journal, filesystem=_ConcurrentFilesystem()),
+        )
+        for _ in range(2)
+    ]
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda service: service.rename((source,)), services))
+
+        assert sum(result.status is QuickRenameStatus.SUCCESS for result in results) == 1
+        assert sum(result.status is QuickRenameStatus.EXECUTION_FAILED for result in results) == 1
+        assert (tmp_path / "[RJ01609020] Target").is_dir()
+        assert not source.exists()
+        assert journal.find_unresolved_transaction() is None
+    finally:
+        database.dispose()
+
+
+def test_quick_rename_uses_the_shared_naming_service_settings(tmp_path: Path) -> None:
+    source = tmp_path / "RJ01609020 old"
+    source.mkdir()
+
+    @dataclass
+    class Provider:
+        calls: int = 0
+
+        def fetch_work(self, workno: str) -> Work:
+            self.calls += 1
+            return Work(workno=workno, title="Target", maker_name="Circle")
+
+    provider = Provider()
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    lookup = LookupService(
+        provider,
+        NamingService("[{maker_name}][{rjcode}] {title}"),
+        metadata_store=MetadataStore(database),
+    )
+    journal = TransactionJournal(database)
+    service = QuickRenameService(
+        OrganizerService(lookup),
+        RenameExecutor(journal, filesystem=_ConcurrentFilesystem()),
+    )
+
+    try:
+        lookup.lookup("RJ01609020")
+        result = service.rename((source,))
+
+        assert result.status is QuickRenameStatus.SUCCESS
+        assert (tmp_path / "[Circle][RJ01609020] Target").is_dir()
+        assert provider.calls == 1
+    finally:
+        database.dispose()

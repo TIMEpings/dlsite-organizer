@@ -35,6 +35,12 @@ from dlsite_organizer.app.settings import (
     default_logs_path,
 )
 from dlsite_organizer.domain.work import AgeCategory, Work, WorkLanguage
+from dlsite_organizer.services.explorer_integration import (
+    ExplorerIntegrationError,
+    ExplorerIntegrationService,
+    ExplorerRegistration,
+    ExplorerRegistrationState,
+)
 from dlsite_organizer.services.naming import NamingService, NamingTemplateError
 
 
@@ -63,12 +69,22 @@ class SettingsPage(QWidget):
         ("发售日期", "{release_date}"),
     )
 
-    def __init__(self, settings_service: SettingsService, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        settings_service: SettingsService,
+        parent: QWidget | None = None,
+        *,
+        explorer_integration_service: ExplorerIntegrationService | None = None,
+    ) -> None:
         super().__init__(parent)
         self._settings_service = settings_service
+        self._explorer_integration_service = (
+            explorer_integration_service or ExplorerIntegrationService()
+        )
         settings_service.subscribe(self._on_service_settings_changed)
         self._build_ui()
         self._load_settings(settings_service.settings)
+        self.refresh_explorer_registration()
 
     def _build_ui(self) -> None:
         page_layout = QVBoxLayout(self)
@@ -217,6 +233,43 @@ class SettingsPage(QWidget):
         runtime_form.addRow("启动模式", self.startup_mode_input)
         content_layout.addWidget(runtime_box)
 
+        explorer_box = QGroupBox("资源管理器集成")
+        explorer_layout = QVBoxLayout(explorer_box)
+        explorer_form = QFormLayout()
+        self.explorer_status_label = QLabel()
+        self.explorer_status_label.setObjectName("explorerRegistrationStatus")
+        self.explorer_status_label.setWordWrap(True)
+        explorer_form.addRow("右键菜单", self.explorer_status_label)
+        self.explorer_path_label = QLabel()
+        self.explorer_path_label.setObjectName("explorerRegistrationPath")
+        self.explorer_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.explorer_path_label.setWordWrap(True)
+        explorer_form.addRow("路径", self.explorer_path_label)
+        explorer_layout.addLayout(explorer_form)
+
+        explorer_help = QLabel(
+            "注册仅对当前 Windows 用户生效，不需要管理员权限。"
+            "根据 Windows 版本和 Explorer 行为，该命令可能出现在“显示更多选项”菜单中。"
+        )
+        explorer_help.setObjectName("pageDescription")
+        explorer_help.setWordWrap(True)
+        explorer_layout.addWidget(explorer_help)
+
+        explorer_actions = QHBoxLayout()
+        self.register_explorer_button = QPushButton("注册 / 更新")
+        self.register_explorer_button.setObjectName("registerExplorerButton")
+        self.remove_explorer_button = QPushButton("移除")
+        self.remove_explorer_button.setObjectName("removeExplorerButton")
+        explorer_actions.addWidget(self.register_explorer_button)
+        explorer_actions.addWidget(self.remove_explorer_button)
+        explorer_actions.addStretch(1)
+        explorer_layout.addLayout(explorer_actions)
+        self.explorer_feedback_label = QLabel()
+        self.explorer_feedback_label.setObjectName("explorerFeedbackLabel")
+        self.explorer_feedback_label.setWordWrap(True)
+        explorer_layout.addWidget(self.explorer_feedback_label)
+        content_layout.addWidget(explorer_box)
+
         data_box = QGroupBox("数据与诊断")
         data_layout = QFormLayout(data_box)
         data_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -265,6 +318,8 @@ class SettingsPage(QWidget):
         self.hide_general_age.stateChanged.connect(self._refresh_preview)
         self.save_button.clicked.connect(self.save_settings)
         self.reset_button.clicked.connect(self.reset_defaults)
+        self.register_explorer_button.clicked.connect(self.register_explorer_integration)
+        self.remove_explorer_button.clicked.connect(self.remove_explorer_integration)
 
     def _path_row(
         self, path: Path, button_text: str
@@ -311,6 +366,87 @@ class SettingsPage(QWidget):
     def _on_service_settings_changed(self, settings: AppSettings) -> None:
         """Keep the editor synchronized when another caller saves settings."""
         self._load_settings(settings)
+
+    def refresh_explorer_registration(self) -> ExplorerRegistration:
+        """Refresh the UI from the real registry state, never from TOML."""
+        registration = self._explorer_integration_service.inspect()
+        self._render_explorer_registration(registration)
+        return registration
+
+    @Slot()
+    def register_explorer_integration(self) -> None:
+        try:
+            registration = self._explorer_integration_service.register_current_executable()
+        except ExplorerIntegrationError as exc:
+            self.explorer_feedback_label.setProperty("state", "error")
+            self.explorer_feedback_label.setText(exc.user_message)
+            self._refresh_status_style(self.explorer_feedback_label)
+            self.refresh_explorer_registration()
+            return
+        self._render_explorer_registration(registration)
+        if registration.state is ExplorerRegistrationState.REGISTERED_CURRENT:
+            self.explorer_feedback_label.setProperty("state", "success")
+            self.explorer_feedback_label.setText("资源管理器右键菜单已注册到当前程序路径。")
+        elif registration.state is ExplorerRegistrationState.UNSUPPORTED:
+            self.explorer_feedback_label.setProperty("state", "error")
+            self.explorer_feedback_label.setText("资源管理器右键菜单只能在打包版本中注册。")
+        self._refresh_status_style(self.explorer_feedback_label)
+
+    @Slot()
+    def remove_explorer_integration(self) -> None:
+        try:
+            registration = self._explorer_integration_service.unregister()
+        except ExplorerIntegrationError:
+            self.explorer_feedback_label.setProperty("state", "error")
+            self.explorer_feedback_label.setText("无法移除资源管理器右键菜单。")
+            self._refresh_status_style(self.explorer_feedback_label)
+            self.refresh_explorer_registration()
+            return
+        self._render_explorer_registration(registration)
+        if registration.state is ExplorerRegistrationState.NOT_REGISTERED:
+            self.explorer_feedback_label.setProperty("state", "success")
+            self.explorer_feedback_label.setText("资源管理器右键菜单已移除。")
+        elif registration.state is ExplorerRegistrationState.UNSUPPORTED:
+            self.explorer_feedback_label.setProperty("state", "error")
+            self.explorer_feedback_label.setText("资源管理器右键菜单只能在打包版本中移除。")
+        self._refresh_status_style(self.explorer_feedback_label)
+
+    def _render_explorer_registration(self, registration: ExplorerRegistration) -> None:
+        labels = {
+            ExplorerRegistrationState.NOT_REGISTERED: "未注册",
+            ExplorerRegistrationState.REGISTERED_CURRENT: "已注册",
+            ExplorerRegistrationState.REGISTERED_STALE: "路径已失效 / 需要更新",
+            ExplorerRegistrationState.UNSUPPORTED: "不支持",
+            ExplorerRegistrationState.ERROR: "读取失败",
+        }
+        self.explorer_status_label.setProperty(
+            "state",
+            "error"
+            if registration.state in {
+                ExplorerRegistrationState.REGISTERED_STALE,
+                ExplorerRegistrationState.UNSUPPORTED,
+                ExplorerRegistrationState.ERROR,
+            }
+            else "success"
+            if registration.state is ExplorerRegistrationState.REGISTERED_CURRENT
+            else "",
+        )
+        self.explorer_status_label.setText(f"状态：{labels[registration.state]}")
+
+        path_lines: list[str] = []
+        if registration.registered_executable is not None:
+            path_lines.append(f"已注册路径：{registration.registered_executable}")
+        if registration.current_executable is not None:
+            path_lines.append(f"当前程序：{registration.current_executable}")
+        if registration.state is ExplorerRegistrationState.UNSUPPORTED:
+            path_lines.append("资源管理器右键菜单只能在打包版本中注册。")
+        if registration.error:
+            path_lines.append(registration.error)
+        self.explorer_path_label.setText("\n".join(path_lines) or "—")
+        supported = registration.state is not ExplorerRegistrationState.UNSUPPORTED
+        self.register_explorer_button.setEnabled(supported)
+        self.remove_explorer_button.setEnabled(supported)
+        self._refresh_status_style(self.explorer_status_label)
 
     def _insert_variable(self, variable: str) -> None:
         self.template_input.insert(variable)
@@ -427,9 +563,10 @@ class SettingsPage(QWidget):
             self.settings_status_label.setText(f"无法打开路径：{target}")
             self._refresh_status_style()
 
-    def _refresh_status_style(self) -> None:
-        self.settings_status_label.style().unpolish(self.settings_status_label)
-        self.settings_status_label.style().polish(self.settings_status_label)
+    def _refresh_status_style(self, label: QLabel | None = None) -> None:
+        target = label or self.settings_status_label
+        target.style().unpolish(target)
+        target.style().polish(target)
 
 
 def _friendly_validation_error(error: Exception) -> str:

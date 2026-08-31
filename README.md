@@ -2,7 +2,8 @@
 
 `dlsite-organizer` 是一个面向 Windows 的桌面工具，用于查询 DLsite 作品信息、扫描本地作品目录，并在用户确认后安全重命名目录。
 
-> 当前源码版本仍为 `1.0.0`，但此前的 release candidate 已撤回；本分支是未发布的开发快照。local `v1.0.0` tag 保留供审计，不代表已有公开发行版。
+> 当前源码版本仍为 `1.0.0`，但此前的 release candidate 已撤回；本分支是未发布的开发快照。
+> 当前没有 `v1.0.0` tag，也没有公开发行版。
 
 ## What it is
 
@@ -101,6 +102,29 @@ drop one or more work folders   → QuickRenameService → safe rename
 拒绝整批。已经是目标名的目录显示“无需重命名”；部分执行结果会显示“部分操作已完成”，
 并沿用现有 journal/Undo/恢复边界。
 
+## Explorer context menu (Phase D)
+
+Windows 打包版可以在“设置 → 资源管理器集成”中主动注册当前程序的右键菜单。注册只写入
+当前用户的 `HKCU\Software\Classes\Directory\shell\dlsite-organizer`，不需要管理员权限，
+也不会自动注册。菜单项名称为 **使用 DLsite Organizer 重命名**，命令直接启动当前 frozen
+executable：
+
+```text
+"<current packaged exe>" --quick-rename "%1"
+```
+
+每次 Explorer 调用只处理一个文件夹，并执行与轻量模式相同的
+`QuickRenameService → LookupService → NamingService → RenamePlanner → Preflight → Journal →
+RenameExecutor` 管线；Explorer 集成没有新的重命名实现。Quick Action 窗口会保留结果并继续
+通过 `UndoService` 提供显式撤销。失败前置检查会明确显示未修改任何文件，部分执行或恢复状态
+不会被伪装成无修改。
+
+这是 portable ZIP 的 per-user 注册：如果程序目录移动，设置页会显示“路径已失效 / 需要更新”，
+点击“注册 / 更新”即可覆盖为当前 exe；“移除”只删除本应用创建的 verb 和 `command` 子键，
+删除不存在的注册也是安全的。开发源码运行时注册按钮会禁用，因为右键菜单只能可靠指向打包版。
+删除 portable 程序目录前，建议先在设置中移除右键菜单。根据 Windows 版本和 Explorer 行为，
+命令可能出现在“显示更多选项”菜单中。
+
 ## Data and storage
 
 Windows 默认数据目录为 `%LOCALAPPDATA%\dlsite-organizer`：
@@ -155,6 +179,9 @@ Existing observations suggest bonus metadata may be transient, but this is not c
 - metadata locale、cache TTL 和 provider timeout 可在“设置”页修改；locale 变化不会静默重解释已有 cache，下一次 live/force refresh 使用新 locale。
 - Review Queue 的本地浏览、筛选、选中和 review 不调用 provider。
 - cover 没有持久化磁盘 cache；应用重启后需要重新通过 lookup 获取封面。
+- Explorer 右键菜单是普通 Registry shell verb，不是 Windows 11 modern shell extension；首版
+  仅支持每次一个文件夹。若无法进行实际 Explorer 菜单点击，仍可用打包版
+  `--quick-rename <directory>` 直接验证同一调用边界。
 - 不实现过期 limited-bonus relation 的自动恢复/检测、关系概率、候选评分、批量自动确认或 auto-learning。
 
 ## Privacy and network behavior

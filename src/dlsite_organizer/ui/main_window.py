@@ -21,6 +21,7 @@ from dlsite_organizer import __version__
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.drop_input import DropInputService
+from dlsite_organizer.services.explorer_integration import ExplorerIntegrationService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.organizer import OrganizerService
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
         candidate_review_queue_service=None,
         settings_service: SettingsService | None = None,
         quick_rename_service=None,
+        explorer_integration_service: ExplorerIntegrationService | None = None,
     ) -> None:
         super().__init__()
         self._lookup_service = lookup_service
@@ -101,7 +103,10 @@ class MainWindow(QMainWindow):
             lookup_service.manual_review_service,
             cover_service,
         )
-        self.settings_page = SettingsPage(self._settings_service)
+        self.settings_page = SettingsPage(
+            self._settings_service,
+            explorer_integration_service=explorer_integration_service,
+        )
         self._settings_service.subscribe(self._settings_saved)
         page_definitions = [
             ("整理", self.organizer_page),
@@ -137,6 +142,7 @@ class MainWindow(QMainWindow):
 
     def show_settings_page(self) -> None:
         """Select the shared Settings page for the lightweight settings action."""
+        self.settings_page.refresh_explorer_registration()
         self.navigation_list.setCurrentRow(self.navigation_list.count() - 1)
 
     def is_busy(self) -> bool:
