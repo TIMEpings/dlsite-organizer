@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dlsite_organizer.app.branding import load_branding_pixmap
 from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import SettingsService
 from dlsite_organizer.domain.organizer import RenamePlanStatus
@@ -79,15 +80,32 @@ class LightweightWindow(QMainWindow):
         layout.setContentsMargins(22, 18, 22, 18)
         layout.setSpacing(10)
 
+        header = QHBoxLayout()
+        self.branding_image = QLabel()
+        self.branding_image.setObjectName("lightweightBrandingImage")
+        self.branding_image.setFixedSize(60, 60)
+        self.branding_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.branding_image.setAccessibleName("DLsite Organizer 图标")
+        pixmap = load_branding_pixmap(60)
+        if pixmap is None:
+            self.branding_image.hide()
+        else:
+            self.branding_image.setPixmap(pixmap)
+        header.addWidget(self.branding_image)
+
+        header_copy = QVBoxLayout()
         heading = QLabel("DLsite Organizer · 轻量模式")
         heading.setObjectName("pageTitle")
-        layout.addWidget(heading)
+        header_copy.addWidget(heading)
         description = QLabel(
             "拖入一个或多个同一父目录下的 DLsite 作品文件夹，即按当前设置安全重命名。"
         )
         description.setObjectName("pageDescription")
         description.setWordWrap(True)
-        layout.addWidget(description)
+        header_copy.addWidget(description)
+        header_copy.addStretch(1)
+        header.addLayout(header_copy, 1)
+        layout.addLayout(header)
 
         self.drop_zone = DirectoryDropZone(
             "将 DLsite 作品文件夹拖到这里",

@@ -18,6 +18,9 @@ def qapp() -> QApplication:
 def test_about_page_exposes_public_identity_and_resource_actions(qapp: QApplication) -> None:
     page = AboutPage()
 
+    assert page.branding_image.objectName() == "aboutBrandingImage"
+    pixmap = page.branding_image.pixmap()
+    assert pixmap is not None and not pixmap.isNull()
     assert page.version_value.text() == f"v{__version__}"
     assert page.description_value.text() == "DLsite 作品元数据查询与文件夹整理工具"
     assert page.developer_value.text() == "dlsite-organizer contributors"

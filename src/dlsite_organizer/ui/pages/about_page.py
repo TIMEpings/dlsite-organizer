@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QUrl, Slot
+from PySide6.QtCore import Qt, QUrl, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer import __version__
+from dlsite_organizer.app.branding import load_branding_pixmap
 from dlsite_organizer.app.resources import application_resource_path
 
 
@@ -31,9 +32,27 @@ class AboutPage(QWidget):
         layout.setContentsMargins(36, 28, 36, 28)
         layout.setSpacing(16)
 
+        header = QHBoxLayout()
+        self.branding_image = QLabel()
+        self.branding_image.setObjectName("aboutBrandingImage")
+        self.branding_image.setFixedSize(104, 104)
+        self.branding_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.branding_image.setAccessibleName("DLsite Organizer 图标")
+        pixmap = load_branding_pixmap(104)
+        if pixmap is None:
+            self.branding_image.hide()
+        else:
+            self.branding_image.setPixmap(pixmap)
+        header.addWidget(self.branding_image)
+
+        header_copy = QVBoxLayout()
         heading = QLabel("关于")
         heading.setObjectName("pageTitle")
-        layout.addWidget(heading)
+        header_copy.addWidget(heading)
+        header_copy.addWidget(QLabel("DLsite Organizer"))
+        header_copy.addStretch(1)
+        header.addLayout(header_copy, 1)
+        layout.addLayout(header)
 
         identity = QGroupBox("DLsite Organizer")
         identity_layout = QFormLayout(identity)

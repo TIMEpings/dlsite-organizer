@@ -49,6 +49,9 @@ def test_lightweight_window_has_explicit_drop_zone_and_controls(
     window = _window(tmp_path)
 
     assert window.windowTitle() == "DLsite Organizer — 轻量模式"
+    assert window.branding_image.objectName() == "lightweightBrandingImage"
+    pixmap = window.branding_image.pixmap()
+    assert pixmap is not None and not pixmap.isNull()
     assert window.drop_zone.acceptDrops()
     assert window.undo_button.text() == "撤销最近一次"
     assert window.settings_button.text() == "设置"

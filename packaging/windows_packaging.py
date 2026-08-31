@@ -29,6 +29,7 @@ FOREIGN_PATH_COMPONENTS = frozenset(
 TEMPORARY_PATH_COMPONENTS = frozenset({".cache", ".tmp", "tmp", "temp", "temporary"})
 NATIVE_ARTIFACT_SUFFIXES = frozenset({".dll", ".exe", ".pyd"})
 FORBIDDEN_ARTIFACT_COMPONENTS = frozenset({"codex", "codex-runtimes", "poppler"})
+REQUIRED_APPLICATION_RESOURCES = (Path("assets") / "branding" / "app_icon.png",)
 
 # These are the runtime distributions named in THIRD_PARTY_NOTICES.md.  The
 # version part is intentionally matched separately because the canonical
@@ -221,11 +222,20 @@ def audit_distribution(distribution: Path, provenance_path: Path) -> list[Path]:
 
 
 def audit_packaged_resources(distribution: Path) -> tuple[Path, ...]:
-    """Verify application and runtime license resources in an onedir build."""
+    """Verify application branding and runtime license resources in an onedir build."""
     runtime_root = distribution / "_internal"
     roots = (runtime_root, distribution) if runtime_root.is_dir() else (distribution,)
 
     required_files: list[Path] = []
+    for relative_path in REQUIRED_APPLICATION_RESOURCES:
+        resource = next(
+            (root / relative_path for root in roots if (root / relative_path).is_file()),
+            None,
+        )
+        if resource is None:
+            raise FileNotFoundError(f"Packaged resource missing: {relative_path}")
+        required_files.append(resource)
+
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
         resource = next((root / name for root in roots if (root / name).is_file()), None)
         if resource is None:
@@ -268,6 +278,134 @@ def audit_packaged_resources(distribution: Path) -> tuple[Path, ...]:
             )
         resources.extend(license_files)
     return tuple(resources)
+
+
+def audit_packaged_executable_icon(distribution: Path) -> Path:
+    """Verify the onedir executable is x64 PE and embeds a group icon resource."""
+    executable = distribution / "dlsite-organizer.exe"
+    data = executable.read_bytes() if executable.is_file() else b""
+    if len(data) < 64 or data[:2] != b"MZ":
+        raise RuntimeError(f"Packaged executable icon audit failed: invalid PE {executable}")
+
+    pe_offset = int.from_bytes(data[0x3C:0x40], "little")
+    if pe_offset + 24 > len(data) or data[pe_offset : pe_offset + 4] != b"PE\0\0":
+        raise RuntimeError(f"Packaged executable icon audit failed: invalid PE {executable}")
+    machine = int.from_bytes(data[pe_offset + 4 : pe_offset + 6], "little")
+    if machine != 0x8664:
+        raise RuntimeError(
+            "Packaged executable icon audit failed: "
+            f"{executable.name} is not x64 (machine=0x{machine:04x})"
+        )
+
+    section_count = int.from_bytes(data[pe_offset + 6 : pe_offset + 8], "little")
+    optional_header_size = int.from_bytes(data[pe_offset + 20 : pe_offset + 22], "little")
+    optional_header = pe_offset + 24
+    if optional_header + optional_header_size > len(data):
+        raise RuntimeError("Packaged executable icon audit failed: truncated PE header")
+    if int.from_bytes(data[optional_header : optional_header + 2], "little") != 0x20B:
+        raise RuntimeError("Packaged executable icon audit failed: expected PE32+ executable")
+
+    resource_directory = optional_header + 112 + (2 * 8)
+    if resource_directory + 8 > optional_header + optional_header_size:
+        raise RuntimeError("Packaged executable icon audit failed: missing resource directory")
+    resource_rva = int.from_bytes(data[resource_directory : resource_directory + 4], "little")
+    resource_size = int.from_bytes(data[resource_directory + 4 : resource_directory + 8], "little")
+    if not resource_rva or not resource_size:
+        raise RuntimeError("Packaged executable icon audit failed: no resource directory")
+
+    section_table = optional_header + optional_header_size
+    sections: list[tuple[int, int, int, int]] = []
+    for index in range(section_count):
+        section = section_table + (index * 40)
+        if section + 40 > len(data):
+            raise RuntimeError("Packaged executable icon audit failed: truncated section table")
+        virtual_size = int.from_bytes(data[section + 8 : section + 12], "little")
+        virtual_address = int.from_bytes(data[section + 12 : section + 16], "little")
+        raw_size = int.from_bytes(data[section + 16 : section + 20], "little")
+        raw_pointer = int.from_bytes(data[section + 20 : section + 24], "little")
+        sections.append((virtual_address, max(virtual_size, raw_size), raw_pointer, raw_size))
+
+    resource_offset = _rva_to_file_offset(resource_rva, sections)
+    if resource_offset is None or resource_offset + resource_size > len(data):
+        raise RuntimeError("Packaged executable icon audit failed: invalid resource directory")
+    resource_end = resource_offset + resource_size
+    if not _resource_tree_has_group_icon(data, resource_offset, resource_end):
+        raise RuntimeError(
+            "Packaged executable icon audit failed: RT_GROUP_ICON resource is missing"
+        )
+    return executable
+
+
+def _rva_to_file_offset(
+    rva: int,
+    sections: Iterable[tuple[int, int, int, int]],
+) -> int | None:
+    for virtual_address, span, raw_pointer, raw_size in sections:
+        if virtual_address <= rva < virtual_address + span:
+            relative = rva - virtual_address
+            if relative < raw_size:
+                return raw_pointer + relative
+    return None
+
+
+def _resource_tree_has_group_icon(data: bytes, resource_offset: int, resource_end: int) -> bool:
+    """Return whether a PE resource tree contains an RT_GROUP_ICON (type 14)."""
+    if resource_offset + 16 > resource_end:
+        return False
+    named_count = int.from_bytes(data[resource_offset + 12 : resource_offset + 14], "little")
+    id_count = int.from_bytes(data[resource_offset + 14 : resource_offset + 16], "little")
+    entry_count = named_count + id_count
+    entries_offset = resource_offset + 16
+    if entries_offset + (entry_count * 8) > resource_end:
+        return False
+
+    for index in range(entry_count):
+        entry = entries_offset + (index * 8)
+        resource_name = int.from_bytes(data[entry : entry + 4], "little")
+        resource_location = int.from_bytes(data[entry + 4 : entry + 8], "little")
+        if resource_name & 0x80000000 or resource_name != 14:
+            continue
+        if not resource_location & 0x80000000:
+            return False
+        group_directory = resource_offset + (resource_location & 0x7FFFFFFF)
+        return _resource_tree_has_leaf(data, resource_offset, group_directory, resource_end)
+    return False
+
+
+def _resource_tree_has_leaf(
+    data: bytes,
+    resource_root: int,
+    directory: int,
+    resource_end: int,
+    *,
+    depth: int = 0,
+) -> bool:
+    if depth > 8 or directory + 16 > resource_end:
+        return False
+    named_count = int.from_bytes(data[directory + 12 : directory + 14], "little")
+    id_count = int.from_bytes(data[directory + 14 : directory + 16], "little")
+    entry_count = named_count + id_count
+    entries_offset = directory + 16
+    if entries_offset + (entry_count * 8) > resource_end:
+        return False
+    for index in range(entry_count):
+        entry = entries_offset + (index * 8)
+        resource_location = int.from_bytes(data[entry + 4 : entry + 8], "little")
+        if resource_location & 0x80000000:
+            child = resource_root + (resource_location & 0x7FFFFFFF)
+            if _resource_tree_has_leaf(
+                data,
+                resource_root,
+                child,
+                resource_end,
+                depth=depth + 1,
+            ):
+                return True
+            continue
+        data_entry = resource_root + (resource_location & 0x7FFFFFFF)
+        if data_entry + 16 <= resource_end:
+            return True
+    return False
 
 
 def audit_native_binaries(distribution: Path) -> tuple[Path, ...]:
@@ -353,6 +491,16 @@ def _command_audit_native(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_audit_icon(args: argparse.Namespace) -> int:
+    try:
+        executable = audit_packaged_executable_icon(Path(args.dist))
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Packaged executable icon audit: PASS ({executable.name})")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -375,6 +523,10 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_native = subparsers.add_parser("audit-native")
     audit_native.add_argument("--dist", required=True)
     audit_native.set_defaults(handler=_command_audit_native)
+
+    audit_icon = subparsers.add_parser("audit-icon")
+    audit_icon.add_argument("--dist", required=True)
+    audit_icon.set_defaults(handler=_command_audit_icon)
     return parser
 
 

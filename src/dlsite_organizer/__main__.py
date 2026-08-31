@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from dlsite_organizer import __version__
 from dlsite_organizer.app.bootstrap import build_components
+from dlsite_organizer.app.branding import load_application_icon
 from dlsite_organizer.app.invocation import (
     InvocationParseError,
     LaunchMode,
@@ -124,7 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         window.show()
     if invocation.mode is LaunchMode.NORMAL:
-        _schedule_startup_smoke(application, window)
+        _schedule_startup_smoke(application, window, lightweight_window)
     exit_code = application.exec()
     components.database.dispose()
     logger.info("DLsite Organizer stopped")
@@ -137,10 +138,15 @@ def _create_application(argv: Sequence[str]) -> QApplication:
     application = QApplication([program, *argv])
     application.setApplicationName("DLsite Organizer")
     application.setOrganizationName("dlsite-organizer")
+    application.setWindowIcon(load_application_icon())
     return application
 
 
-def _schedule_startup_smoke(application: QApplication, window: MainWindow) -> None:
+def _schedule_startup_smoke(
+    application: QApplication,
+    window: MainWindow,
+    lightweight_window: LightweightWindow,
+) -> None:
     """Run the bounded packaged-startup probe when explicitly requested.
 
     This hook is intentionally opt-in and has no effect during normal use.  It
@@ -157,19 +163,40 @@ def _schedule_startup_smoke(application: QApplication, window: MainWindow) -> No
         for index in range(window.navigation_list.count())
     ]
     expected_about = f"关于 · v{__version__}"
-    if actual_pages != expected_pages or window.about_button.text() != expected_about:
+    about_pixmap = window.about_page.branding_image.pixmap()
+    lightweight_pixmap = lightweight_window.branding_image.pixmap()
+    icon_ready = not application.windowIcon().isNull()
+    about_branding_ready = about_pixmap is not None and not about_pixmap.isNull()
+    lightweight_branding_ready = (
+        lightweight_pixmap is not None and not lightweight_pixmap.isNull()
+    )
+    if (
+        actual_pages != expected_pages
+        or window.about_button.text() != expected_about
+        or not icon_ready
+        or not about_branding_ready
+        or not lightweight_branding_ready
+    ):
         logger.error(
-            "Startup smoke failed: navigation pages=%s about_footer=%s",
+            "Startup smoke failed: navigation pages=%s about_footer=%s "
+            "app_icon=%s about_branding=%s lightweight_branding=%s",
             actual_pages,
             window.about_button.text(),
+            icon_ready,
+            about_branding_ready,
+            lightweight_branding_ready,
         )
         QTimer.singleShot(0, lambda: application.exit(3))
         return
 
     logger.info(
-        "Startup smoke passed: MainWindow pages=%s about_footer=%s",
+        "Startup smoke passed: MainWindow pages=%s about_footer=%s "
+        "app_icon=%s about_branding=%s lightweight_branding=%s",
         actual_pages,
         window.about_button.text(),
+        icon_ready,
+        about_branding_ready,
+        lightweight_branding_ready,
     )
     QTimer.singleShot(250, application.quit)
 

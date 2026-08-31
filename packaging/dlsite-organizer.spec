@@ -15,6 +15,12 @@ if _packaging_helper_spec is None or _packaging_helper_spec.loader is None:
 _packaging_helper = importlib.util.module_from_spec(_packaging_helper_spec)
 _packaging_helper_spec.loader.exec_module(_packaging_helper)
 
+_branding_png = project_root / "assets" / "branding" / "app_icon.png"
+_branding_ico = project_root / "assets" / "branding" / "app_icon.ico"
+for _branding_path in (_branding_png, _branding_ico):
+    if not _branding_path.is_file():
+        raise SystemExit(f"Branding asset not found: {_branding_path}")
+
 analysis = Analysis(
     [str(source_root / "dlsite_organizer" / "__main__.py")],
     pathex=[str(source_root)],
@@ -23,6 +29,7 @@ analysis = Analysis(
     + [
         (str(project_root / "LICENSE"), "."),
         (str(project_root / "THIRD_PARTY_NOTICES.md"), "."),
+        (str(_branding_png), str(Path("assets") / "branding")),
     ],
     hiddenimports=collect_submodules("selectolax") + collect_submodules("sqlalchemy"),
     hookspath=[],
@@ -106,6 +113,7 @@ exe = EXE(
     upx=False,
     console=False,
     disable_windowed_traceback=False,
+    icon=str(_branding_ico),
 )
 
 coll = COLLECT(

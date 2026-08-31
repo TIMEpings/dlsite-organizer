@@ -21,6 +21,7 @@ EXPLORER_KEY_PATH = rf"Software\Classes\Directory\shell\{EXPLORER_VERB}"
 EXPLORER_COMMAND_KEY_PATH = rf"{EXPLORER_KEY_PATH}\command"
 EXPLORER_MULTI_SELECT_MODEL_VALUE = "MultiSelectModel"
 EXPLORER_MULTI_SELECT_MODEL = "Single"
+EXPLORER_ICON_VALUE = "Icon"
 
 
 class ExplorerRegistrationState(StrEnum):
@@ -42,6 +43,7 @@ class ExplorerRegistration:
     registered_executable: Path | None = None
     command: str | None = None
     multi_select_model: str | None = None
+    icon: str | None = None
     error: str | None = None
 
 
@@ -134,6 +136,7 @@ class ExplorerIntegrationService:
                 EXPLORER_KEY_PATH,
                 EXPLORER_MULTI_SELECT_MODEL_VALUE,
             )
+            icon = self._backend.read_value(EXPLORER_KEY_PATH, EXPLORER_ICON_VALUE)
         except Exception:
             logger.exception("Could not inspect Explorer integration registry state")
             return ExplorerRegistration(
@@ -148,11 +151,15 @@ class ExplorerIntegrationService:
             )
 
         registered_executable, arguments_valid = _parse_command(command)
+        registered_icon_executable, icon_valid = _parse_icon_value(icon)
         is_current = (
             arguments_valid
             and multi_select_model == EXPLORER_MULTI_SELECT_MODEL
             and registered_executable is not None
+            and icon_valid
+            and registered_icon_executable is not None
             and _same_windows_path(registered_executable, current)
+            and _same_windows_path(registered_icon_executable, current)
         )
         return ExplorerRegistration(
             state=(
@@ -166,6 +173,7 @@ class ExplorerIntegrationService:
             ),
             command=command,
             multi_select_model=multi_select_model,
+            icon=icon,
         )
 
     def register_current_executable(self) -> ExplorerRegistration:
@@ -183,6 +191,11 @@ class ExplorerIntegrationService:
                 EXPLORER_KEY_PATH,
                 EXPLORER_MULTI_SELECT_MODEL_VALUE,
                 EXPLORER_MULTI_SELECT_MODEL,
+            )
+            self._backend.write_value(
+                EXPLORER_KEY_PATH,
+                EXPLORER_ICON_VALUE,
+                build_explorer_icon_value(current),
             )
             self._backend.write_value(EXPLORER_COMMAND_KEY_PATH, "", command)
         except Exception as exc:
@@ -253,6 +266,15 @@ def build_quick_rename_command(executable_path: Path | str) -> str:
     return f'{executable_token} --quick-rename "%1"'
 
 
+def build_explorer_icon_value(executable_path: Path | str) -> str:
+    """Build the registry ``Icon`` value from the current executable path."""
+    executable = _absolute_executable_path(executable_path)
+    executable_token = subprocess.list2cmdline([executable])
+    if not executable_token.startswith('"'):
+        executable_token = f'"{executable_token}"'
+    return f"{executable_token},0"
+
+
 def _default_backend() -> RegistryBackend | None:
     if os.name != "nt":
         return None
@@ -306,3 +328,17 @@ def _parse_command(command: str) -> tuple[str | None, bool]:
     executable = value[1:closing_quote]
     arguments = value[closing_quote + 1 :].strip()
     return executable, arguments == '--quick-rename "%1"'
+
+
+def _parse_icon_value(value: str | None) -> tuple[str | None, bool]:
+    """Parse the exact quoted executable/index shape written by this service."""
+    if not value:
+        return None, False
+    candidate = value.strip()
+    if not candidate.startswith('"'):
+        return None, False
+    closing_quote = candidate.find('"', 1)
+    if closing_quote <= 1:
+        return None, False
+    executable = candidate[1:closing_quote]
+    return executable, candidate[closing_quote + 1 :].strip() == ",0"

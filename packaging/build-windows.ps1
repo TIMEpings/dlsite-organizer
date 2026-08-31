@@ -121,6 +121,11 @@ try {
         "audit-native",
         "--dist", $distribution
     )
+    Invoke-IsolatedPython @(
+        $packagingHelper,
+        "audit-icon",
+        "--dist", $distribution
+    )
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath $archive -Force
     }

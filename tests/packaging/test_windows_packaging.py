@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,9 @@ def test_audit_packaged_resources_requires_application_and_runtime_licenses(
     distribution = tmp_path / "dist"
     internal = distribution / "_internal"
     internal.mkdir(parents=True)
+    branding = internal / "assets" / "branding"
+    branding.mkdir(parents=True)
+    (branding / "app_icon.png").write_bytes(b"PNG")
     (internal / "LICENSE").write_text("MIT", encoding="utf-8")
     (internal / "THIRD_PARTY_NOTICES.md").write_text("notices", encoding="utf-8")
     license_root = distribution / "licenses"
@@ -98,6 +102,7 @@ def test_audit_packaged_resources_requires_application_and_runtime_licenses(
 
     resources = windows_packaging.audit_packaged_resources(distribution)
 
+    assert len(resources) == 19
     assert internal / "LICENSE" in resources
     assert license_root / "httpx-1.0.dist-info" / "LICENSE" in resources
 
@@ -106,12 +111,44 @@ def test_audit_packaged_resources_rejects_missing_runtime_license(tmp_path: Path
     distribution = tmp_path / "dist"
     internal = distribution / "_internal"
     internal.mkdir(parents=True)
+    branding = internal / "assets" / "branding"
+    branding.mkdir(parents=True)
+    (branding / "app_icon.png").write_bytes(b"PNG")
     (internal / "LICENSE").write_text("MIT", encoding="utf-8")
     (internal / "THIRD_PARTY_NOTICES.md").write_text("notices", encoding="utf-8")
     (distribution / "licenses").mkdir()
 
     with pytest.raises(FileNotFoundError, match="third-party license directory missing"):
         windows_packaging.audit_packaged_resources(distribution)
+
+
+def test_audit_packaged_resources_rejects_missing_branding_png(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    internal = distribution / "_internal"
+    internal.mkdir(parents=True)
+    (internal / "LICENSE").write_text("MIT", encoding="utf-8")
+    (internal / "THIRD_PARTY_NOTICES.md").write_text("notices", encoding="utf-8")
+    license_root = distribution / "licenses"
+    for name in windows_packaging.REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS:
+        package_dir = license_root / f"{name}-1.0.dist-info"
+        package_dir.mkdir(parents=True)
+        (package_dir / "LICENSE").write_text(name, encoding="utf-8")
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=re.escape(str(Path("assets") / "branding" / "app_icon.png")),
+    ):
+        windows_packaging.audit_packaged_resources(distribution)
+
+
+def test_packaging_spec_embeds_ico_and_collects_runtime_png() -> None:
+    spec_path = _HELPER_PATH.parents[0] / "dlsite-organizer.spec"
+    spec_text = spec_path.read_text(encoding="utf-8")
+
+    assert "_branding_ico" in spec_text
+    assert "icon=str(_branding_ico)" in spec_text
+    assert "_branding_png" in spec_text
+    assert 'str(Path("assets") / "branding")' in spec_text
 
 
 def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(

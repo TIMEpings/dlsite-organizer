@@ -4,6 +4,7 @@ import pytest
 
 from dlsite_organizer.services.explorer_integration import (
     EXPLORER_COMMAND_KEY_PATH,
+    EXPLORER_ICON_VALUE,
     EXPLORER_KEY_PATH,
     EXPLORER_MENU_LABEL,
     EXPLORER_MULTI_SELECT_MODEL,
@@ -11,6 +12,7 @@ from dlsite_organizer.services.explorer_integration import (
     ExplorerIntegrationError,
     ExplorerIntegrationService,
     ExplorerRegistrationState,
+    build_explorer_icon_value,
     build_quick_rename_command,
 )
 
@@ -69,6 +71,9 @@ def test_register_inspect_stale_update_and_idempotent_remove() -> None:
         registry.values[(EXPLORER_KEY_PATH, EXPLORER_MULTI_SELECT_MODEL_VALUE)]
         == EXPLORER_MULTI_SELECT_MODEL
     )
+    assert registry.values[(EXPLORER_KEY_PATH, EXPLORER_ICON_VALUE)] == (
+        build_explorer_icon_value(current)
+    )
     assert registry.values[(EXPLORER_COMMAND_KEY_PATH, "")] == build_quick_rename_command(current)
 
     moved_service = _service(registry, r"D:\Apps\DLsite Organizer\dlsite-organizer.exe")
@@ -99,6 +104,7 @@ def test_path_comparison_accepts_case_variation() -> None:
         EXPLORER_MULTI_SELECT_MODEL_VALUE,
         EXPLORER_MULTI_SELECT_MODEL,
     )
+    registry.write_value(EXPLORER_KEY_PATH, EXPLORER_ICON_VALUE, build_explorer_icon_value(current))
 
     assert (
         _service(registry, current).inspect().state
@@ -149,6 +155,33 @@ def test_missing_or_wrong_multi_select_model_is_stale() -> None:
     assert (
         _service(registry, r"C:\old.exe").inspect().state
         is ExplorerRegistrationState.REGISTERED_STALE
+    )
+
+
+def test_missing_or_stale_icon_value_is_stale() -> None:
+    registry = MemoryRegistry()
+    current = r"C:\Apps\dlsite-organizer.exe"
+    registry.write_value(
+        EXPLORER_COMMAND_KEY_PATH,
+        "",
+        build_quick_rename_command(current),
+    )
+    registry.write_value(
+        EXPLORER_KEY_PATH,
+        EXPLORER_MULTI_SELECT_MODEL_VALUE,
+        EXPLORER_MULTI_SELECT_MODEL,
+    )
+
+    assert _service(registry, current).inspect().state is ExplorerRegistrationState.REGISTERED_STALE
+
+    registry.write_value(
+        EXPLORER_KEY_PATH,
+        EXPLORER_ICON_VALUE,
+        build_explorer_icon_value(current),
+    )
+    assert (
+        _service(registry, current).inspect().state
+        is ExplorerRegistrationState.REGISTERED_CURRENT
     )
 
 
