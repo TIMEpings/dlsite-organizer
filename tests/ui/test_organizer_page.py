@@ -549,12 +549,15 @@ def test_organizer_status_cells_distinguish_normal_warning_and_blocked_states(
     assert normal_item.icon().isNull()
     assert warning_item.icon().isNull() is False
     assert warning_item.font().bold()
-    assert "悬停查看原因" in warning_item.text()
+    assert warning_item.text() == "可执行"
+    assert "悬停查看原因" not in warning_item.text()
     assert "目标路径长度" in warning_item.toolTip()
     assert "悬停查看具体原因" in warning_item.toolTip()
     assert "目标路径长度" in str(warning_item.data(Qt.ItemDataRole.AccessibleTextRole))
     assert blocked_item.icon().isNull() is False
     assert blocked_item.font().bold()
+    assert blocked_item.text() == "冲突"
+    assert "悬停查看原因" not in blocked_item.text()
     assert "目标目录已存在" in blocked_item.toolTip()
     page.close()
 

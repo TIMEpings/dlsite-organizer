@@ -626,8 +626,6 @@ class OrganizerPage(QWidget):
         title = work.title if work is not None else "—"
         presentation = _plan_presentation(plan)
         status_label = _plan_status_label(plan.status)
-        if presentation is not _StatusPresentation.NORMAL:
-            status_label += "（悬停查看原因）"
         values = (
             status_label,
             plan.current_name,
