@@ -1,6 +1,10 @@
+from datetime import date
+
+import pytest
+
 from dlsite_organizer.domain.naming import sanitize_windows_name
-from dlsite_organizer.domain.work import AgeCategory, Work
-from dlsite_organizer.services.naming import NamingService
+from dlsite_organizer.domain.work import AgeCategory, Work, WorkLanguage
+from dlsite_organizer.services.naming import NamingService, NamingTemplateError
 
 
 def test_formats_complete_metadata() -> None:
@@ -54,3 +58,49 @@ def test_supports_rich_metadata_aliases_without_changing_default_template() -> N
         "RJ01234567-Work Title--Circle Name-Series-Alice, Bob-Alice, Bob-"
         "ASMR, Healing-ASMR, Healing-r15-ENG"
     )
+
+
+def test_canonical_template_supports_configured_metadata_formatting() -> None:
+    work = Work(
+        workno="RJ01234567",
+        title="Work Title",
+        maker_name="Circle Name",
+        series_name="Series",
+        cvs=["Alice", "Bob"],
+        tags=["ASMR", "Healing", "Sleep"],
+        age_category=AgeCategory.R18,
+        language=WorkLanguage.JPN,
+        release_date=date(2026, 8, 31),
+    )
+
+    formatted = NamingService(
+        "[{maker_name}][{rjcode}][{series}] {title} {cv} {tags} {age} {language} {release_date}",
+        cv_separator=" / ",
+        cv_prefix="(",
+        cv_suffix=")",
+        tag_separator=" ",
+        max_tags=2,
+        date_format="%Y%m%d",
+    ).format(work)
+
+    assert formatted == (
+        "[Circle Name][RJ01234567][Series] Work Title (Alice _ Bob) ASMR Healing "
+        "R18 日语 20260831"
+    )
+
+
+def test_missing_optional_fields_cleanup_and_unknown_language_are_safe() -> None:
+    work = Work(workno="RJ01234567", title="Work Title", language="FUTURE")
+
+    formatted = NamingService(
+        "[{maker_name}][{series}] {title} [{cv}] {age} {language}"
+    ).format(work)
+
+    assert formatted == "Work Title FUTURE"
+    assert "None" not in formatted
+
+
+@pytest.mark.parametrize("template", ["", "   ", "{unknown_field}", "{title"])
+def test_invalid_templates_are_rejected(template: str) -> None:
+    with pytest.raises(NamingTemplateError):
+        NamingService(template)

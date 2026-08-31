@@ -45,6 +45,7 @@ def main() -> int:
         components.rename_executor,
         components.undo_service,
         components.candidate_review_queue_service,
+        components.settings_service,
     )
     window.show()
     _schedule_startup_smoke(application, window)

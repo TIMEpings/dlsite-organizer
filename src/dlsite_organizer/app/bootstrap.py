@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from dlsite_organizer.app.settings import AppSettings
+from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.metadata_store import MetadataStore
 from dlsite_organizer.persistence.manual_reviews import ManualReviewRepository
@@ -42,6 +42,7 @@ class ApplicationComponents:
     rename_executor: RenameExecutor
     undo_service: UndoService
     rename_journal: RenameJournal
+    settings_service: SettingsService
     manual_review_service: ManualReviewService | None = None
     candidate_review_queue_service: CandidateReviewQueueService | None = None
 
@@ -52,8 +53,19 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         section=settings.provider.section,
         base_url=settings.provider.base_url,
         timeout_seconds=settings.provider.timeout_seconds,
+        metadata_locale=settings.provider.metadata_locale,
     )
-    naming = NamingService(settings.naming_template)
+    naming = NamingService(
+        settings.naming_template,
+        cv_separator=settings.cv_separator,
+        cv_prefix=settings.cv_prefix,
+        cv_suffix=settings.cv_suffix,
+        tag_separator=settings.tag_separator,
+        max_tags=settings.max_tags,
+        hide_general_age=settings.hide_general_age,
+        date_format=settings.date_format,
+        illegal_char_replacement=settings.illegal_char_replacement,
+    )
     database = Database(settings.database_path)
     try:
         database.initialize()
@@ -102,6 +114,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         rename_executor=rename_executor,
         undo_service=undo_service,
         rename_journal=journal,
+        settings_service=SettingsService(settings),
         manual_review_service=manual_review_service,
         candidate_review_queue_service=candidate_review_queue_service,
     )

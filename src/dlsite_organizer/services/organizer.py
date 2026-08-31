@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from dlsite_organizer.domain.organizer import (
     RenamePlan,
@@ -91,6 +91,10 @@ class OrganizerService:
         self._lookup_service = lookup_service
         self._scanner = scanner or FolderScanner()
         self._planner = planner or RenamePlanner()
+
+    def apply_settings(self, settings: Any) -> None:
+        """Apply validated naming settings without rebuilding the organizer."""
+        self._planner.apply_settings(settings)
 
     def preview(
         self,

@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from dlsite_organizer.app.settings import SettingsError, load_settings
+from dlsite_organizer.app.settings import (
+    AppSettings,
+    CacheSettings,
+    ProviderSettings,
+    SettingsError,
+    SettingsService,
+    load_settings,
+)
 
 
 def test_missing_config_uses_defaults(tmp_path: Path) -> None:
@@ -34,3 +41,43 @@ def test_invalid_config_is_not_silently_ignored(tmp_path: Path) -> None:
     path.write_text("not valid toml =", encoding="utf-8")
     with pytest.raises(SettingsError):
         load_settings(path)
+
+
+def test_settings_service_saves_atomically_and_round_trips_new_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    database_path = tmp_path / "metadata.sqlite3"
+    service = SettingsService(
+        AppSettings(
+            database_path=database_path,
+            naming_template="[{maker_name}][{rjcode}] {title}",
+            cv_separator=" / ",
+            max_tags=3,
+            hide_general_age=True,
+            date_format="%Y%m%d",
+            provider=ProviderSettings(metadata_locale="zh_cn"),
+            cache=CacheSettings(ttl_hours=12),
+        ),
+        config_path=config_path,
+    )
+
+    saved = service.save(service.settings)
+    loaded = load_settings(config_path)
+
+    assert saved == loaded
+    assert loaded.cv_separator == " / "
+    assert loaded.max_tags == 3
+    assert loaded.hide_general_age is True
+    assert loaded.provider.metadata_locale == "zh_cn"
+    assert loaded.cache.ttl_hours == 12
+    assert not any(config_path.parent.glob(f".{config_path.name}.*.tmp"))
+
+
+def test_legacy_toml_uses_defaults_for_new_fields(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('naming_template = "[{workno}] {title}"\n', encoding="utf-8")
+
+    settings = load_settings(path)
+
+    assert settings.naming_template == "[{workno}] {title}"
+    assert settings.provider.metadata_locale == "ja_jp"
+    assert settings.max_tags == 0

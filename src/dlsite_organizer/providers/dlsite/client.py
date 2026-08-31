@@ -125,6 +125,21 @@ class DlsiteProvider:
         """Fetch normalized metadata, retaining the minimal legacy interface."""
         return self.fetch_work_lookup(workno).work
 
+    def apply_settings(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+        metadata_locale: str | None = None,
+    ) -> None:
+        """Apply provider settings to subsequent requests without restarting."""
+        if timeout_seconds is not None:
+            self._timeout = httpx.Timeout(
+                timeout_seconds,
+                connect=min(timeout_seconds, 10.0),
+            )
+        if metadata_locale is not None:
+            self._metadata_locale = metadata_locale.strip() or "ja_jp"
+
     def fetch_work_lookup(self, workno: str) -> DlsiteWorkLookup:
         """Fetch core evidence, then optionally enrich it from product JSON."""
         normalized = str(WorkCode.parse(workno, allowed_prefixes={"RJ"}))

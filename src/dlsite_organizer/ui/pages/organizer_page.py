@@ -252,6 +252,15 @@ class OrganizerPage(QWidget):
     def preview_stale(self) -> bool:
         return self._preview_stale
 
+    def invalidate_preview(self) -> None:
+        """Invalidate an existing preview after a naming-settings change."""
+        if self._preview is not None:
+            self._invalidate_preview()
+
+    def apply_settings(self, settings: object) -> None:
+        """Apply validated settings to the organizer's next preview."""
+        self._organizer_service.apply_settings(settings)
+
     @Slot(QTableWidgetItem)
     def _selection_changed(self, _item: QTableWidgetItem) -> None:
         self._update_execute_button()

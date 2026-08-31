@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Callable, Protocol, cast, runtime_checkable
+from typing import Any, Callable, Protocol, cast, runtime_checkable
 
 from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
 from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
@@ -263,6 +263,23 @@ class LookupService:
     @property
     def manual_review_service(self) -> ManualReviewService | None:
         return self._manual_review_service
+
+    def apply_settings(self, settings: Any) -> None:
+        """Apply settings that are safe to change for the next lookup.
+
+        The method deliberately uses the existing provider and naming
+        instances.  In-flight workers finish with their captured request,
+        while the next lookup/preview observes the new values.
+        """
+        self._naming.apply_settings(settings)
+        self._cache_ttl = timedelta(hours=settings.cache.ttl_hours)
+        self._allow_stale_on_error = settings.cache.allow_stale_on_error
+        provider_apply = getattr(self._provider, "apply_settings", None)
+        if provider_apply is not None:
+            provider_apply(
+                timeout_seconds=settings.provider.timeout_seconds,
+                metadata_locale=settings.provider.metadata_locale,
+            )
 
     def _fetch_work(self, workno):
         if isinstance(self._provider, _SourceAwareProvider):

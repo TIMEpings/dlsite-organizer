@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer import __version__
+from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
@@ -26,6 +28,7 @@ from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.pages.review_queue_page import ReviewQueuePage
+from dlsite_organizer.ui.pages.settings_page import SettingsPage
 
 
 class MainWindow(QMainWindow):
@@ -39,8 +42,11 @@ class MainWindow(QMainWindow):
         rename_executor: RenameExecutor | None = None,
         undo_service: UndoService | None = None,
         candidate_review_queue_service=None,
+        settings_service: SettingsService | None = None,
     ) -> None:
         super().__init__()
+        self._lookup_service = lookup_service
+        self._settings_service = settings_service or SettingsService(AppSettings())
         self.setWindowTitle("DLsite Organizer")
         self.resize(1080, 760)
         self.setMinimumSize(860, 640)
@@ -84,6 +90,8 @@ class MainWindow(QMainWindow):
             lookup_service.manual_review_service,
             cover_service,
         )
+        self.settings_page = SettingsPage(self._settings_service)
+        self._settings_service.subscribe(self._settings_saved)
         page_definitions = [
             ("整理", self.organizer_page),
             ("查询", self.lookup_page),
@@ -95,7 +103,7 @@ class MainWindow(QMainWindow):
                     "请在“查询”页输入 RJcode，确认的翻译关系会显示在作品信息下方。",
                 ),
             ),
-            ("设置", _placeholder("设置", "图形化设置页面尚未实现；当前可使用 TOML 配置。")),
+            ("设置", self.settings_page),
         ]
         for label, page in page_definitions:
             self.navigation_list.addItem(QListWidgetItem(label))
@@ -107,6 +115,13 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
         self.setStyleSheet(_STYLE)
+
+    @Slot(object)
+    def _settings_saved(self, settings: object) -> None:
+        """Apply validated values to live services and invalidate old plans."""
+        self._lookup_service.apply_settings(settings)
+        self.organizer_page.apply_settings(settings)
+        self.organizer_page.invalidate_preview()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Avoid destroying a running QThread during a bounded network request."""

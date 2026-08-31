@@ -2,7 +2,7 @@
 
 ## Current architecture
 
-The v0.4 lookup flow remains deliberately small:
+The lookup flow remains deliberately small:
 
 ```text
 PySide6 LookupPage
@@ -37,7 +37,7 @@ values, and never manipulates widgets or implements parsing policy.
 `DlsiteSite` builds every section-scoped URL in one place. `DlsiteProvider` first requests the
 candidate `product/info/ajax?product_id=<WORKNO>` source. A successful response is used only when it
 validates as `ProductInfoAjaxSource`; it then makes one exact-listing
-`api/=/product.json?workno=<WORKNO>&locale=ja_jp` enrichment request. A translation child may trigger
+`api/=/product.json?workno=<WORKNO>&locale=<configured-locale>` enrichment request. A translation child may trigger
 one additional rich request for its explicit original work; child lists are never crawled. If the core
 source is unusable, the provider makes one HTML fallback request instead. There is no brute-force
 section probing. The configured section remains a provider implementation detail and is the narrow
@@ -96,8 +96,27 @@ Lookup results use the cache for current metadata and preserve provider provenan
 delivery freshness. Translation relations are reconstructed from the normalized cached
 `translation_info`; no relation-history query or inference is implemented.
 
-Settings use `tomllib` and validated Pydantic models. Missing configuration is normal and uses
-built-in defaults. Invalid present configuration is surfaced rather than silently ignored.
+Settings use `tomllib` and validated Pydantic models. `SettingsPage` edits the same `AppSettings`
+schema that TOML loading uses; it never writes TOML directly. `SettingsService` validates a complete
+model, writes UTF-8 TOML through a same-directory temporary file and `os.replace`, then notifies the
+runtime. Missing configuration is normal and uses built-in defaults. Invalid present configuration is
+surfaced rather than silently ignored. The default metadata locale remains `ja_jp`; changing locale
+affects subsequent live/force requests, while fresh existing cache entries remain governed by the
+current TTL rather than being silently reinterpreted.
+
+`NamingService` is the one renderer for lookup names, Organizer plans, and Settings preview. Its
+canonical placeholders are `{rjcode}`, `{title}`, `{maker_name}`, `{maker_id}`, `{series}`, `{cv}`,
+`{tags}`, `{age}`, `{language}`, and `{release_date}`. The old aliases remain accepted. Missing
+optional values render as empty strings, and the existing bracket empty-group cleanup avoids results
+such as `[]`. Rendering is deterministic and does not evaluate code or general template expressions.
+CV/tag separators, CV prefix/suffix, tag limit, date format, general-age visibility, and the Windows
+illegal-character replacement symbol are settings. Reserved Windows device names and trailing
+dot/space protection remain in the shared sanitizer.
+
+When Settings saves successfully, `MainWindow` updates the existing NamingService, LookupService,
+provider timeout/locale, and cache policy without restarting. An existing Organizer preview is
+marked stale and execution remains disabled until a new scan creates a plan with the new naming
+configuration.
 
 ## Organizer flow
 

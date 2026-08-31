@@ -7,6 +7,7 @@ import ntpath
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path, PureWindowsPath
+from typing import Any
 
 from dlsite_organizer.domain.organizer import (
     RenamePlan,
@@ -37,6 +38,10 @@ class RenamePlanner:
         self._naming = naming or NamingService()
         self._case_insensitive = case_insensitive
         self._path_warning_threshold = path_warning_threshold
+
+    def apply_settings(self, settings: Any) -> None:
+        """Update the shared naming renderer for subsequent plans."""
+        self._naming.apply_settings(settings)
 
     def plan(
         self,

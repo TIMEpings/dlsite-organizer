@@ -54,9 +54,10 @@ python -m dlsite_organizer
 
 1. 启动应用，在“查询”页输入例如 `RJ01609020`。
 2. 查看当前 metadata、来源和关系说明；必要时使用“强制刷新”。
-3. 在“整理”页选择本地根目录并扫描。
-4. 逐项检查 preview，只保留确定要修改的 READY 项。
-5. 明确确认后执行；需要时从最近一次 journaled transaction 执行 Undo。
+3. 在“设置”页配置命名模板、元数据语言和 cache；实时预览使用内置中性示例。
+4. 在“整理”页选择本地根目录并扫描。
+5. 逐项检查 preview，只保留确定要修改的 READY 项。
+6. 明确确认后执行；需要时从最近一次 journaled transaction 执行 Undo。
 
 应用启动时会自动创建用户数据目录和 SQLite schema，不需要预先创建数据库或配置文件。
 
@@ -78,12 +79,20 @@ Windows 默认数据目录为 `%LOCALAPPDATA%\dlsite-organizer`：
 
 | Data | Default path | Purpose |
 | --- | --- | --- |
-| Settings | `config.toml` | Optional TOML configuration |
+| Settings | `config.toml` | GUI 设置的 UTF-8 持久化文件，也支持高级手工编辑 |
 | SQLite | `metadata.sqlite3` | Current cache, metadata history, manual reviews and rename journal |
 | Logs | `logs\dlsite-organizer.log` | Bounded application diagnostics |
 | Cover cache | none on disk | Successfully downloaded covers are kept only in the current process memory |
 
 可以在 `config.toml` 中设置 `database_path`；相对路径相对于配置文件目录解析。旧 SQLite 数据库使用 additive upgrade：旧 observation、translation history、manual reviews 和 rename journal 不会被删除或重写。`metadata_observations.bonus_evidence_json = NULL` 表示 legacy / not captured / unknown，不等同于明确的 `bonuses = []`。
+
+## Settings and naming
+
+普通用户应使用“设置”页；页面和 TOML 共用同一个已校验的 `AppSettings` schema。保存前会先构造并校验完整设置，再通过临时文件和 `os.replace` 原子写入 `config.toml`。保存命名设置后，下一次 Organizer preview 立即使用新规则；已有 preview 会标记为 stale，必须重新扫描。
+
+默认命名模板仍是 `[{maker_name}][{workno}] {title}`，所以不修改设置不会改变现有默认结果。canonical 变量是 `{rjcode}`、`{title}`、`{maker_name}`、`{maker_id}`、`{series}`、`{cv}`、`{tags}`、`{age}`、`{language}` 和 `{release_date}`。`{workno}`、`{series_name}`、`{cv_list}`、`{tags_list}`、`{age_category}` 等旧别名继续兼容。
+
+`{cv}` 和 `{tags}` 使用设置页中的分隔符；CV 可配置前后缀，标签数量 `0` 表示不限且保持 DLsite source 顺序。缺失字段为空，`[ ... ]` 空段会被清理。命名器仍负责 Windows 非法字符、保留设备名、尾随点/空格的安全处理。
 
 ## Relation provenance
 
@@ -115,6 +124,7 @@ Existing observations suggest bonus metadata may be transient, but this is not c
 - Windows 是主要目标平台；当前 Organizer 仅支持 root 下直接子目录和 RJcode。
 - 默认 provider 使用显式配置的 `maniax` section；不会尝试多个 section 猜测。
 - live Lookup / force refresh 会访问 DLsite；网络错误只影响该次 lookup，不应阻止应用启动。
+- metadata locale、cache TTL 和 provider timeout 可在“设置”页修改；locale 变化不会静默重解释已有 cache，下一次 live/force refresh 使用新 locale。
 - Review Queue 的本地浏览、筛选、选中和 review 不调用 provider。
 - cover 没有持久化磁盘 cache；应用重启后需要重新通过 lookup 获取封面。
 - 不实现过期 limited-bonus relation 的自动恢复/检测、关系概率、候选评分、批量自动确认或 auto-learning。
