@@ -99,7 +99,7 @@ its state is not stored in `config.toml`. It shows one of:
 
 On a packaged Windows build, **注册 / 更新** writes only the current user's
 `HKCU\Software\Classes\Directory\shell\dlsite-organizer` key and its `command` child. It also
-sets the verb's `MultiSelectModel` value to `Player`, and the command is generated as a direct
+sets the verb's `MultiSelectModel` value to `Single`, and the command is generated as a direct
 executable invocation:
 
 ```text
@@ -107,11 +107,13 @@ executable invocation:
 ```
 
 The executable path is quoted by the standard Windows argument formatter, so spaces and non-ASCII
-paths are preserved; no `cmd.exe`, PowerShell, or shell trampoline is used. With the Player model,
-the command is intended to receive the complete Explorer selection in one application invocation;
-the CLI accepts one or more directory arguments. **移除** deletes only this verb and its `command`
-child, is idempotent, and never removes the parent `Directory\shell` key or unrelated verbs.
-Registration is explicit, per-user, and needs no administrator rights.
+paths are preserved; no `cmd.exe`, PowerShell, or shell trampoline is used. The Explorer contract is
+single selected directory only. Multi-select is intentionally unsupported by this static verb;
+batch processing remains available through lightweight drag-and-drop or Full Organizer. The CLI
+still accepts one or more directory arguments for internal tests and future integration. **移除**
+deletes only this verb and its `command` child, is idempotent, and never removes the parent
+`Directory\shell` key or unrelated verbs. Registration is explicit, per-user, and needs no
+administrator rights.
 
 The source/development run does not register a Python interpreter or source entry point; its buttons
 are disabled with a message that Explorer integration is available only in the packaged version.
@@ -120,15 +122,15 @@ stale. Start the application from its new location and use **注册 / 更新**. 
 portable application directory, use **移除** first. On Windows 11 and some Explorer configurations,
 the ordinary shell verb may appear under **显示更多选项**.
 
-The Explorer action opens one lightweight Quick Action window and calls the same batch-capable
-`QuickRenameService` as drag-and-drop. It does not show a second ordinary confirmation dialog, but
-it still performs input validation, lookup, naming, planning, final preflight, durable journal
+The Explorer action opens one lightweight Quick Action window and calls the same
+`QuickRenameService` as drag-and-drop. It does not show a second ordinary confirmation dialog,
+but it still performs input validation, lookup, naming, planning, final preflight, durable journal
 creation, and executor mutation. A fresh metadata cache is reused, and an unresolved journal
 blocks the action. Independent concurrent invocations remain serialized at journal transaction
-creation; this is defense-in-depth, not the normal multi-select architecture. If the real packaged
-Windows Explorer smoke cannot demonstrate that static Player activation supplies the full
-selection, the safe fallback is `MultiSelectModel=Single` and multi-select is deferred rather than
-aggregated through inter-process locks.
+creation as defense-in-depth. This single-selection Explorer restriction is intentional: Windows
+Explorer's static right-click verb cannot reliably aggregate multi-select into one application
+call in the target environment, so v1.0 avoids the unsafe multiple-process behavior; future
+versions may revisit it.
 
 ## Persistence and paths
 

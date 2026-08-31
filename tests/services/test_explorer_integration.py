@@ -62,7 +62,8 @@ def test_register_inspect_stale_update_and_idempotent_remove() -> None:
 
     registered = service.register_current_executable()
     assert registered.state is ExplorerRegistrationState.REGISTERED_CURRENT
-    assert registered.multi_select_model == EXPLORER_MULTI_SELECT_MODEL
+    assert EXPLORER_MULTI_SELECT_MODEL == "Single"
+    assert registered.multi_select_model == "Single"
     assert registry.values[(EXPLORER_KEY_PATH, "")] == EXPLORER_MENU_LABEL
     assert (
         registry.values[(EXPLORER_KEY_PATH, EXPLORER_MULTI_SELECT_MODEL_VALUE)]
@@ -133,6 +134,12 @@ def test_missing_or_wrong_multi_select_model_is_stale() -> None:
         r'"C:\old.exe" --quick-rename "%1"',
     )
 
+    assert (
+        _service(registry, r"C:\old.exe").inspect().state
+        is ExplorerRegistrationState.REGISTERED_STALE
+    )
+
+    registry.write_value(EXPLORER_KEY_PATH, EXPLORER_MULTI_SELECT_MODEL_VALUE, "Player")
     assert (
         _service(registry, r"C:\old.exe").inspect().state
         is ExplorerRegistrationState.REGISTERED_STALE

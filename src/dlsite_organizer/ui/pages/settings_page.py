@@ -131,6 +131,7 @@ class SettingsPage(QWidget):
 
         explorer_help = QLabel(
             "注册仅对当前 Windows 用户生效，不需要管理员权限。"
+            "右键菜单支持单个文件夹。需要批量处理多个作品时，请使用轻量模式拖放或完整模式。"
             "根据 Windows 版本和 Explorer 行为，该命令可能出现在“显示更多选项”菜单中。"
         )
         explorer_help.setObjectName("pageDescription")

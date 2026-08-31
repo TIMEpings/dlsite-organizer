@@ -188,7 +188,7 @@ include a CLI, registry, single-instance IPC, Explorer integration, About page, 
 Phase D adds one typed application boundary around the existing lightweight flow:
 
 ```text
-Explorer shell verb (HKCU, Player, one %1 selection)
+Explorer shell verb (HKCU, Single, one %1 selection)
         ↓ direct packaged exe command
 argparse → ApplicationInvocation(QUICK_RENAME)
         ↓
@@ -212,12 +212,19 @@ in a dialog and logs it rather than leaving an invisible process.
 
 The Explorer verb is created only under the current user's
 `HKCU\Software\Classes\Directory\shell\dlsite-organizer` key. It explicitly sets
-`MultiSelectModel=Player`; its command is generated from `sys.executable` in a frozen build and
+`MultiSelectModel=Single`; its command is generated from `sys.executable` in a frozen build and
 contains a quoted executable path plus the literal quoted Explorer `%1` placeholder. No source
 path, Python interpreter, `cmd /c`, PowerShell, or shell interpolation is registered. Windows path
 comparison is case-insensitive and expands 8.3 spelling when Windows can provide the long form,
 so portable relocation is reported as a typed stale state.
 Non-Windows and source/development contexts report `UNSUPPORTED` and cannot register.
+
+The Explorer contract supports one selected directory only. Multi-select is intentionally
+unsupported for this static verb because the target Windows environment cannot reliably aggregate
+multiple selections into one application call; limiting the verb to `Single` prevents Explorer from
+launching multiple application processes. Batch Quick Rename remains available through lightweight
+drag-and-drop and the Full Organizer. The CLI continues to accept multiple directory arguments for
+internal tests and future integration.
 
 `ExplorerIntegrationService` is UI-independent and uses a small registry backend protocol. The
 Settings page renders its inspection result rather than guessing from button text or persisting a

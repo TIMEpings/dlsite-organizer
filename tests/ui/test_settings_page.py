@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QGroupBox, QMessageBox, QScrollArea, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QMessageBox, QScrollArea, QVBoxLayout
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.app.settings import AppSettings, SettingsService, load_settings
@@ -44,6 +44,11 @@ def test_settings_page_has_live_preview_and_rejects_invalid_template(
     assert page.open_database_button is not None
     assert page.open_logs_button is not None
     assert "资源管理器集成" in [box.title() for box in page.findChildren(QGroupBox)]
+    assert any(
+        "右键菜单支持单个文件夹。需要批量处理多个作品时，请使用轻量模式拖放或完整模式。"
+        in label.text()
+        for label in page.findChildren(QLabel)
+    )
     assert "{workno}" in page.template_variable_buttons
     assert "{rjcode}" not in page.template_variable_buttons
     assert "RJ01234567" in initial

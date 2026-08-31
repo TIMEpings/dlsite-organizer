@@ -20,7 +20,7 @@ EXPLORER_MENU_LABEL = "使用 DLsite Organizer 重命名"
 EXPLORER_KEY_PATH = rf"Software\Classes\Directory\shell\{EXPLORER_VERB}"
 EXPLORER_COMMAND_KEY_PATH = rf"{EXPLORER_KEY_PATH}\command"
 EXPLORER_MULTI_SELECT_MODEL_VALUE = "MultiSelectModel"
-EXPLORER_MULTI_SELECT_MODEL = "Player"
+EXPLORER_MULTI_SELECT_MODEL = "Single"
 
 
 class ExplorerRegistrationState(StrEnum):
@@ -235,13 +235,13 @@ def current_executable_path() -> Path | None:
 
 
 def build_quick_rename_command(executable_path: Path | str) -> str:
-    """Build the direct Player-model Explorer command without a shell trampoline.
+    """Build the direct single-selection Explorer command without a shell trampoline.
 
     ``%1`` is the Shell selection placeholder.  With ``MultiSelectModel`` set
-    to ``Player`` on the owning verb, Explorer activates the command once and
-    supplies the selected item arguments to that invocation.  Keeping the
-    placeholder quoted preserves paths containing spaces without introducing a
-    command interpreter or an inter-process aggregation layer.
+    to ``Single`` on the owning verb, Explorer offers the command for one
+    selected directory.  Keeping the placeholder quoted preserves paths
+    containing spaces without introducing a command interpreter or an
+    inter-process aggregation layer.
     """
     executable = _absolute_executable_path(executable_path)
     # Let the standard Windows argument formatter quote the executable path;
