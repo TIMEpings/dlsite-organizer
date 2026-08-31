@@ -2,7 +2,7 @@
 
 `dlsite-organizer` 是一个面向 Windows 的桌面工具，用于查询 DLsite 作品信息、扫描本地作品目录，并在用户确认后安全重命名目录。
 
-> 当前源码版本是 `0.10.3`。v1.0.0 首发准备已完成可自动化部分，但在许可证选择和最终 Windows 人工 smoke 前不会宣称正式发布。
+> 当前源码版本是 `1.0.0`。Windows standalone ZIP 是正式发行方式；解压后即可运行，无需安装 Python。
 
 ## What it is
 
@@ -25,7 +25,9 @@ Lookup / Scan → inspect → Preview → explicit confirmation → safe Execute
 
 ### Windows distribution
 
-正式发布时，普通用户只需解压 `dlsite-organizer-1.0.0-windows-x64.zip` 并运行其中的 `dlsite-organizer.exe`，不需要安装 Python 或项目依赖。当前仓库仍处于 release gate 阶段，最终 zip 尚未作为 v1.0.0 发布。
+普通用户只需解压 `dlsite-organizer-1.0.0-windows-x64.zip` 并运行其中的 `dlsite-organizer.exe`，不需要安装 Python 或项目依赖。ZIP 同时包含第三方许可证说明。
+
+下载并解压 ZIP 后，首次启动会自动创建用户数据目录和 SQLite schema。
 
 ### Run from source
 
@@ -139,4 +141,4 @@ Release procedure 见 [`docs/release-checklist.md`](docs/release-checklist.md)�
 
 ## License
 
-本仓库目前没有 `LICENSE` 文件。许可证必须由项目所有者选择并加入后，才可以进行 public release；本项目不会在没有用户决定的情况下假设许可证。
+本项目使用 MIT License，详见 [`LICENSE`](LICENSE)。运行时第三方组件的许可证和来源见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)；它们不因本项目使用 MIT 而改变。
