@@ -152,8 +152,13 @@ def _link_like(path: Path) -> bool:
 
 
 def _path_key(path: Path) -> str:
+    return normalized_path_identity(path)
+
+
+def normalized_path_identity(path: Path | str) -> str:
+    """Return the canonical, case-insensitive identity used for local paths."""
     try:
-        value = str(path.resolve(strict=False))
+        value = str(Path(path).resolve(strict=False))
     except OSError:
         value = str(path)
     return ntpath.normcase(value)

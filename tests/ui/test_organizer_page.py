@@ -7,7 +7,7 @@ from threading import Event
 from typing import cast
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QTableWidgetItem
 from tests.services.test_lookup_cache import (
     MutableClock,
@@ -519,4 +519,280 @@ def test_full_mode_drop_rejects_different_parents_without_starting_scan(
 
     assert started == []
     assert "同一父目录" in page.status_label.text()
+    page.close()
+
+
+def test_organizer_status_cells_distinguish_normal_warning_and_blocked_states(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    for code in ("RJ01609020", "RJ01636949", "RJ01637033"):
+        (tmp_path / f"old {code}").mkdir()
+    service = OrganizerService(FakeLookupService())
+    preview = service.preview(tmp_path)
+    warning = replace(
+        preview.plans[1],
+        warnings=("目标路径长度超过保守阈值。",),
+    )
+    blocked = replace(
+        preview.plans[2],
+        status=RenamePlanStatus.CONFLICT,
+        error="目标目录已存在，未生成可执行的重命名计划。",
+    )
+    page = OrganizerPage(service)
+    page.set_preview(replace(preview, plans=(preview.plans[0], warning, blocked)))
+
+    normal_item = cast(QTableWidgetItem, page.table.item(0, 0))
+    warning_item = cast(QTableWidgetItem, page.table.item(1, 0))
+    blocked_item = cast(QTableWidgetItem, page.table.item(2, 0))
+
+    assert normal_item.text() == "可执行"
+    assert normal_item.icon().isNull()
+    assert warning_item.icon().isNull() is False
+    assert warning_item.font().bold()
+    assert "悬停查看原因" in warning_item.text()
+    assert "目标路径长度" in warning_item.toolTip()
+    assert "悬停查看具体原因" in warning_item.toolTip()
+    assert "目标路径长度" in str(warning_item.data(Qt.ItemDataRole.AccessibleTextRole))
+    assert blocked_item.icon().isNull() is False
+    assert blocked_item.font().bold()
+    assert "目标目录已存在" in blocked_item.toolTip()
+    page.close()
+
+
+def test_remove_selected_rows_updates_authoritative_preview_and_execution(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    sources = [tmp_path / f"old {code}" for code in ("RJ01609020", "RJ01636949", "RJ01637033")]
+    for source in sources:
+        source.mkdir()
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    executor = RenameExecutor(journal)
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service, execution_service=executor)
+    page.set_root_path(tmp_path)
+    page.set_preview(service.preview(tmp_path))
+
+    page.table.selectRow(1)
+    assert page.remove_button.isEnabled()
+    page.remove_button.click()
+
+    assert page.preview is not None
+    assert [plan.source_path for plan in page.preview.plans] == [sources[0], sources[2]]
+    assert [plan.source_path for plan in page.selected_ready_plans()] == [sources[0], sources[2]]
+    execution = executor.execute(tmp_path, page.selected_ready_plans(), confirmed=True)
+    assert execution.success_count == 2
+    assert sources[0].exists() is False
+    assert sources[1].exists()
+    assert sources[2].exists() is False
+    page.close()
+    database.dispose()
+
+
+def test_remove_selected_supports_multiple_rows(qapp: QApplication, tmp_path: Path) -> None:
+    for code in ("RJ01609020", "RJ01636949", "RJ01637033"):
+        (tmp_path / f"old {code}").mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_preview(service.preview(tmp_path))
+    selection = page.table.selectionModel()
+    assert selection is not None
+    for row in (0, 2):
+        selection.select(
+            page.table.model().index(row, 0),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+
+    page.remove_selected()
+
+    assert page.table.rowCount() == 1
+    assert page.preview is not None
+    assert [plan.current_name for plan in page.preview.plans] == ["old RJ01636949"]
+    page.close()
+
+
+def test_clear_preview_is_immediate_preview_only_and_keeps_root(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    source = tmp_path / "old RJ01609020"
+    source.mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_root_path(tmp_path)
+    page.set_preview(service.preview(tmp_path))
+
+    page.clear_button.click()
+
+    assert page.preview is None
+    assert page.table.rowCount() == 0
+    assert not page.execute_button.isEnabled()
+    assert not page.remove_button.isEnabled()
+    assert not page.clear_button.isEnabled()
+    assert page.root_input.text() == str(tmp_path)
+    assert "未发现作品" not in page.status_label.text()
+    assert source.exists()
+    page.close()
+
+
+def test_full_mode_drop_appends_and_redrop_upserts_without_reordering(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    sources = [tmp_path / f"old {code}" for code in ("RJ01609020", "RJ01636949", "RJ01637033")]
+    for source in sources:
+        source.mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_root_path(tmp_path)
+    page.set_preview(service.preview_paths(tmp_path, (sources[0], sources[1])))
+
+    page._handle_drop_paths((sources[2],))
+    _wait_for_scan_idle(qapp, page)
+    assert page.preview is not None
+    assert [plan.source_path for plan in page.preview.plans] == sources
+
+    page._handle_drop_paths((str(sources[1]).upper(),))
+    _wait_for_scan_idle(qapp, page)
+    assert page.preview is not None
+    assert [plan.source_path for plan in page.preview.plans] == sources
+    assert page.table.rowCount() == 3
+    page.close()
+
+
+def test_full_mode_root_drop_appends_and_button_scan_replaces(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    first = tmp_path / "old RJ01609020"
+    second = tmp_path / "old RJ01636949"
+    third = tmp_path / "old RJ01637033"
+    for source in (first, second, third):
+        source.mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_root_path(tmp_path)
+    page.set_preview(service.preview_paths(tmp_path, (first,)))
+
+    page._handle_drop_paths((tmp_path,))
+    _wait_for_scan_idle(qapp, page)
+    assert page.preview is not None
+    assert [plan.current_name for plan in page.preview.plans] == [
+        first.name,
+        second.name,
+        third.name,
+    ]
+
+    replacement_root = tmp_path / "replacement"
+    replacement_root.mkdir()
+    replacement = replacement_root / "new RJ01609020"
+    replacement.mkdir()
+    page.set_root_path(replacement_root)
+    page.scan_button.click()
+    _wait_for_scan_idle(qapp, page)
+    assert page.preview is not None
+    assert [plan.current_name for plan in page.preview.plans] == [replacement.name]
+    page.close()
+
+
+def test_append_failure_preserves_existing_preview(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    class FailingAppendService:
+        def __init__(self) -> None:
+            self._fallback = OrganizerService(FakeLookupService())
+
+        def preview(self, root_path, **kwargs):
+            return self._fallback.preview(root_path, **kwargs)
+
+        def preview_paths(self, root_path, paths, **kwargs):
+            raise RuntimeError("append fixture failure")
+
+    first = tmp_path / "old RJ01609020"
+    second = tmp_path / "old RJ01636949"
+    first.mkdir()
+    second.mkdir()
+    fallback = OrganizerService(FakeLookupService())
+    page = OrganizerPage(FailingAppendService())  # type: ignore[arg-type]
+    page.set_root_path(tmp_path)
+    page.set_preview(fallback.preview_paths(tmp_path, (first,)))
+
+    page._handle_drop_paths((second,))
+    _wait_for_scan_idle(qapp, page)
+
+    assert page.preview is not None
+    assert [plan.source_path for plan in page.preview.plans] == [first]
+    assert "当前预览保持不变" in page.status_label.text()
+    page.close()
+
+
+def test_append_cancel_preserves_existing_preview(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    first = tmp_path / "old RJ01609020"
+    second = tmp_path / "old RJ01636949"
+    first.mkdir()
+    second.mkdir()
+    existing = OrganizerService(FakeLookupService()).preview_paths(tmp_path, (first,))
+    lookup = BlockingLookupService()
+    page = OrganizerPage(OrganizerService(lookup))
+    page.set_root_path(tmp_path)
+    page.set_preview(existing)
+
+    try:
+        page._handle_drop_paths((second,))
+        assert lookup.entered.wait(timeout=2)
+        page.cancel_button.click()
+        lookup.release.set()
+        _wait_for_scan_idle(qapp, page)
+        assert page.preview is not None
+        assert [plan.source_path for plan in page.preview.plans] == [first]
+    finally:
+        lookup.release.set()
+        page.close()
+
+
+def test_scan_failure_preserves_existing_preview_until_replacement_succeeds(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    source = tmp_path / "old RJ01609020"
+    source.mkdir()
+    fallback = OrganizerService(FakeLookupService())
+    service = FlakyOrganizerService()
+    page = OrganizerPage(service)  # type: ignore[arg-type]
+    page.set_root_path(tmp_path)
+    page.set_preview(fallback.preview(tmp_path))
+
+    page.scan_button.click()
+    _wait_for_scan_idle(qapp, page)
+
+    assert page.preview is not None
+    assert [plan.source_path for plan in page.preview.plans] == [source]
+    assert "当前预览保持不变" in page.status_label.text()
+    page.close()
+
+
+def test_stale_preview_rejects_append_but_can_be_cleared(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    first = tmp_path / "old RJ01609020"
+    second = tmp_path / "old RJ01636949"
+    first.mkdir()
+    second.mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_root_path(tmp_path)
+    page.set_preview(service.preview_paths(tmp_path, (first,)))
+    page.invalidate_preview()
+
+    page._handle_drop_paths((second,))
+    assert not page.is_busy()
+    assert page.preview is not None
+    assert [plan.source_path for plan in page.preview.plans] == [first]
+    assert "设置变化失效" in page.status_label.text()
+    assert page.clear_button.isEnabled()
+
+    page.clear_button.click()
+    page._handle_drop_paths((second,))
+    _wait_for_scan_idle(qapp, page)
+    assert page.preview is not None
+    assert [plan.source_path for plan in page.preview.plans] == [second]
     page.close()

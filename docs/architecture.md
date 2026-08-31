@@ -145,6 +145,22 @@ as visible warning candidates. `extract_work_codes()` lives beside `WorkCode` pa
 extraction and manual RJ validation share one normalization rule. V0.3 intentionally does not
 recursively inspect work contents or support VJ/BJ Organizer candidates.
 
+The Organizer table is a projection of one authoritative in-memory `OrganizerPreview` collection.
+The explicit **扫描并预览** action uses replace semantics: the new successful result replaces the
+collection. A full-mode directory drop uses append/merge semantics: existing rows keep their order,
+new unique source directories are appended, and a repeated source directory is upserted in place
+using the shared normalized Windows path identity. Delete and clear only change this collection;
+they never touch the filesystem or journal. Execution reads the collection's current plans, so a
+removed row cannot be executed. A drop result is committed atomically only after successful worker
+completion; cancellation or failure preserves the previous collection. A stale collection caused by
+naming-setting changes rejects new append drops until it is rescanned or cleared.
+
+Plan status presentation is UI-only. Existing `RenamePlanStatus` values are grouped as normal
+(`READY`, `UNCHANGED` without warnings), warning (plan warnings or `CANCELLED`), or blocked/error
+(all other non-executable states). Warning and blocked/error status cells use a Qt standard icon,
+emphasized text, and a tooltip containing the plan's actual reason; the status text also says that
+the reason is available on hover. No separate details column is used.
+
 ## Phase C drag-and-drop and lightweight mode
 
 The application has two runtime windows backed by one `ApplicationComponents` instance. Full mode
