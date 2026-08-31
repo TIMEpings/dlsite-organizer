@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import QThread, Signal, Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import SettingsService
 from dlsite_organizer.domain.organizer import RenamePlanStatus
 from dlsite_organizer.domain.rename_execution import UndoResult
@@ -47,11 +48,13 @@ class LightweightWindow(QMainWindow):
         undo_service: UndoService,
         settings_service: SettingsService,
         parent: QWidget | None = None,
+        runtime_signals: RuntimeSignals | None = None,
     ) -> None:
         super().__init__(parent)
         self._quick_rename_service = quick_rename_service
         self._undo_service = undo_service
         self._settings_service = settings_service
+        self._runtime_signals = runtime_signals
         self._thread: QThread | None = None
         self._worker: QuickRenameWorker | RenameActionWorker | None = None
         self._last_result: QuickRenameResult | None = None
@@ -65,6 +68,10 @@ class LightweightWindow(QMainWindow):
         self.settings_button.clicked.connect(self.settings_requested.emit)
         self.full_mode_button.clicked.connect(self._request_full_mode)
         self._refresh_recent_transaction()
+        if self._runtime_signals is not None:
+            self._runtime_signals.mutation_history_changed.connect(
+                self.refresh_mutation_state
+            )
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -282,6 +289,16 @@ class LightweightWindow(QMainWindow):
         self._refresh_recent_transaction()
 
     @Slot()
+    def refresh_mutation_state(self) -> None:
+        """Refresh journal-backed controls from the shared undo truth."""
+        self._refresh_recent_transaction()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Re-read mutation state whenever a hidden lightweight window is activated."""
+        super().showEvent(event)
+        self.refresh_mutation_state()
+
+    @Slot()
     def _request_full_mode(self) -> None:
         if self._thread is not None:
             return
@@ -313,6 +330,8 @@ class LightweightWindow(QMainWindow):
             self._refresh_status_style()
             return
         if self._thread is not None:
+            self.drop_zone.setEnabled(False)
+            self.undo_button.setEnabled(False)
             return
         if transaction is None:
             self.drop_zone.setEnabled(True)

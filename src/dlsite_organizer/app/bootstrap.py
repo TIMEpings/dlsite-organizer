@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.metadata_store import MetadataStore
@@ -47,12 +48,14 @@ class ApplicationComponents:
     settings_service: SettingsService
     quick_rename_service: QuickRenameService
     explorer_integration_service: ExplorerIntegrationService
+    runtime_signals: RuntimeSignals
     manual_review_service: ManualReviewService | None = None
     candidate_review_queue_service: CandidateReviewQueueService | None = None
 
 
 def build_components(settings: AppSettings) -> ApplicationComponents:
     """Compose concrete infrastructure behind service-facing boundaries."""
+    runtime_signals = RuntimeSignals()
     provider = DlsiteProvider(
         section=settings.provider.section,
         base_url=settings.provider.base_url,
@@ -108,8 +111,14 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         journal: RenameJournal = UnavailableRenameJournal()
     else:
         journal = TransactionJournal(database)
-    rename_executor = RenameExecutor(journal)
-    undo_service = UndoService(journal)
+    rename_executor = RenameExecutor(
+        journal,
+        mutation_history_changed=runtime_signals.notify_mutation_history_changed,
+    )
+    undo_service = UndoService(
+        journal,
+        mutation_history_changed=runtime_signals.notify_mutation_history_changed,
+    )
     quick_rename_service = QuickRenameService(organizer_service, rename_executor)
     return ApplicationComponents(
         lookup_service=lookup_service,
@@ -122,6 +131,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         settings_service=SettingsService(settings),
         quick_rename_service=quick_rename_service,
         explorer_integration_service=ExplorerIntegrationService(),
+        runtime_signals=runtime_signals,
         manual_review_service=manual_review_service,
         candidate_review_queue_service=candidate_review_queue_service,
     )

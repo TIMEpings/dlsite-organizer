@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from PySide6.QtCore import Signal, Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer import __version__
+from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.drop_input import DropInputService
@@ -61,11 +62,13 @@ class MainWindow(QMainWindow):
         settings_service: SettingsService | None = None,
         quick_rename_service=None,
         explorer_integration_service: ExplorerIntegrationService | None = None,
+        runtime_signals: RuntimeSignals | None = None,
     ) -> None:
         super().__init__()
         self._lookup_service = lookup_service
         self._settings_service = settings_service or SettingsService(AppSettings())
         self._quick_rename_service = quick_rename_service
+        self._runtime_signals = runtime_signals
         # Kept in the constructor for callers from the research-era shell.
         # Candidate services remain backend capabilities but are intentionally
         # not mounted in the public application navigation.
@@ -140,6 +143,20 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
         self.setStyleSheet(_STYLE)
+        if self._runtime_signals is not None:
+            self._runtime_signals.mutation_history_changed.connect(
+                self.refresh_mutation_state
+            )
+
+    @Slot()
+    def refresh_mutation_state(self) -> None:
+        """Refresh journal-backed mutation controls from the shared service."""
+        self.organizer_page.refresh_mutation_state()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Re-read mutation state whenever a hidden full-mode window is activated."""
+        super().showEvent(event)
+        self.refresh_mutation_state()
 
     @Slot()
     def request_lightweight_mode(self) -> None:

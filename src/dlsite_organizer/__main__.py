@@ -71,11 +71,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings_service=components.settings_service,
         quick_rename_service=components.quick_rename_service,
         explorer_integration_service=components.explorer_integration_service,
+        runtime_signals=components.runtime_signals,
     )
     lightweight_window = LightweightWindow(
         components.quick_rename_service,
         components.undo_service,
         components.settings_service,
+        runtime_signals=components.runtime_signals,
     )
 
     def show_full_mode() -> None:

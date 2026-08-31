@@ -19,6 +19,10 @@ from dlsite_organizer.domain.rename_execution import (
     TransactionStatus,
 )
 from dlsite_organizer.persistence.rename_journal import RenameJournal
+from dlsite_organizer.services.mutation_history import (
+    MutationHistoryChanged,
+    notify_mutation_history_changed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +58,12 @@ class RenameExecutor:
         *,
         filesystem: RenameFilesystem | None = None,
         case_insensitive: bool = True,
+        mutation_history_changed: MutationHistoryChanged | None = None,
     ) -> None:
         self._journal = journal
         self._filesystem = filesystem or LocalRenameFilesystem()
         self._case_insensitive = case_insensitive
+        self._mutation_history_changed = mutation_history_changed
 
     @property
     def available(self) -> bool:
@@ -225,6 +231,7 @@ class RenameExecutor:
                         status,
                         _now(),
                     )
+                    self._notify_mutation_history_changed()
                 except Exception as journal_exc:
                     return self._recovery_result(
                         transaction,
@@ -281,6 +288,7 @@ class RenameExecutor:
 
         try:
             self._journal.mark_transaction_completed(transaction.transaction_id, _now())
+            self._notify_mutation_history_changed()
         except Exception as exc:
             return self._recovery_result(
                 transaction,
@@ -357,6 +365,7 @@ class RenameExecutor:
                 error,
                 _now(),
             )
+            self._notify_mutation_history_changed()
         except Exception:
             logger.critical(
                 'Could not persist recovery-required state transaction=%s',
@@ -373,6 +382,12 @@ class RenameExecutor:
             transaction=snapshot,
             operations=snapshot.operations,
             error=error,
+        )
+
+    def _notify_mutation_history_changed(self) -> None:
+        notify_mutation_history_changed(
+            self._mutation_history_changed,
+            logger=logger,
         )
 
 

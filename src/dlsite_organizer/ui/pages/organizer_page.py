@@ -322,6 +322,11 @@ class OrganizerPage(QWidget):
     def _selection_changed(self, _item: QTableWidgetItem) -> None:
         self._update_execute_button()
 
+    def refresh_mutation_state(self) -> None:
+        """Refresh only journal-backed controls after another UI entry point mutates."""
+        self._refresh_recent_transaction()
+        self._update_execute_button()
+
     def _update_execute_button(self) -> None:
         unresolved = None
         if self._execution_service is not None:

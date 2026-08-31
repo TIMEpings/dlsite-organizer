@@ -17,6 +17,10 @@ from dlsite_organizer.domain.rename_execution import (
     UndoStatus,
 )
 from dlsite_organizer.persistence.rename_journal import RenameJournal
+from dlsite_organizer.services.mutation_history import (
+    MutationHistoryChanged,
+    notify_mutation_history_changed,
+)
 from dlsite_organizer.services.rename_executor import (
     ExecutionProgressCallback,
     LocalRenameFilesystem,
@@ -39,10 +43,12 @@ class UndoService:
         *,
         filesystem: RenameFilesystem | None = None,
         case_insensitive: bool = True,
+        mutation_history_changed: MutationHistoryChanged | None = None,
     ) -> None:
         self._journal = journal
         self._filesystem = filesystem
         self._case_insensitive = case_insensitive
+        self._mutation_history_changed = mutation_history_changed
 
     def latest_transaction(self) -> RenameTransaction | None:
         """Return the most recent transaction with at least one undoable op."""
@@ -168,6 +174,7 @@ class UndoService:
                         operation.sequence,
                         error,
                     )
+                    self._notify_mutation_history_changed()
                 except Exception:
                     logger.exception(
                         'Could not persist undo conflict transaction=%s sequence=%d',
@@ -222,6 +229,7 @@ class UndoService:
                         error,
                         _now(),
                     )
+                    self._notify_mutation_history_changed()
                 except Exception as journal_exc:
                     return self._recovery_result(
                         transaction,
@@ -271,6 +279,7 @@ class UndoService:
 
         try:
             self._journal.mark_transaction_undone(transaction.transaction_id, _now())
+            self._notify_mutation_history_changed()
         except Exception as exc:
             return self._recovery_result(
                 transaction,
@@ -311,6 +320,7 @@ class UndoService:
                 error,
                 _now(),
             )
+            self._notify_mutation_history_changed()
         except Exception:
             logger.critical(
                 'Could not persist undo recovery state transaction=%s',
@@ -327,6 +337,12 @@ class UndoService:
             transaction=snapshot,
             operations=snapshot.operations,
             error=error,
+        )
+
+    def _notify_mutation_history_changed(self) -> None:
+        notify_mutation_history_changed(
+            self._mutation_history_changed,
+            logger=logger,
         )
 
 
