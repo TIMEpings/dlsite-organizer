@@ -9,6 +9,7 @@ import tempfile
 import tomllib
 from collections.abc import Callable, Mapping
 from contextlib import suppress
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -46,6 +47,13 @@ class CacheSettings(BaseModel):
     allow_stale_on_error: bool = True
 
 
+class StartupMode(StrEnum):
+    """Which user-facing window is shown on the next application launch."""
+
+    FULL = "full"
+    LIGHTWEIGHT = "lightweight"
+
+
 class AppSettings(BaseModel):
     """The single schema used by TOML, SettingsPage, and runtime services."""
 
@@ -60,6 +68,7 @@ class AppSettings(BaseModel):
     hide_general_age: bool = False
     date_format: str = "%Y-%m-%d"
     illegal_char_replacement: str = "_"
+    startup_mode: StartupMode = StartupMode.FULL
     database_path: Path = Field(default_factory=lambda: default_data_dir() / "metadata.sqlite3")
     provider: ProviderSettings = Field(default_factory=ProviderSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
@@ -205,6 +214,7 @@ def _settings_to_toml(settings: AppSettings) -> str:
         f"hide_general_age = {_toml_bool(settings.hide_general_age)}",
         f"date_format = {_toml_string(settings.date_format)}",
         f"illegal_char_replacement = {_toml_string(settings.illegal_char_replacement)}",
+        f"startup_mode = {_toml_string(settings.startup_mode.value)}",
         f"database_path = {_toml_string(str(settings.database_path))}",
         "",
         "[provider]",

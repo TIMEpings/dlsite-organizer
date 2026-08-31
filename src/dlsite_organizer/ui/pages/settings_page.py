@@ -31,6 +31,7 @@ from dlsite_organizer.app.settings import (
     AppSettings,
     SettingsError,
     SettingsService,
+    StartupMode,
     default_logs_path,
 )
 from dlsite_organizer.domain.work import AgeCategory, Work, WorkLanguage
@@ -206,6 +207,16 @@ class SettingsPage(QWidget):
         metadata_form.addRow("网络超时", self.timeout_input)
         content_layout.addWidget(metadata_box)
 
+        runtime_box = QGroupBox("启动与模式")
+        runtime_form = QFormLayout(runtime_box)
+        self.startup_mode_input = QComboBox()
+        self.startup_mode_input.setObjectName("startupModeInput")
+        self.startup_mode_input.addItem("完整模式", StartupMode.FULL.value)
+        self.startup_mode_input.addItem("轻量模式", StartupMode.LIGHTWEIGHT.value)
+        self.startup_mode_input.setToolTip("只控制下次启动时显示的窗口；临时切换模式不会修改此设置。")
+        runtime_form.addRow("启动模式", self.startup_mode_input)
+        content_layout.addWidget(runtime_box)
+
         data_box = QGroupBox("数据与诊断")
         data_layout = QFormLayout(data_box)
         data_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -291,6 +302,9 @@ class SettingsPage(QWidget):
         self.cache_ttl_input.setValue(settings.cache.ttl_hours)
         self.allow_stale_input.setChecked(settings.cache.allow_stale_on_error)
         self.timeout_input.setValue(settings.provider.timeout_seconds)
+        self.startup_mode_input.setCurrentIndex(
+            max(0, self.startup_mode_input.findData(settings.startup_mode.value))
+        )
         self.database_path_label.setText(str(settings.database_path))
         self._refresh_preview()
 
@@ -315,6 +329,7 @@ class SettingsPage(QWidget):
                 "hide_general_age": self.hide_general_age.isChecked(),
                 "date_format": self.date_format_input.text(),
                 "illegal_char_replacement": self.illegal_replacement_input.text(),
+                "startup_mode": self.startup_mode_input.currentData(),
             }
         )
         current["provider"] = {
@@ -384,7 +399,7 @@ class SettingsPage(QWidget):
             self._refresh_status_style()
             return
         self.settings_status_label.setProperty("state", "success")
-        self.settings_status_label.setText("设置已保存；命名设置立即用于下一次 Organizer 预览。")
+        self.settings_status_label.setText("设置已保存；命名设置立即用于下一次预览或轻量模式操作。")
         self._refresh_status_style()
         self.settings_saved.emit(saved)
 

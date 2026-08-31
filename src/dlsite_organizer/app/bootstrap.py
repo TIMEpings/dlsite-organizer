@@ -23,6 +23,7 @@ from dlsite_organizer.services.manual_reviews import ManualReviewService
 from dlsite_organizer.services.historical_relations import HistoricalRelationService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.quick_rename import QuickRenameService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_planner import RenamePlanner
 from dlsite_organizer.services.undo_service import UndoService
@@ -43,6 +44,7 @@ class ApplicationComponents:
     undo_service: UndoService
     rename_journal: RenameJournal
     settings_service: SettingsService
+    quick_rename_service: QuickRenameService
     manual_review_service: ManualReviewService | None = None
     candidate_review_queue_service: CandidateReviewQueueService | None = None
 
@@ -106,6 +108,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         journal = TransactionJournal(database)
     rename_executor = RenameExecutor(journal)
     undo_service = UndoService(journal)
+    quick_rename_service = QuickRenameService(organizer_service, rename_executor)
     return ApplicationComponents(
         lookup_service=lookup_service,
         organizer_service=organizer_service,
@@ -115,6 +118,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         undo_service=undo_service,
         rename_journal=journal,
         settings_service=SettingsService(settings),
+        quick_rename_service=quick_rename_service,
         manual_review_service=manual_review_service,
         candidate_review_queue_service=candidate_review_queue_service,
     )

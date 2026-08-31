@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 from dlsite_organizer import __version__
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.services.cover import CoverService
+from dlsite_organizer.services.drop_input import DropInputService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.organizer import OrganizerService
@@ -34,6 +36,8 @@ from dlsite_organizer.ui.pages.settings_page import SettingsPage
 class MainWindow(QMainWindow):
     """Host the organizer preview, lookup page, and honest future placeholders."""
 
+    lightweight_requested = Signal()
+
     def __init__(
         self,
         lookup_service: LookupService,
@@ -43,10 +47,12 @@ class MainWindow(QMainWindow):
         undo_service: UndoService | None = None,
         candidate_review_queue_service=None,
         settings_service: SettingsService | None = None,
+        quick_rename_service=None,
     ) -> None:
         super().__init__()
         self._lookup_service = lookup_service
         self._settings_service = settings_service or SettingsService(AppSettings())
+        self._quick_rename_service = quick_rename_service
         self.setWindowTitle("DLsite Organizer")
         self.resize(1080, 760)
         self.setMinimumSize(860, 640)
@@ -72,6 +78,10 @@ class MainWindow(QMainWindow):
         version = QLabel(f"v{__version__} · 安全重命名")
         version.setObjectName("versionLabel")
         nav_layout.addWidget(version)
+        self.lightweight_button = QPushButton("切换到轻量模式")
+        self.lightweight_button.setObjectName("modeButton")
+        self.lightweight_button.clicked.connect(self.request_lightweight_mode)
+        nav_layout.addWidget(self.lightweight_button)
 
         self.pages = QStackedWidget()
         self.lookup_page = LookupPage(lookup_service, cover_service)
@@ -84,6 +94,7 @@ class MainWindow(QMainWindow):
             ),
             execution_service=rename_executor,
             undo_service=undo_service,
+            drop_input_service=DropInputService(),
         )
         self.review_queue_page = ReviewQueuePage(
             candidate_review_queue_service,
@@ -115,6 +126,22 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
         self.setStyleSheet(_STYLE)
+
+    @Slot()
+    def request_lightweight_mode(self) -> None:
+        """Request a runtime window switch without changing startup preference."""
+        if self.is_busy():
+            QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再切换模式。")
+            return
+        self.lightweight_requested.emit()
+
+    def show_settings_page(self) -> None:
+        """Select the shared Settings page for the lightweight settings action."""
+        self.navigation_list.setCurrentRow(self.navigation_list.count() - 1)
+
+    def is_busy(self) -> bool:
+        """Return whether any full-mode background operation is active."""
+        return self.lookup_page.is_busy() or self.organizer_page.is_busy()
 
     @Slot(object)
     def _settings_saved(self, settings: object) -> None:
@@ -180,4 +207,10 @@ QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
 #statusLabel[state="loading"] { color: #315fc9; }
 #statusLabel[state="success"] { color: #16805b; }
 #statusLabel[state="error"] { color: #c53b47; }
+#dropZone { background: #ffffff; border: 2px dashed #a9b8d0; border-radius: 10px; }
+#dropZone[dragActive="true"] { background: #edf3ff; border-color: #3867e8; }
+#dropZoneTitle { color: #23499d; font-size: 16px; font-weight: 600; }
+#dropZoneDescription { color: #64748b; }
+#modeButton { color: #c9d2e3; background: #222e43; border-color: #3b4a64; }
+#modeButton:hover { background: #2e3c55; color: white; }
 """

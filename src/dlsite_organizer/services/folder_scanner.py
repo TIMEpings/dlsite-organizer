@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import ntpath
 import os
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 
@@ -41,20 +43,7 @@ class FolderScanner:
 
     def scan(self, root: Path | str) -> ScanResult:
         """Return valid and ambiguous candidates without touching their contents."""
-        try:
-            root_path = Path(root).expanduser().resolve(strict=False)
-        except (OSError, RuntimeError, TypeError) as exc:
-            raise FolderScanFailure(
-                FolderScanFailureKind.INVALID_ROOT,
-                "作品根目录无效，无法开始扫描。",
-            ) from exc
-
-        if _is_link_like(root_path) or not root_path.exists() or not root_path.is_dir():
-            raise FolderScanFailure(
-                FolderScanFailureKind.INVALID_ROOT,
-                "请选择一个存在的文件夹作为作品根目录。",
-            )
-
+        root_path = self._validated_root(root)
         try:
             children = sorted(
                 root_path.iterdir(),
@@ -66,6 +55,45 @@ class FolderScanner:
                 FolderScanFailureKind.ACCESS,
                 "无法读取作品根目录，请检查权限后重试。",
             ) from exc
+
+        return self._scan_children(root_path, children)
+
+    def scan_paths(self, root: Path | str, paths: Sequence[Path | str]) -> ScanResult:
+        """Scan only explicitly selected direct children of ``root``.
+
+        This is intentionally narrower than :meth:`scan`: it never traverses
+        siblings or descendants and is used by full-mode selective drops and
+        Quick Rename.
+        """
+        root_path = self._validated_root(root)
+        normalized = tuple(Path(path).expanduser().absolute() for path in paths)
+        if any(_path_key(path.parent) != _path_key(root_path) for path in normalized):
+            raise FolderScanFailure(
+                FolderScanFailureKind.INVALID_ROOT,
+                "作品文件夹必须是所选根目录的直接子目录。",
+            )
+        children = tuple(
+            sorted(normalized, key=lambda path: (path.name.casefold(), path.name))
+        )
+        return self._scan_children(root_path, children)
+
+    def _validated_root(self, root: Path | str) -> Path:
+        try:
+            root_path = Path(root).expanduser().absolute()
+        except (OSError, RuntimeError, TypeError) as exc:
+            raise FolderScanFailure(
+                FolderScanFailureKind.INVALID_ROOT,
+                "作品根目录无效，无法开始扫描。",
+            ) from exc
+
+        if _is_link_like(root_path) or not root_path.exists() or not root_path.is_dir():
+            raise FolderScanFailure(
+                FolderScanFailureKind.INVALID_ROOT,
+                "请选择一个存在的文件夹作为作品根目录。",
+            )
+        return root_path
+
+    def _scan_children(self, root_path: Path, children: Sequence[Path]) -> ScanResult:
 
         candidates: list[ScanCandidate] = []
         skipped: list[ScanSkipped] = []
@@ -150,7 +178,21 @@ def _is_hidden_or_system(path: Path) -> bool:
 
 def _is_link_like(path: Path) -> bool:
     """Reject symlink-like directories, including Windows junctions."""
-    if path.is_symlink():
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+        attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+        return bool(attributes & getattr(os, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    except (OSError, ValueError):
         return True
-    is_junction = getattr(path, "is_junction", None)
-    return bool(is_junction is not None and is_junction())
+
+
+def _path_key(path: Path) -> str:
+    try:
+        value = str(path.resolve(strict=False))
+    except OSError:
+        value = str(path)
+    return ntpath.normcase(value)

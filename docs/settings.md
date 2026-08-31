@@ -61,6 +61,27 @@ reinterpreted after a locale change; fresh rows continue until TTL expiry, and l
 use the new locale. Cache TTL is edited in hours, provider timeout in seconds, and both are applied
 to subsequent requests without an application restart.
 
+## Startup mode and drag-and-drop
+
+The **启动模式** setting controls which window appears on the next launch:
+
+```text
+完整模式       full          (default)
+轻量模式       lightweight
+```
+
+It does not change the behavior of a temporary runtime mode switch. Full mode accepts a dropped
+root or explicitly selected same-parent work folders and generates a preview; it never executes
+because of a drop. Lightweight mode accepts only one or more existing work folders from the same
+parent. Each basename must contain exactly one valid RJcode; a missing or ambiguous RJcode is
+rejected and no lookup or filesystem mutation starts.
+
+In lightweight mode, actively dropping folders onto the clearly labelled **将 DLsite 作品文件夹拖到这里 / 拖入后将立即按当前设置重命名** zone is the confirmation for that Quick Rename action. The
+operation still uses the shared NamingService, RenamePlanner, RenameExecutor, and durable
+TransactionJournal. Any batch-wide input, metadata, plan, journal, recovery, or final preflight
+failure is fail-closed. The **撤销最近一次** button uses the existing UndoService and asks for
+explicit confirmation.
+
 ## Persistence and paths
 
 Save performs this sequence:

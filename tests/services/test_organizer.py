@@ -175,3 +175,21 @@ def test_organizer_preview_does_not_modify_directory_tree(tmp_path: Path) -> Non
 
     after = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
     assert after == before
+
+
+def test_organizer_selective_preview_does_not_scan_unselected_siblings(tmp_path: Path) -> None:
+    selected = tmp_path / "selected RJ01609020"
+    sibling = tmp_path / "sibling RJ01636949"
+    selected.mkdir()
+    sibling.mkdir()
+    provider = FakeBatchLookupService(
+        works={
+            "RJ01609020": Work(workno="RJ01609020", title="Selected"),
+            "RJ01636949": Work(workno="RJ01636949", title="Sibling"),
+        }
+    )
+
+    preview = OrganizerService(provider).preview_paths(tmp_path, (selected,))
+
+    assert provider.requested == ["RJ01609020"]
+    assert [plan.source_path for plan in preview.plans] == [selected]

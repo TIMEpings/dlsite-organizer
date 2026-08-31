@@ -18,6 +18,7 @@ Lookup / Scan → inspect → Preview → explicit confirmation → safe Execute
 - 扫描所选根目录的直接子目录，生成可审阅的重命名 preview；
 - 使用 `Preview → explicit confirmation → preflight → durable journal → filesystem mutation` 执行安全重命名；
 - 从 durable journal 执行 Undo，并在 PENDING、PARTIAL 或 RECOVERY_REQUIRED 状态下阻止不安全的继续操作；
+- 支持完整模式拖放预览，以及共享安全管线驱动的轻量模式即时重命名；
 - 区分当前和历史 DLsite 明确翻译关系；
 - 在本地保存 metadata observations、人工 review history 和 bonus observation evidence。
 
@@ -59,6 +60,12 @@ python -m dlsite_organizer
 5. 逐项检查 preview，只保留确定要修改的 READY 项。
 6. 明确确认后执行；需要时从最近一次 journaled transaction 执行 Undo。
 
+也可以在“设置”中选择下次启动的完整模式或轻量模式。完整模式把拖入根目录或作品文件夹
+解释为预览入口；轻量模式则只接受同一父目录下、名称包含唯一 RJcode 的作品文件夹，拖到
+明确标注“拖入后将立即按当前设置重命名”的区域即视为本次 Quick Rename 确认。轻量模式仍
+执行 lookup、当前命名设置、planner、executor preflight 和 durable journal，失败批次不会
+偷偷只修改一部分目录。
+
 应用启动时会自动创建用户数据目录和 SQLite schema，不需要预先创建数据库或配置文件。
 
 ## Rename safety
@@ -72,6 +79,27 @@ NO JOURNAL = NO MUTATION
 ```
 
 事务 intent 在首次 filesystem mutation 前持久化；每次成功 mutation 后立即更新 journal。失败会停止后续操作并保留 partial 状态，不自动猜测或回滚。Undo 依赖 journal 中的路径和用户未手动替换目录这一前提；它不是 ACID 或身份证明系统。PENDING、RECOVERY_REQUIRED 和 Undo 冲突必须先人工处理。
+
+## Drag & Drop and Lightweight Mode
+
+完整模式：
+
+```text
+drop root                       → scan direct children → Preview
+drop one RJ folder              → Preview that folder only
+drop same-parent RJ folders     → Preview those folders only
+```
+
+拖放不会绕过完整模式的用户复核与执行确认。轻量模式：
+
+```text
+drop one or more work folders   → QuickRenameService → safe rename
+```
+
+轻量批次要求所有目录存在、是普通本地目录、来自同一父目录且各自只有一个 RJcode；任何
+输入错误、metadata lookup 失败、目标冲突、规划失败或 journal 不可用都会在文件修改前
+拒绝整批。已经是目标名的目录显示“无需重命名”；部分执行结果会显示“部分操作已完成”，
+并沿用现有 journal/Undo/恢复边界。
 
 ## Data and storage
 

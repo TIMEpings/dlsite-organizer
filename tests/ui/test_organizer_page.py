@@ -231,3 +231,48 @@ def test_organizer_page_shows_stale_metadata_warning_but_not_fresh_cache_warning
     fresh_details = cast(QTableWidgetItem, fresh_page.table.item(0, 6))
     assert "使用旧缓存 metadata" not in fresh_details.text()
     fresh_page.close()
+
+
+def test_full_mode_drop_interprets_work_folder_selectively_and_root_ordinarily(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "RJ01609020 old"
+    work.mkdir()
+    sibling = tmp_path / "RJ01636949 sibling"
+    sibling.mkdir()
+    page = OrganizerPage(OrganizerService(FakeLookupService()))
+    captured: list[tuple[Path | str, ...] | None] = []
+    monkeypatch.setattr(
+        page,
+        "start_scan",
+        lambda selected_paths=None: captured.append(selected_paths),
+    )
+
+    page._handle_drop_paths((work,))
+
+    assert page.root_input.text() == str(tmp_path)
+    assert captured == [(work.absolute(),)]
+
+    captured.clear()
+    page._handle_drop_paths((tmp_path,))
+    assert page.root_input.text() == str(tmp_path)
+    assert captured == [None]
+    page.close()
+
+
+def test_full_mode_drop_rejects_different_parents_without_starting_scan(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "one" / "RJ01609020"
+    second = tmp_path / "two" / "RJ01636949"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    page = OrganizerPage(OrganizerService(FakeLookupService()))
+    started = []
+    monkeypatch.setattr(page, "start_scan", lambda *_args, **_kwargs: started.append(True))
+
+    page._handle_drop_paths((first, second))
+
+    assert started == []
+    assert "同一父目录" in page.status_label.text()
+    page.close()

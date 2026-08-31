@@ -8,6 +8,7 @@ from dlsite_organizer.app.settings import (
     ProviderSettings,
     SettingsError,
     SettingsService,
+    StartupMode,
     load_settings,
 )
 
@@ -81,3 +82,20 @@ def test_legacy_toml_uses_defaults_for_new_fields(tmp_path: Path) -> None:
     assert settings.naming_template == "[{workno}] {title}"
     assert settings.provider.metadata_locale == "ja_jp"
     assert settings.max_tags == 0
+
+
+def test_startup_mode_round_trips_and_legacy_config_defaults_to_full(tmp_path: Path) -> None:
+    legacy = tmp_path / "legacy.toml"
+    legacy.write_text('naming_template = "[{workno}] {title}"\n', encoding="utf-8")
+    assert load_settings(legacy).startup_mode is StartupMode.FULL
+
+    path = tmp_path / "config.toml"
+    service = SettingsService(
+        AppSettings(database_path=tmp_path / "metadata.sqlite3"),
+        config_path=path,
+    )
+    updated = service.settings.model_copy(update={"startup_mode": StartupMode.LIGHTWEIGHT})
+    saved = service.save(updated)
+
+    assert saved.startup_mode is StartupMode.LIGHTWEIGHT
+    assert load_settings(path).startup_mode is StartupMode.LIGHTWEIGHT

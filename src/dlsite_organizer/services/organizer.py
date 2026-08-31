@@ -109,6 +109,31 @@ class OrganizerService:
         lookup becomes a single failed row; it does not abort other works.
         """
         scan = self._scanner.scan(root_path)
+        return self._preview_scan(
+            scan, progress_callback=progress_callback, cancel_check=cancel_check
+        )
+
+    def preview_paths(
+        self,
+        root_path: Path | str,
+        paths: tuple[Path | str, ...] | list[Path | str],
+        *,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> OrganizerPreview:
+        """Build a preview for explicitly selected direct child directories only."""
+        scan = self._scanner.scan_paths(root_path, paths)
+        return self._preview_scan(
+            scan, progress_callback=progress_callback, cancel_check=cancel_check
+        )
+
+    def _preview_scan(
+        self,
+        scan: ScanResult,
+        *,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> OrganizerPreview:
         cancel_check = cancel_check or (lambda: False)
         valid_candidates = [
             candidate

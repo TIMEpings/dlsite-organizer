@@ -144,6 +144,44 @@ as visible warning candidates. `extract_work_codes()` lives beside `WorkCode` pa
 extraction and manual RJ validation share one normalization rule. V0.3 intentionally does not
 recursively inspect work contents or support VJ/BJ Organizer candidates.
 
+## Phase C drag-and-drop and lightweight mode
+
+The application has two runtime windows backed by one `ApplicationComponents` instance. Full mode
+keeps the review boundary: a drop becomes a preview. A single dropped directory whose basename has
+one RJcode is treated as one explicitly selected work folder; a basename without RJcode is treated
+as an organizer root and receives the ordinary direct-child scan. Multiple work folders must be
+direct siblings, and selective preview never scans their other siblings. Files, non-local URLs,
+symlink/junction/reparse-point entries, ambiguous RJcodes, and mixed-parent drops are rejected.
+
+Lightweight mode is a second UI entry point, not a second rename implementation:
+
+```text
+LightweightWindow
+        ↓ QThread
+QuickRenameWorker → QuickRenameService
+                         ↓
+DropInputService → OrganizerService.preview_paths
+                         ↓
+                 LookupService → NamingService → RenamePlanner
+                         ↓
+                    RenameExecutor → TransactionJournal → filesystem
+                         ↓
+                       UndoService
+```
+
+An explicit drop onto the labelled lightweight zone means the user's Quick Rename confirmation,
+but journal availability, recovery health, batch-wide planner checks, executor preflight, and
+durable journal intent remain mandatory. Quick Rename validates every input before lookup. Any
+invalid input, lookup failure, or non-READY/non-UNCHANGED plan rejects the entire batch without
+mutation. UNCHANGED rows are successful no-ops; READY rows execute as one journal transaction.
+Partial executor results are surfaced as partial and remain undoable where the journal permits.
+
+The full and lightweight windows share SettingsService, LookupService, metadata cache, NamingService,
+OrganizerService, QuickRenameService, RenameExecutor, and UndoService. Settings saves therefore
+apply to the next lightweight drop without restarting. `startup_mode` controls only the next launch;
+runtime switching hides one window and shows the other in the same process. No tray, CLI, registry,
+single-instance IPC, Explorer integration, About page, or navigation cleanup is part of Phase C.
+
 `WorkLookup` is an in-memory batch record. `OrganizerService` deduplicates RJcodes for one run,
 calls the existing `LookupService` sequentially, isolates failures, and emits progress through the
 worker boundary. It shares the persistent `LookupService` metadata cache with the manual lookup

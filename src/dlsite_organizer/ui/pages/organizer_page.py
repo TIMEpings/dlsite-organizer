@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import Qt, QThread, Slot
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -21,9 +23,14 @@ from PySide6.QtWidgets import (
 
 from dlsite_organizer.domain.organizer import RenamePlan, RenamePlanStatus
 from dlsite_organizer.domain.rename_execution import RenameExecutionResult, UndoResult
+from dlsite_organizer.services.drop_input import (
+    DropInputError,
+    DropInputService,
+)
 from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
+from dlsite_organizer.ui.widgets.drop_zone import DirectoryDropZone, local_directory_paths
 from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorker
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 
@@ -40,11 +47,13 @@ class OrganizerPage(QWidget):
         *,
         execution_service: RenameExecutor | None = None,
         undo_service: UndoService | None = None,
+        drop_input_service: DropInputService | None = None,
     ) -> None:
         super().__init__(parent)
         self._organizer_service = organizer_service
         self._execution_service = execution_service
         self._undo_service = undo_service
+        self._drop_input_service = drop_input_service or DropInputService()
         self._thread: QThread | None = None
         self._worker: OrganizerWorker | None = None
         self._action_worker: RenameActionWorker | None = None
@@ -74,6 +83,13 @@ class OrganizerPage(QWidget):
         description.setWordWrap(True)
         layout.addWidget(heading)
         layout.addWidget(description)
+
+        self.drop_zone = DirectoryDropZone(
+            "将作品文件夹或作品根目录拖到这里",
+            "完整模式只生成预览，不会因拖放立即重命名。",
+        )
+        self.drop_zone.paths_dropped.connect(self._handle_drop_paths)
+        layout.addWidget(self.drop_zone)
 
         root_label = QLabel("作品根目录")
         root_label.setObjectName("sectionLabel")
@@ -151,7 +167,7 @@ class OrganizerPage(QWidget):
         self.root_input.setText(str(path))
 
     @Slot()
-    def start_scan(self) -> None:
+    def start_scan(self, selected_paths: Sequence[Path | str] | None = None) -> None:
         """Start one background organizer run."""
         if self._thread is not None:
             return
@@ -169,7 +185,7 @@ class OrganizerPage(QWidget):
         self._refresh_status_style()
 
         thread = QThread()
-        worker = OrganizerWorker(self._organizer_service, root)
+        worker = OrganizerWorker(self._organizer_service, root, selected_paths)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._show_progress)
@@ -182,6 +198,45 @@ class OrganizerPage(QWidget):
         self._thread = thread
         self._worker = worker
         thread.start()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        paths = local_directory_paths(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        paths = local_directory_paths(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        event.accept()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths = local_directory_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._handle_drop_paths(paths)
+
+    @Slot(object)
+    def _handle_drop_paths(self, value: object) -> None:
+        """Interpret a full-mode drop before starting the existing scan worker."""
+        if self._thread is not None:
+            return
+        paths = tuple(cast(Sequence[Path | str], value))
+        try:
+            selection = self._drop_input_service.validate_full_drop(paths)
+        except DropInputError as exc:
+            self._show_error(exc.user_message)
+            return
+        self.set_root_path(selection.root_path)
+        self.start_scan(selection.selected_paths)
 
     @Slot()
     def cancel_scan(self) -> None:
@@ -492,6 +547,7 @@ class OrganizerPage(QWidget):
         self._refresh_recent_transaction()
 
     def _set_action_loading(self, loading: bool) -> None:
+        self.drop_zone.setEnabled(not loading)
         self.root_input.setEnabled(not loading)
         self.browse_button.setEnabled(not loading)
         self.scan_button.setEnabled(not loading)
@@ -504,6 +560,7 @@ class OrganizerPage(QWidget):
         return self._thread is not None
 
     def _set_loading(self, loading: bool) -> None:
+        self.drop_zone.setEnabled(not loading)
         self.root_input.setEnabled(not loading)
         self.browse_button.setEnabled(not loading)
         self.scan_button.setEnabled(not loading)

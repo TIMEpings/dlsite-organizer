@@ -12,7 +12,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from dlsite_organizer import __version__
 from dlsite_organizer.app.bootstrap import build_components
 from dlsite_organizer.app.logging_config import configure_logging
-from dlsite_organizer.app.settings import SettingsError, default_data_dir, load_settings
+from dlsite_organizer.app.settings import (
+    SettingsError,
+    StartupMode,
+    default_data_dir,
+    load_settings,
+)
+from dlsite_organizer.ui.lightweight_window import LightweightWindow
 from dlsite_organizer.ui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
@@ -46,8 +52,41 @@ def main() -> int:
         components.undo_service,
         components.candidate_review_queue_service,
         components.settings_service,
+        components.quick_rename_service,
     )
-    window.show()
+    lightweight_window = LightweightWindow(
+        components.quick_rename_service,
+        components.undo_service,
+        components.settings_service,
+    )
+
+    def show_full_mode() -> None:
+        if lightweight_window.is_busy():
+            return
+        window.show()
+        lightweight_window.hide()
+
+    def show_lightweight_mode() -> None:
+        if window.is_busy():
+            return
+        lightweight_window.show()
+        window.hide()
+
+    def show_settings() -> None:
+        if lightweight_window.is_busy():
+            return
+        window.show()
+        lightweight_window.hide()
+        window.show_settings_page()
+
+    window.lightweight_requested.connect(show_lightweight_mode)
+    lightweight_window.full_mode_requested.connect(show_full_mode)
+    lightweight_window.settings_requested.connect(show_settings)
+
+    if settings.startup_mode is StartupMode.LIGHTWEIGHT:
+        lightweight_window.show()
+    else:
+        window.show()
     _schedule_startup_smoke(application, window)
     exit_code = application.exec()
     components.database.dispose()
