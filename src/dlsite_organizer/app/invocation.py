@@ -26,7 +26,14 @@ class ApplicationInvocation:
     """The validated, narrow contract passed from the CLI to the UI bootstrap."""
 
     mode: LaunchMode
-    quick_rename_directory: Path | None = None
+    quick_rename_directories: tuple[Path, ...] = ()
+
+    @property
+    def quick_rename_directory(self) -> Path | None:
+        """Return the singular path for legacy callers of the old contract."""
+        if len(self.quick_rename_directories) == 1:
+            return self.quick_rename_directories[0]
+        return None
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -60,19 +67,20 @@ def parse_invocation(argv: Sequence[str]) -> ApplicationInvocation:
     )
     parser.add_argument(
         "--quick-rename",
-        dest="quick_rename_directory",
+        dest="quick_rename_directories",
         metavar="DIRECTORY",
         action=_StoreOnce,
         type=_directory_argument,
-        help="立即对一个已存在的 DLsite 作品文件夹执行 Quick Rename。",
+        nargs="+",
+        help="立即对一个或多个已存在的同一父目录下 DLsite 作品文件夹执行 Quick Rename。",
     )
     parsed = parser.parse_args(tuple(argv))
-    directory = parsed.quick_rename_directory
-    if directory is None:
+    directories = parsed.quick_rename_directories
+    if directories is None:
         return ApplicationInvocation(mode=LaunchMode.NORMAL)
     return ApplicationInvocation(
         mode=LaunchMode.QUICK_RENAME,
-        quick_rename_directory=Path(directory).expanduser(),
+        quick_rename_directories=tuple(Path(directory).expanduser() for directory in directories),
     )
 
 

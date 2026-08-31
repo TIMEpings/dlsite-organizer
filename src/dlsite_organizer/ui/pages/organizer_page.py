@@ -38,7 +38,7 @@ from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 class OrganizerPage(QWidget):
     """Present scan results and expose explicit rename and undo actions."""
 
-    _COLUMNS = ("状态", "当前目录名", "RJcode", "社团", "标题", "目标目录名", "详情")
+    _COLUMNS = ("状态", "当前目录名", "RJcode", "社团", "标题", "目标目录名")
 
     def __init__(
         self,
@@ -490,7 +490,6 @@ class OrganizerPage(QWidget):
         work_code = plan.work_code or "、".join(plan.work_codes) or "—"
         maker = work.maker_name if work is not None and work.maker_name else "—"
         title = work.title if work is not None else "—"
-        details = plan.error or "；".join(plan.warnings) or "—"
         values = (
             _plan_status_label(plan.status),
             plan.current_name,
@@ -498,11 +497,10 @@ class OrganizerPage(QWidget):
             maker,
             title,
             plan.proposed_name or "—",
-            details,
         )
+        diagnostics = _plan_diagnostics(plan)
         for column, value in enumerate(values):
             item = QTableWidgetItem(value)
-            item.setToolTip(value)
             if column == 0 and plan.status is RenamePlanStatus.READY:
                 item.setFlags(
                     item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
@@ -510,13 +508,12 @@ class OrganizerPage(QWidget):
                 item.setCheckState(Qt.CheckState.Checked)
             elif column == 0:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+            if column == 0 and diagnostics:
+                item.setToolTip(f"{value}\n{diagnostics}")
             if column == 1:
                 item.setToolTip(str(plan.source_path))
             if column == 5 and plan.target_path is not None:
                 item.setToolTip(str(plan.target_path))
-            if column == 6 and plan.warnings:
-                warning_text = "\n".join(plan.warnings)
-                item.setToolTip(warning_text + (f"\n{plan.error}" if plan.error else ""))
             self.table.setItem(row, column, item)
 
     @Slot(str)
@@ -640,3 +637,12 @@ def _plan_status_label(status: RenamePlanStatus) -> str:
         RenamePlanStatus.INVALID_TARGET: "目标名称无效",
         RenamePlanStatus.CANCELLED: "已取消",
     }.get(status, "需检查")
+
+
+def _plan_diagnostics(plan: RenamePlan) -> str:
+    """Keep non-normal plan explanations available from the status cell."""
+    messages: list[str] = []
+    if plan.error:
+        messages.append(plan.error)
+    messages.extend(plan.warnings)
+    return "\n".join(dict.fromkeys(messages))

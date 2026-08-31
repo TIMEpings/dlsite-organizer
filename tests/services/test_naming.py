@@ -4,7 +4,12 @@ import pytest
 
 from dlsite_organizer.domain.naming import sanitize_windows_name
 from dlsite_organizer.domain.work import AgeCategory, Work, WorkLanguage
-from dlsite_organizer.services.naming import NamingService, NamingTemplateError
+from dlsite_organizer.services.naming import (
+    CANONICAL_TEMPLATE_VARIABLES,
+    DEFAULT_NAMING_TEMPLATE,
+    NamingService,
+    NamingTemplateError,
+)
 
 
 def test_formats_complete_metadata() -> None:
@@ -15,6 +20,20 @@ def test_formats_complete_metadata() -> None:
         maker_name="Circle Name",
     )
     assert NamingService().format(work) == "[Circle Name][RJ01234567] Work Title"
+
+
+def test_default_template_placeholders_are_advertised_as_canonical() -> None:
+    import string
+
+    placeholders = {
+        field_name
+        for _, field_name, _, _ in string.Formatter().parse(DEFAULT_NAMING_TEMPLATE)
+        if field_name is not None
+    }
+    advertised = {variable[1:-1] for _, variable in CANONICAL_TEMPLATE_VARIABLES}
+
+    assert placeholders <= advertised
+    assert "rjcode" not in advertised
 
 
 def test_omits_missing_maker_group() -> None:
@@ -58,6 +77,12 @@ def test_supports_rich_metadata_aliases_without_changing_default_template() -> N
         "RJ01234567-Work Title--Circle Name-Series-Alice, Bob-Alice, Bob-"
         "ASMR, Healing-ASMR, Healing-r15-ENG"
     )
+
+
+def test_legacy_rjcode_alias_still_renders() -> None:
+    work = Work(workno="RJ01234567", title="Work Title")
+
+    assert NamingService("{rjcode} {title}").format(work) == "RJ01234567 Work Title"
 
 
 def test_canonical_template_supports_configured_metadata_formatting() -> None:

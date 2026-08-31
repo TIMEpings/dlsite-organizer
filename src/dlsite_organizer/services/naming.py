@@ -17,6 +17,36 @@ from dlsite_organizer.domain.naming import sanitize_windows_name
 from dlsite_organizer.domain.work import Work
 
 DEFAULT_NAMING_TEMPLATE = "[{maker_name}][{workno}] {title}"
+
+# These are the tokens the Settings UI recommends for new templates.  The
+# names follow the normalized Work contract where possible; ``cv``, ``tags``,
+# ``age``, and ``language`` are deliberately user-facing formatter values.
+CANONICAL_TEMPLATE_VARIABLES = (
+    ("RJ编号", "{workno}"),
+    ("标题", "{title}"),
+    ("社团", "{maker_name}"),
+    ("社团ID", "{maker_id}"),
+    ("系列", "{series_name}"),
+    ("CV", "{cv}"),
+    ("标签", "{tags}"),
+    ("年龄", "{age}"),
+    ("语言", "{language}"),
+    ("发售日期", "{release_date}"),
+)
+
+# Public in v0.x/v1.0 configurations.  Keep accepting these tokens even
+# though the Settings UI intentionally does not advertise them anymore.
+LEGACY_TEMPLATE_ALIASES = (
+    "rjcode",
+    "work_name",
+    "series",
+    "cv_list",
+    "cv_list_str",
+    "tags_list",
+    "tags_list_str",
+    "age_category",
+    "language_code",
+)
 _EMPTY_GROUP = re.compile(r"\[\s*\]")
 _SPACES = re.compile(r"\s{2,}")
 _WINDOWS_DATE_DIRECTIVES = frozenset("aAbBcdHIjmMpSUwWxXyYZ%")
@@ -47,33 +77,11 @@ class NamingService:
     """Render a small set of Work fields and sanitize the result for Windows."""
 
     _SUPPORTED_FIELDS = frozenset(
-        {
-            "workno",
-            "rjcode",
-            "title",
-            "work_name",
-            "maker_id",
-            "maker_name",
-            "release_date",
-            "series",
-            "series_name",
-            "cv",
-            "cv_list",
-            "cv_list_str",
-            "tags",
-            "tags_list",
-            "tags_list_str",
-            "age",
-            "age_category",
-            "language",
-            "language_name",
-            "language_code",
-        }
-    )
+        field[1:-1] for _, field in CANONICAL_TEMPLATE_VARIABLES
+    ) | frozenset(LEGACY_TEMPLATE_ALIASES) | frozenset({"language_name"})
     _LEGACY_FIELDS = frozenset(
         {
             "work_name",
-            "series_name",
             "cv_list",
             "cv_list_str",
             "tags_list",

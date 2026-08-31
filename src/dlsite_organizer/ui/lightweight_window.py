@@ -113,9 +113,13 @@ class LightweightWindow(QMainWindow):
         self.setCentralWidget(central)
         self.setStyleSheet(_STYLE)
 
-    def start_quick_rename(self, path: Path | str) -> None:
+    def start_quick_rename(
+        self,
+        paths: Path | str | Sequence[Path | str],
+    ) -> None:
         """Start one explicit quick action, used by the Explorer boundary."""
-        self._handle_drop((path,))
+        normalized = (paths,) if isinstance(paths, (str, Path)) else tuple(paths)
+        self._handle_drop(normalized)
 
     @Slot(object)
     def _handle_drop(self, value: object) -> None:

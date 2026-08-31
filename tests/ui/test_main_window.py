@@ -26,12 +26,29 @@ def test_main_window_exposes_organizer_page_without_running_filesystem_work(
     assert [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
-    ] == ["整理", "查询", "设置", "关于"]
+    ] == ["整理", "查询", "设置"]
+    assert window.about_button.text() == f"关于 · v{__version__}"
     assert window.pages.widget(0) is window.organizer_page
     assert window.organizer_page.table.rowCount() == 0
     assert not window.organizer_page.is_busy()
     assert window.navigation_list.currentRow() == window.page_indices["organizer"]
     assert window.about_page.version_value.text() == f"v{__version__}"
+    window.close()
+
+
+def test_about_footer_opens_about_destination_without_main_nav_entry(
+    qapp: QApplication,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+
+    window.about_button.click()
+
+    assert window.pages.currentWidget() is window.about_page
+    assert window.navigation_list.currentRow() == -1
+    assert [
+        window.navigation_list.item(index).text()
+        for index in range(window.navigation_list.count())
+    ] == ["整理", "查询", "设置"]
     window.close()
 
 

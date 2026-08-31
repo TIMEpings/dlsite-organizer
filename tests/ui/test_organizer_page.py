@@ -44,6 +44,13 @@ def test_organizer_page_initializes_and_renders_preview(qapp: QApplication, tmp_
 
     assert page.root_input.text() == str(tmp_path)
     assert page.table.rowCount() == 1
+    headers = []
+    for index in range(page.table.columnCount()):
+        header = page.table.horizontalHeaderItem(index)
+        assert header is not None
+        headers.append(header.text())
+    assert headers == ["状态", "当前目录名", "RJcode", "社团", "标题", "目标目录名"]
+    assert "详情" not in headers
     status_item = cast(QTableWidgetItem, page.table.item(0, 0))
     current_item = cast(QTableWidgetItem, page.table.item(0, 1))
     code_item = cast(QTableWidgetItem, page.table.item(0, 2))
@@ -218,18 +225,18 @@ def test_organizer_page_shows_stale_metadata_warning_but_not_fresh_cache_warning
         OrganizerService(FreshnessLookupService(LookupFreshness.CACHE_STALE_FALLBACK))
     )
     stale_page.set_preview(stale_page._organizer_service.preview(tmp_path))
-    stale_details = cast(QTableWidgetItem, stale_page.table.item(0, 6))
+    stale_details = cast(QTableWidgetItem, stale_page.table.item(0, 0))
     assert stale_page._preview is not None
     assert stale_page._preview.plans[0].status is RenamePlanStatus.READY
-    assert "使用旧缓存 metadata" in stale_details.text()
+    assert "使用旧缓存 metadata" in stale_details.toolTip()
     stale_page.close()
 
     fresh_page = OrganizerPage(
         OrganizerService(FreshnessLookupService(LookupFreshness.CACHE_FRESH))
     )
     fresh_page.set_preview(fresh_page._organizer_service.preview(tmp_path))
-    fresh_details = cast(QTableWidgetItem, fresh_page.table.item(0, 6))
-    assert "使用旧缓存 metadata" not in fresh_details.text()
+    fresh_status = cast(QTableWidgetItem, fresh_page.table.item(0, 0))
+    assert "使用旧缓存 metadata" not in fresh_status.toolTip()
     fresh_page.close()
 
 

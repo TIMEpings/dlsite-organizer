@@ -79,3 +79,17 @@ def test_drop_zone_accepts_only_local_directories(tmp_path: Path) -> None:
     assert local_directory_paths(directory_mime) == (folder,)
     assert local_directory_paths(mixed_mime) == ()
     assert local_directory_paths(remote_mime) == ()
+
+
+def test_explorer_entry_point_forwards_one_path_batch_to_drop_handler(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = _window(tmp_path)
+    paths = (tmp_path / "RJ00000001", tmp_path / "RJ00000002")
+    captured: list[tuple[Path, ...]] = []
+    monkeypatch.setattr(window, "_handle_drop", lambda value: captured.append(tuple(value)))
+
+    window.start_quick_rename(paths)
+
+    assert captured == [paths]
+    window.close()

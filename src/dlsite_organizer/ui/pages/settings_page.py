@@ -41,7 +41,11 @@ from dlsite_organizer.services.explorer_integration import (
     ExplorerRegistration,
     ExplorerRegistrationState,
 )
-from dlsite_organizer.services.naming import NamingService, NamingTemplateError
+from dlsite_organizer.services.naming import (
+    CANONICAL_TEMPLATE_VARIABLES,
+    NamingService,
+    NamingTemplateError,
+)
 
 
 class SettingsPage(QWidget):
@@ -56,18 +60,7 @@ class SettingsPage(QWidget):
         ("繁體中文", "zh_tw"),
         ("한국어", "ko_kr"),
     )
-    _VARIABLES = (
-        ("RJ编号", "{rjcode}"),
-        ("标题", "{title}"),
-        ("社团", "{maker_name}"),
-        ("社团ID", "{maker_id}"),
-        ("系列", "{series}"),
-        ("CV", "{cv}"),
-        ("标签", "{tags}"),
-        ("年龄", "{age}"),
-        ("语言", "{language}"),
-        ("发售日期", "{release_date}"),
-    )
+    _VARIABLES = CANONICAL_TEMPLATE_VARIABLES
 
     def __init__(
         self,
@@ -107,13 +100,68 @@ class SettingsPage(QWidget):
         content_layout.setContentsMargins(0, 4, 8, 4)
         content_layout.setSpacing(12)
 
+        self.quick_access_box = QGroupBox("快捷功能")
+        self.quick_access_box.setObjectName("quickAccessBox")
+        quick_access_layout = QVBoxLayout(self.quick_access_box)
+
+        self.runtime_box = QGroupBox("启动与模式")
+        runtime_form = QFormLayout(self.runtime_box)
+        self.startup_mode_input = QComboBox()
+        self.startup_mode_input.setObjectName("startupModeInput")
+        self.startup_mode_input.addItem("完整模式", StartupMode.FULL.value)
+        self.startup_mode_input.addItem("轻量模式", StartupMode.LIGHTWEIGHT.value)
+        self.startup_mode_input.setToolTip(
+            "只控制下次启动时显示的窗口；临时切换模式不会修改此设置。"
+        )
+        runtime_form.addRow("启动模式", self.startup_mode_input)
+
+        self.explorer_box = QGroupBox("资源管理器集成")
+        explorer_layout = QVBoxLayout(self.explorer_box)
+        explorer_form = QFormLayout()
+        self.explorer_status_label = QLabel()
+        self.explorer_status_label.setObjectName("explorerRegistrationStatus")
+        self.explorer_status_label.setWordWrap(True)
+        explorer_form.addRow("右键菜单", self.explorer_status_label)
+        self.explorer_path_label = QLabel()
+        self.explorer_path_label.setObjectName("explorerRegistrationPath")
+        self.explorer_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.explorer_path_label.setWordWrap(True)
+        explorer_form.addRow("路径", self.explorer_path_label)
+        explorer_layout.addLayout(explorer_form)
+
+        explorer_help = QLabel(
+            "注册仅对当前 Windows 用户生效，不需要管理员权限。"
+            "根据 Windows 版本和 Explorer 行为，该命令可能出现在“显示更多选项”菜单中。"
+        )
+        explorer_help.setObjectName("pageDescription")
+        explorer_help.setWordWrap(True)
+        explorer_layout.addWidget(explorer_help)
+
+        explorer_actions = QHBoxLayout()
+        self.register_explorer_button = QPushButton("注册 / 更新")
+        self.register_explorer_button.setObjectName("registerExplorerButton")
+        self.remove_explorer_button = QPushButton("移除")
+        self.remove_explorer_button.setObjectName("removeExplorerButton")
+        explorer_actions.addWidget(self.register_explorer_button)
+        explorer_actions.addWidget(self.remove_explorer_button)
+        explorer_actions.addStretch(1)
+        explorer_layout.addLayout(explorer_actions)
+        self.explorer_feedback_label = QLabel()
+        self.explorer_feedback_label.setObjectName("explorerFeedbackLabel")
+        self.explorer_feedback_label.setWordWrap(True)
+        explorer_layout.addWidget(self.explorer_feedback_label)
+        quick_access_layout.addWidget(self.explorer_box)
+        quick_access_layout.addWidget(self.runtime_box)
+        content_layout.addWidget(self.quick_access_box)
+
         naming_box = QGroupBox("重命名")
+        self.naming_box = naming_box
         naming_layout = QVBoxLayout(naming_box)
         naming_form = QFormLayout()
         naming_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self.template_input = QLineEdit()
         self.template_input.setObjectName("namingTemplateInput")
-        self.template_input.setPlaceholderText("例如：[{maker_name}][{rjcode}] {title}")
+        self.template_input.setPlaceholderText("例如：[{maker_name}][{workno}] {title}")
         self.template_input.setToolTip(
             "只支持简单的 {变量名} 占位符；[ ... ] 空段会在内容缺失时清理。"
         )
@@ -222,53 +270,6 @@ class SettingsPage(QWidget):
         metadata_form.addRow("缓存回退", self.allow_stale_input)
         metadata_form.addRow("网络超时", self.timeout_input)
         content_layout.addWidget(metadata_box)
-
-        runtime_box = QGroupBox("启动与模式")
-        runtime_form = QFormLayout(runtime_box)
-        self.startup_mode_input = QComboBox()
-        self.startup_mode_input.setObjectName("startupModeInput")
-        self.startup_mode_input.addItem("完整模式", StartupMode.FULL.value)
-        self.startup_mode_input.addItem("轻量模式", StartupMode.LIGHTWEIGHT.value)
-        self.startup_mode_input.setToolTip("只控制下次启动时显示的窗口；临时切换模式不会修改此设置。")
-        runtime_form.addRow("启动模式", self.startup_mode_input)
-        content_layout.addWidget(runtime_box)
-
-        explorer_box = QGroupBox("资源管理器集成")
-        explorer_layout = QVBoxLayout(explorer_box)
-        explorer_form = QFormLayout()
-        self.explorer_status_label = QLabel()
-        self.explorer_status_label.setObjectName("explorerRegistrationStatus")
-        self.explorer_status_label.setWordWrap(True)
-        explorer_form.addRow("右键菜单", self.explorer_status_label)
-        self.explorer_path_label = QLabel()
-        self.explorer_path_label.setObjectName("explorerRegistrationPath")
-        self.explorer_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.explorer_path_label.setWordWrap(True)
-        explorer_form.addRow("路径", self.explorer_path_label)
-        explorer_layout.addLayout(explorer_form)
-
-        explorer_help = QLabel(
-            "注册仅对当前 Windows 用户生效，不需要管理员权限。"
-            "根据 Windows 版本和 Explorer 行为，该命令可能出现在“显示更多选项”菜单中。"
-        )
-        explorer_help.setObjectName("pageDescription")
-        explorer_help.setWordWrap(True)
-        explorer_layout.addWidget(explorer_help)
-
-        explorer_actions = QHBoxLayout()
-        self.register_explorer_button = QPushButton("注册 / 更新")
-        self.register_explorer_button.setObjectName("registerExplorerButton")
-        self.remove_explorer_button = QPushButton("移除")
-        self.remove_explorer_button.setObjectName("removeExplorerButton")
-        explorer_actions.addWidget(self.register_explorer_button)
-        explorer_actions.addWidget(self.remove_explorer_button)
-        explorer_actions.addStretch(1)
-        explorer_layout.addLayout(explorer_actions)
-        self.explorer_feedback_label = QLabel()
-        self.explorer_feedback_label.setObjectName("explorerFeedbackLabel")
-        self.explorer_feedback_label.setWordWrap(True)
-        explorer_layout.addWidget(self.explorer_feedback_label)
-        content_layout.addWidget(explorer_box)
 
         data_box = QGroupBox("数据与诊断")
         data_layout = QFormLayout(data_box)

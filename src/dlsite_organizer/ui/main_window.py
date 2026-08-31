@@ -37,7 +37,7 @@ from dlsite_organizer.ui.pages.settings_page import SettingsPage
 
 
 class MainPage(StrEnum):
-    """Stable identities for the four public pages."""
+    """Stable identities for the three main pages and the About destination."""
 
     ORGANIZER = "organizer"
     LOOKUP = "lookup"
@@ -92,9 +92,11 @@ class MainWindow(QMainWindow):
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
         nav_layout.addWidget(self.navigation_list, 1)
-        version = QLabel(f"v{__version__} · 安全重命名")
-        version.setObjectName("versionLabel")
-        nav_layout.addWidget(version)
+        self.about_button = QPushButton(f"关于 · v{__version__}")
+        self.about_button.setObjectName("aboutButton")
+        self.about_button.setToolTip("打开关于页面")
+        self.about_button.clicked.connect(self.show_about_page)
+        nav_layout.addWidget(self.about_button)
         self.lightweight_button = QPushButton("切换到轻量模式")
         self.lightweight_button.setObjectName("modeButton")
         self.lightweight_button.clicked.connect(self.request_lightweight_mode)
@@ -128,7 +130,8 @@ class MainWindow(QMainWindow):
         self.page_indices: dict[str, int] = {}
         for index, (page_key, label, page) in enumerate(page_definitions):
             self.page_indices[page_key.value] = index
-            self.navigation_list.addItem(QListWidgetItem(label))
+            if page_key is not MainPage.ABOUT:
+                self.navigation_list.addItem(QListWidgetItem(label))
             self.pages.addWidget(page)
 
         self.navigation_list.currentRowChanged.connect(self.pages.setCurrentIndex)
@@ -150,6 +153,17 @@ class MainWindow(QMainWindow):
         """Select the shared Settings page for the lightweight settings action."""
         self.settings_page.refresh_explorer_registration()
         self.navigation_list.setCurrentRow(self.page_indices[MainPage.SETTINGS.value])
+
+    @Slot()
+    def show_about_page(self) -> None:
+        """Show About from the single footer entry without a magic nav index."""
+        self.navigation_list.blockSignals(True)
+        try:
+            self.navigation_list.clearSelection()
+            self.navigation_list.setCurrentRow(-1)
+        finally:
+            self.navigation_list.blockSignals(False)
+        self.pages.setCurrentIndex(self.page_indices[MainPage.ABOUT.value])
 
     def is_busy(self) -> bool:
         """Return whether any full-mode background operation is active."""
@@ -176,11 +190,15 @@ QMainWindow, QStackedWidget { background: #f5f7fb; }
 QWidget { color: #1e293b; font-family: "Segoe UI", "Microsoft YaHei UI"; font-size: 14px; }
 #navigation { background: #172033; }
 #brand { color: white; font-size: 21px; font-weight: 700; line-height: 1.2; }
-#versionLabel { color: #8190aa; font-size: 12px; }
 #navigationList { background: transparent; border: 0; color: #c9d2e3; outline: 0; }
 #navigationList::item { border-radius: 7px; padding: 11px 12px; }
 #navigationList::item:selected { background: #2e3c55; color: white; font-weight: 600; }
 #navigationList::item:hover:!selected { background: #222e43; }
+#aboutButton {
+  color: #c9d2e3; background: transparent; border: 0;
+  padding: 8px 12px; text-align: left;
+}
+#aboutButton:hover { color: white; background: #222e43; }
 #pageTitle { font-size: 26px; font-weight: 700; color: #111827; }
 #pageDescription { color: #64748b; }
 #resultCard { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }

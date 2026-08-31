@@ -45,10 +45,11 @@ python -m dlsite_organizer
 
 ## 完整模式
 
-完整模式是默认模式，主页面顺序为：
+完整模式是默认模式，主导航和 About footer 为：
 
 ```text
-整理 → 查询 → 设置 → 关于
+整理 → 查询 → 设置
+关于 · v<version>
 ```
 
 在“整理”页可选择根目录，也可将文件夹拖入窗口。扫描会查询 RJcode 并生成预览；完整模式拖入只生成预览，不会立即重命名。检查需要修改的项目后，点击“执行重命名”并明确确认。
@@ -67,16 +68,22 @@ python -m dlsite_organizer
 
 在“设置 → 资源管理器集成”中可以为当前 Windows 用户注册、更新或移除右键菜单。该功能只写入应用自己的 HKCU 注册表项，不需要管理员权限，也不会自动注册。Windows 11 中菜单可能位于“显示更多选项”。
 
-右键菜单调用与轻量模式相同的安全重命名流程，每次处理一个文件夹。若程序目录移动，设置页会显示路径已失效，需要重新“注册 / 更新”。
+右键菜单调用与轻量模式相同的安全重命名流程。Explorer 多选在同一个 Player invocation
+中作为一个 batch 处理，并使用一个 transaction/Undo；多个目录必须是同一父目录下的直接
+子目录。若程序目录移动，设置页会显示路径已失效，需要重新“注册 / 更新”。
 
 ## 命名设置
 
 普通用户应使用“设置”页配置命名模板、日期格式、CV/标签格式、元数据语言和 cache。可用变量包括：
 
 ```text
-{rjcode} {title} {maker_name} {maker_id} {series}
+{workno} {title} {maker_name} {maker_id} {series_name}
 {cv} {tags} {age} {language} {release_date}
 ```
+
+旧配置仍兼容 `{rjcode}`、`{work_name}`、`{series}`、`{cv_list}`、`{cv_list_str}`、
+`{tags_list}`、`{tags_list_str}`、`{age_category}` 和 `{language_code}`；这些 alias 不再作为
+新模板按钮展示。
 
 保存前会校验完整设置；已有 Organizer 预览会失效，必须重新扫描。缺失字段在界面中显示为 `—`，命名模板中的空分组会被清理。
 

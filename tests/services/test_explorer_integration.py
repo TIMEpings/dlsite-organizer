@@ -6,6 +6,8 @@ from dlsite_organizer.services.explorer_integration import (
     EXPLORER_COMMAND_KEY_PATH,
     EXPLORER_KEY_PATH,
     EXPLORER_MENU_LABEL,
+    EXPLORER_MULTI_SELECT_MODEL,
+    EXPLORER_MULTI_SELECT_MODEL_VALUE,
     ExplorerIntegrationError,
     ExplorerIntegrationService,
     ExplorerRegistrationState,
@@ -60,7 +62,12 @@ def test_register_inspect_stale_update_and_idempotent_remove() -> None:
 
     registered = service.register_current_executable()
     assert registered.state is ExplorerRegistrationState.REGISTERED_CURRENT
+    assert registered.multi_select_model == EXPLORER_MULTI_SELECT_MODEL
     assert registry.values[(EXPLORER_KEY_PATH, "")] == EXPLORER_MENU_LABEL
+    assert (
+        registry.values[(EXPLORER_KEY_PATH, EXPLORER_MULTI_SELECT_MODEL_VALUE)]
+        == EXPLORER_MULTI_SELECT_MODEL
+    )
     assert registry.values[(EXPLORER_COMMAND_KEY_PATH, "")] == build_quick_rename_command(current)
 
     moved_service = _service(registry, r"D:\Apps\DLsite Organizer\dlsite-organizer.exe")
@@ -86,6 +93,11 @@ def test_path_comparison_accepts_case_variation() -> None:
         "",
         r'"c:\PROGRAM FILES\DLsite Organizer\dlsite-organizer.exe" --quick-rename "%1"',
     )
+    registry.write_value(
+        EXPLORER_KEY_PATH,
+        EXPLORER_MULTI_SELECT_MODEL_VALUE,
+        EXPLORER_MULTI_SELECT_MODEL,
+    )
 
     assert (
         _service(registry, current).inspect().state
@@ -107,6 +119,26 @@ def test_malformed_owned_command_is_stale() -> None:
     registry = MemoryRegistry()
     registry.write_value(EXPLORER_COMMAND_KEY_PATH, "", r'"C:\old.exe" --wrong "%1"')
 
+    assert (
+        _service(registry, r"C:\old.exe").inspect().state
+        is ExplorerRegistrationState.REGISTERED_STALE
+    )
+
+
+def test_missing_or_wrong_multi_select_model_is_stale() -> None:
+    registry = MemoryRegistry()
+    registry.write_value(
+        EXPLORER_COMMAND_KEY_PATH,
+        "",
+        r'"C:\old.exe" --quick-rename "%1"',
+    )
+
+    assert (
+        _service(registry, r"C:\old.exe").inspect().state
+        is ExplorerRegistrationState.REGISTERED_STALE
+    )
+
+    registry.write_value(EXPLORER_KEY_PATH, EXPLORER_MULTI_SELECT_MODEL_VALUE, "Document")
     assert (
         _service(registry, r"C:\old.exe").inspect().state
         is ExplorerRegistrationState.REGISTERED_STALE

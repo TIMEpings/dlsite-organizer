@@ -16,22 +16,23 @@ Canonical variables:
 
 | Variable | Meaning |
 | --- | --- |
-| `{rjcode}` | Canonical RJ work number |
+| `{workno}` | Canonical RJ work number from the normalized `Work` |
 | `{title}` | Work title |
 | `{maker_name}` | DLsite listing maker/circle name |
 | `{maker_id}` | DLsite listing maker/circle ID |
-| `{series}` | Series name, if present |
+| `{series_name}` | Series name, if present |
 | `{cv}` | CV names using the configured separator and optional prefix/suffix |
 | `{tags}` | Tags using the configured separator and max tag count |
 | `{age}` | `全年龄`, `R15`, `R18`, or empty for unknown |
 | `{language}` | Human-readable work language, with safe raw-code fallback |
 | `{release_date}` | Release date using the configured `strftime` format |
 
-The older aliases `{workno}`, `{work_name}`, `{series_name}`, `{cv_list}`, `{cv_list_str}`,
-`{tags_list}`, `{tags_list_str}`, `{age_category}`, and `{language_code}` remain accepted. Legacy
-list and age aliases retain their previous raw formatting. Templates only support simple named
-placeholders. Empty templates, unknown fields, attribute/index access, conversions, and format
-expressions are rejected immediately.
+The legacy/compatibility aliases `{rjcode}`, `{work_name}`, `{series}`, `{cv_list}`,
+`{cv_list_str}`, `{tags_list}`, `{tags_list_str}`, `{age_category}`, and `{language_code}` remain
+accepted. They are intentionally not shown as insertion buttons for new templates. Legacy list and
+age aliases retain their previous raw formatting. Templates only support simple named placeholders.
+Empty templates, unknown fields, attribute/index access, conversions, and format expressions are
+rejected immediately.
 
 Missing optional fields render as empty strings. A bracketed empty segment is removed, so:
 
@@ -78,9 +79,10 @@ rejected and no lookup or filesystem mutation starts.
 
 In lightweight mode, actively dropping folders onto the clearly labelled **将 DLsite 作品文件夹拖到这里 / 拖入后将立即按当前设置重命名** zone is the confirmation for that Quick Rename action. The
 operation still uses the shared NamingService, RenamePlanner, RenameExecutor, and durable
-TransactionJournal. Any batch-wide input, metadata, plan, journal, recovery, or final preflight
-failure is fail-closed. The **撤销最近一次** button uses the existing UndoService and asks for
-explicit confirmation.
+TransactionJournal. Multiple selected folders must be direct siblings. Any batch-wide input,
+metadata, plan, journal, recovery, or final preflight failure is fail-closed; READY folders are
+committed as one transaction and the **撤销最近一次** button uses the existing UndoService to
+restore the whole transaction with one confirmation.
 
 ## Explorer integration
 
@@ -96,18 +98,20 @@ its state is not stored in `config.toml`. It shows one of:
 ```
 
 On a packaged Windows build, **注册 / 更新** writes only the current user's
-`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key and its `command` child. The
-command is generated as a direct executable invocation:
+`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key and its `command` child. It also
+sets the verb's `MultiSelectModel` value to `Player`, and the command is generated as a direct
+executable invocation:
 
 ```text
 "<current packaged exe>" --quick-rename "%1"
 ```
 
 The executable path is quoted by the standard Windows argument formatter, so spaces and non-ASCII
-paths are preserved; no `cmd.exe`, PowerShell, or shell trampoline is used. The command passes one
-Explorer-selected directory per invocation. **移除** deletes only this verb and its `command` child,
-is idempotent, and never removes the parent `Directory\shell` key or unrelated verbs. Registration
-is explicit, per-user, and needs no administrator rights.
+paths are preserved; no `cmd.exe`, PowerShell, or shell trampoline is used. With the Player model,
+the command is intended to receive the complete Explorer selection in one application invocation;
+the CLI accepts one or more directory arguments. **移除** deletes only this verb and its `command`
+child, is idempotent, and never removes the parent `Directory\shell` key or unrelated verbs.
+Registration is explicit, per-user, and needs no administrator rights.
 
 The source/development run does not register a Python interpreter or source entry point; its buttons
 are disabled with a message that Explorer integration is available only in the packaged version.
@@ -116,12 +120,15 @@ stale. Start the application from its new location and use **注册 / 更新**. 
 portable application directory, use **移除** first. On Windows 11 and some Explorer configurations,
 the ordinary shell verb may appear under **显示更多选项**.
 
-The Explorer action opens the lightweight Quick Action window and calls the same `QuickRenameService`
-as drag-and-drop. It does not show a second ordinary confirmation dialog, but it still performs
-input validation, lookup, naming, planning, final preflight, durable journal creation, and executor
-mutation. A fresh metadata cache is reused, and an unresolved journal blocks the action. Concurrent
-quick invocations are serialized at journal transaction creation; a stale second invocation fails
-closed when its source is gone or its target has appeared.
+The Explorer action opens one lightweight Quick Action window and calls the same batch-capable
+`QuickRenameService` as drag-and-drop. It does not show a second ordinary confirmation dialog, but
+it still performs input validation, lookup, naming, planning, final preflight, durable journal
+creation, and executor mutation. A fresh metadata cache is reused, and an unresolved journal
+blocks the action. Independent concurrent invocations remain serialized at journal transaction
+creation; this is defense-in-depth, not the normal multi-select architecture. If the real packaged
+Windows Explorer smoke cannot demonstrate that static Player activation supplies the full
+selection, the safe fallback is `MultiSelectModel=Single` and multi-select is deferred rather than
+aggregated through inter-process locks.
 
 ## Persistence and paths
 

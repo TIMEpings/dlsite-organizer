@@ -19,6 +19,8 @@ EXPLORER_VERB = "dlsite-organizer"
 EXPLORER_MENU_LABEL = "使用 DLsite Organizer 重命名"
 EXPLORER_KEY_PATH = rf"Software\Classes\Directory\shell\{EXPLORER_VERB}"
 EXPLORER_COMMAND_KEY_PATH = rf"{EXPLORER_KEY_PATH}\command"
+EXPLORER_MULTI_SELECT_MODEL_VALUE = "MultiSelectModel"
+EXPLORER_MULTI_SELECT_MODEL = "Player"
 
 
 class ExplorerRegistrationState(StrEnum):
@@ -39,6 +41,7 @@ class ExplorerRegistration:
     current_executable: Path | None = None
     registered_executable: Path | None = None
     command: str | None = None
+    multi_select_model: str | None = None
     error: str | None = None
 
 
@@ -127,6 +130,10 @@ class ExplorerIntegrationService:
             )
         try:
             command = self._backend.read_value(EXPLORER_COMMAND_KEY_PATH)
+            multi_select_model = self._backend.read_value(
+                EXPLORER_KEY_PATH,
+                EXPLORER_MULTI_SELECT_MODEL_VALUE,
+            )
         except Exception:
             logger.exception("Could not inspect Explorer integration registry state")
             return ExplorerRegistration(
@@ -143,6 +150,7 @@ class ExplorerIntegrationService:
         registered_executable, arguments_valid = _parse_command(command)
         is_current = (
             arguments_valid
+            and multi_select_model == EXPLORER_MULTI_SELECT_MODEL
             and registered_executable is not None
             and _same_windows_path(registered_executable, current)
         )
@@ -157,6 +165,7 @@ class ExplorerIntegrationService:
                 Path(registered_executable) if registered_executable is not None else None
             ),
             command=command,
+            multi_select_model=multi_select_model,
         )
 
     def register_current_executable(self) -> ExplorerRegistration:
@@ -170,6 +179,11 @@ class ExplorerIntegrationService:
         command = build_quick_rename_command(current)
         try:
             self._backend.write_value(EXPLORER_KEY_PATH, "", EXPLORER_MENU_LABEL)
+            self._backend.write_value(
+                EXPLORER_KEY_PATH,
+                EXPLORER_MULTI_SELECT_MODEL_VALUE,
+                EXPLORER_MULTI_SELECT_MODEL,
+            )
             self._backend.write_value(EXPLORER_COMMAND_KEY_PATH, "", command)
         except Exception as exc:
             logger.exception("Could not register Explorer integration")
@@ -221,7 +235,14 @@ def current_executable_path() -> Path | None:
 
 
 def build_quick_rename_command(executable_path: Path | str) -> str:
-    """Build the direct Explorer command without a shell trampoline."""
+    """Build the direct Player-model Explorer command without a shell trampoline.
+
+    ``%1`` is the Shell selection placeholder.  With ``MultiSelectModel`` set
+    to ``Player`` on the owning verb, Explorer activates the command once and
+    supplies the selected item arguments to that invocation.  Keeping the
+    placeholder quoted preserves paths containing spaces without introducing a
+    command interpreter or an inter-process aggregation layer.
+    """
     executable = _absolute_executable_path(executable_path)
     # Let the standard Windows argument formatter quote the executable path;
     # the final token is an Explorer placeholder and must remain visibly

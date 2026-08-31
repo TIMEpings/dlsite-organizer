@@ -33,6 +33,15 @@ It writes `dist\dlsite-organizer\` and a versioned ZIP under ignored build outpu
 ## Manual gates pending user acceptance
 
 ```text
+REAL HKCU REGISTER/UPDATE/REMOVE IN THE USER DESKTOP SESSION:
+MANUAL REQUIRED
+
+REAL EXPLORER PLAYER MULTI-SELECT MENU VISIBILITY:
+MANUAL REQUIRED
+
+REAL EXPLORER PLAYER INVOCATION + ONE WINDOW/TRANSACTION/UNDO:
+MANUAL REQUIRED
+
 REAL EXPLORER DRAG/DROP:
 MANUAL REQUIRED
 
@@ -40,12 +49,16 @@ REAL EXPLORER MENU CLICK:
 MANUAL REQUIRED
 ```
 
-The automated `--quick-rename` boundary and HKCU register/update/remove checks are covered; the two gates above require the user's real desktop Explorer because the connected automation environment does not share the host Explorer registry/session.
+The automated `--quick-rename` batch boundary and registry-backend register/update/remove checks
+are covered. The real HKCU and Player-model invocation gates require the user's real desktop
+Explorer because the connected automation environment does not share the host Explorer registry
+session; this round observed three selected folders in Explorer, but its menu did not see the
+registration from the isolated elevated registry view.
 
 Before release, also perform the visible GUI walkthrough:
 
 ```text
-启动 → 整理 → 查询 → 设置 → 关于
+启动 → 整理 → 查询 → 设置 → 关于 footer
 → 完整模式 / 轻量模式 → clean exit → restart
 ```
 

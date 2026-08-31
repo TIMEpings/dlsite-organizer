@@ -86,6 +86,44 @@ def test_quick_rename_happy_path_and_undo(tmp_path: Path) -> None:
     assert not target.exists()
 
 
+def test_quick_rename_batch_uses_one_transaction_and_one_undo(tmp_path: Path) -> None:
+    paths = tuple(
+        tmp_path / f"RJ0160902{index} old"
+        for index in range(0, 3)
+    )
+    for path in paths:
+        path.mkdir()
+    works = {
+        "RJ01609020": Work(workno="RJ01609020", title="Zero"),
+        "RJ01609021": Work(workno="RJ01609021", title="One"),
+        "RJ01609022": Work(workno="RJ01609022", title="Two"),
+    }
+    lookup = FakeLookup(works)
+    service, journal = _quick(tmp_path, lookup)
+    undo = UndoService(journal)
+
+    result = service.rename(paths)
+
+    assert result.status is QuickRenameStatus.SUCCESS
+    assert result.execution is not None
+    assert result.execution.success_count == 3
+    transaction = journal.get_transaction(result.transaction_id or "")
+    assert transaction is not None
+    assert len(transaction.operations) == 3
+    assert len({operation.transaction_id for operation in transaction.operations}) == 1
+    assert all(not path.exists() for path in paths)
+
+    undone = undo.undo(result.transaction_id, confirmed=True)
+
+    assert undone.status is TransactionStatus.UNDONE
+    assert undone.success_count == 3
+    assert all(path.is_dir() for path in paths)
+    assert all(
+        not (tmp_path / f"[{code}] {works[code].title}").exists()
+        for code in works
+    )
+
+
 def test_quick_invalid_input_has_no_lookup_or_journal(tmp_path: Path) -> None:
     source = tmp_path / "random folder"
     source.mkdir()

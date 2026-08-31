@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QGroupBox, QMessageBox
+from PySide6.QtWidgets import QApplication, QGroupBox, QMessageBox, QScrollArea, QVBoxLayout
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.app.settings import AppSettings, SettingsService, load_settings
@@ -44,9 +44,54 @@ def test_settings_page_has_live_preview_and_rejects_invalid_template(
     assert page.open_database_button is not None
     assert page.open_logs_button is not None
     assert "资源管理器集成" in [box.title() for box in page.findChildren(QGroupBox)]
+    assert "{workno}" in page.template_variable_buttons
+    assert "{rjcode}" not in page.template_variable_buttons
+    assert "RJ01234567" in initial
     assert page.explorer_status_label.text() == "状态：不支持"
     assert not page.register_explorer_button.isEnabled()
     assert not page.remove_explorer_button.isEnabled()
+    page.close()
+
+
+def test_settings_quick_access_group_precedes_rename_and_metadata_groups(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    service = SettingsService(
+        AppSettings(database_path=tmp_path / "metadata.sqlite3"),
+        config_path=tmp_path / "config.toml",
+    )
+    page = SettingsPage(service)
+
+    content = page.findChild(QScrollArea)
+    assert isinstance(content, QScrollArea)
+    content_widget = content.widget()
+    assert content_widget is not None
+    layout = content_widget.layout()
+    assert isinstance(layout, QVBoxLayout)
+
+    assert layout.indexOf(page.quick_access_box) < layout.indexOf(page.naming_box)
+    assert page.explorer_box.parentWidget() is page.quick_access_box
+    quick_layout = page.quick_access_box.layout()
+    assert isinstance(quick_layout, QVBoxLayout)
+    assert quick_layout.indexOf(page.explorer_box) == 0
+    assert quick_layout.indexOf(page.runtime_box) == 1
+    page.close()
+
+
+def test_canonical_variable_button_inserts_workno_token(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    service = SettingsService(
+        AppSettings(database_path=tmp_path / "metadata.sqlite3"),
+        config_path=tmp_path / "config.toml",
+    )
+    page = SettingsPage(service)
+
+    page.template_input.clear()
+    page.template_variable_buttons["{workno}"].click()
+
+    assert page.template_input.text() == "{workno}"
+    assert "RJ01234567" in page.preview_label.text()
     page.close()
 
 

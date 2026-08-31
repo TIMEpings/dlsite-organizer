@@ -102,9 +102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     lightweight_window.settings_requested.connect(show_settings)
 
     if invocation.mode is LaunchMode.QUICK_RENAME:
-        quick_rename_directory = invocation.quick_rename_directory
-        assert quick_rename_directory is not None
-        logger.info("launch mode = quick-rename path=%s", quick_rename_directory)
+        quick_rename_directories = invocation.quick_rename_directories
+        assert quick_rename_directories
+        logger.info("launch mode = quick-rename paths=%s", quick_rename_directories)
         if os.environ.get("DLSITE_ORGANIZER_QUICK_RENAME_SMOKE") == "1":
             lightweight_window.quick_action_finished.connect(
                 lambda _result: QTimer.singleShot(250, application.quit)
@@ -115,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lightweight_window.show()
         QTimer.singleShot(
             0,
-            lambda: lightweight_window.start_quick_rename(quick_rename_directory),
+            lambda: lightweight_window.start_quick_rename(quick_rename_directories),
         )
     elif settings.startup_mode is StartupMode.LIGHTWEIGHT:
         lightweight_window.show()
@@ -149,17 +149,26 @@ def _schedule_startup_smoke(application: QApplication, window: MainWindow) -> No
     if os.environ.get("DLSITE_ORGANIZER_STARTUP_SMOKE") != "1":
         return
 
-    expected_pages = ["整理", "查询", "设置", "关于"]
+    expected_pages = ["整理", "查询", "设置"]
     actual_pages = [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
     ]
-    if actual_pages != expected_pages:
-        logger.error("Startup smoke failed: unexpected navigation pages: %s", actual_pages)
+    expected_about = f"关于 · v{__version__}"
+    if actual_pages != expected_pages or window.about_button.text() != expected_about:
+        logger.error(
+            "Startup smoke failed: navigation pages=%s about_footer=%s",
+            actual_pages,
+            window.about_button.text(),
+        )
         QTimer.singleShot(0, lambda: application.exit(3))
         return
 
-    logger.info("Startup smoke passed: MainWindow pages=%s", actual_pages)
+    logger.info(
+        "Startup smoke passed: MainWindow pages=%s about_footer=%s",
+        actual_pages,
+        window.about_button.text(),
+    )
     QTimer.singleShot(250, application.quit)
 
 
