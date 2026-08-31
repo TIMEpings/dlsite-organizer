@@ -71,6 +71,7 @@ class ScanResult:
     root_path: Path
     candidates: tuple[ScanCandidate, ...]
     skipped: tuple[ScanSkipped, ...]
+    cancelled: bool = False
 
     @property
     def skipped_count(self) -> int:

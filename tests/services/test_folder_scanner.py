@@ -123,3 +123,21 @@ def test_scanner_maps_root_read_failure(monkeypatch: pytest.MonkeyPatch, tmp_pat
         FolderScanner().scan(tmp_path)
 
     assert caught.value.kind is FolderScanFailureKind.ACCESS
+
+
+def test_scanner_stops_at_cooperative_cancellation_boundary(tmp_path: Path) -> None:
+    first = tmp_path / "one RJ01609020"
+    second = tmp_path / "two RJ01636949"
+    first.mkdir()
+    second.mkdir()
+    checks = 0
+
+    def cancel_after_first_child() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 1
+
+    result = FolderScanner().scan(tmp_path, cancel_check=cancel_after_first_child)
+
+    assert result.cancelled
+    assert [candidate.work_code for candidate in result.candidates] == ["RJ01609020"]

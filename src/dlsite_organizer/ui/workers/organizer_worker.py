@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from dlsite_organizer.services.folder_scanner import FolderScanFailure
 from dlsite_organizer.services.organizer import OrganizerService
@@ -38,6 +39,13 @@ class OrganizerWorker(QObject):
     @Slot()
     def run(self) -> None:
         """Build a preview and retain completed rows when cancellation is requested."""
+        thread = QThread.currentThread()
+        logger.debug(
+            "organizer worker started thread=%s ident=%s root=%s",
+            thread.objectName() or "<unnamed>",
+            threading.get_ident(),
+            self._root_path,
+        )
         try:
             if self._selected_paths is None:
                 preview = self._organizer_service.preview(
@@ -53,16 +61,32 @@ class OrganizerWorker(QObject):
                     cancel_check=self._cancel_event.is_set,
                 )
             self.result_ready.emit(preview)
+            logger.debug(
+                "organizer worker success emitted thread=%s plans=%d cancelled=%s",
+                thread.objectName() or "<unnamed>",
+                len(preview.plans),
+                preview.cancelled,
+            )
         except FolderScanFailure as exc:
             self.failed.emit(exc.user_message)
+            logger.debug(
+                "organizer worker error emitted thread=%s kind=%s",
+                thread.objectName() or "<unnamed>",
+                exc.kind,
+            )
         except Exception:
             logger.exception("Unexpected exception escaped organizer services")
             self.failed.emit("扫描时发生意外错误，详细信息已写入日志。")
         finally:
             self.finished.emit()
+            logger.debug(
+                "organizer worker finished emitted thread=%s",
+                thread.objectName() or "<unnamed>",
+            )
 
     def cancel(self) -> None:
         """Request cooperative cancellation; an in-flight HTTP call may finish first."""
+        logger.debug("organizer worker cancellation requested")
         self._cancel_event.set()
 
     @Slot(int, int, str)

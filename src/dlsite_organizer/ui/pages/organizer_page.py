@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
@@ -34,6 +35,8 @@ from dlsite_organizer.ui.widgets.drop_zone import DirectoryDropZone, local_direc
 from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorker
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 
+logger = logging.getLogger(__name__)
+
 
 class OrganizerPage(QWidget):
     """Present scan results and expose explicit rename and undo actions."""
@@ -64,7 +67,10 @@ class OrganizerPage(QWidget):
         self._build_ui()
 
         self.browse_button.clicked.connect(self.choose_root)
-        self.scan_button.clicked.connect(self.start_scan)
+        # QPushButton.clicked carries a checked: bool argument.  Keep that
+        # signal payload away from start_scan(), whose optional argument is
+        # reserved for selective dropped-folder scans.
+        self.scan_button.clicked.connect(self._start_scan_from_button)
         self.cancel_button.clicked.connect(self.cancel_scan)
         self.execute_button.clicked.connect(self.execute_rename)
         self.undo_button.clicked.connect(self.undo_recent)
@@ -169,6 +175,11 @@ class OrganizerPage(QWidget):
         self.root_input.setText(str(path))
 
     @Slot()
+    def _start_scan_from_button(self) -> None:
+        """Start an ordinary root scan from the button without its bool payload."""
+        self.start_scan()
+
+    @Slot()
     def start_scan(self, selected_paths: Sequence[Path | str] | None = None) -> None:
         """Start one background organizer run."""
         if self._thread is not None:
@@ -186,20 +197,48 @@ class OrganizerPage(QWidget):
         self.status_label.setText("正在扫描目录…")
         self._refresh_status_style()
 
-        thread = QThread()
-        worker = OrganizerWorker(self._organizer_service, root, selected_paths)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._show_progress)
-        worker.result_ready.connect(self._show_preview)
-        worker.failed.connect(self._show_error)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._scan_finished)
-        self._thread = thread
-        self._worker = worker
-        thread.start()
+        thread: QThread | None = None
+        worker: OrganizerWorker | None = None
+        try:
+            thread = QThread()
+            thread.setObjectName("organizer-scan")
+            worker = OrganizerWorker(self._organizer_service, root, selected_paths)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._show_progress)
+            worker.result_ready.connect(self._show_preview)
+            worker.failed.connect(self._show_error)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._scan_finished)
+            self._thread = thread
+            self._worker = worker
+            logger.debug(
+                "organizer scan thread created name=%s id=%s root=%s",
+                thread.objectName(),
+                id(thread),
+                root,
+            )
+            thread.start()
+            logger.debug(
+                "organizer scan thread started name=%s id=%s",
+                thread.objectName(),
+                id(thread),
+            )
+        except Exception:
+            logger.exception("Failed to start organizer scan")
+            if thread is not None:
+                thread.quit()
+                if thread.isRunning():
+                    thread.wait()
+                thread.deleteLater()
+            self._thread = None
+            self._worker = None
+            self._show_error("无法启动扫描，请稍后重试。")
+            self._set_loading(False)
+            self._update_execute_button()
+            self._refresh_recent_transaction()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         paths = local_directory_paths(event.mimeData())
@@ -268,8 +307,11 @@ class OrganizerPage(QWidget):
             self._append_plan(plan)
 
         if preview.cancelled:
-            self.status_label.setProperty("state", "loading")
+            self.status_label.setProperty("state", "success")
             self.status_label.setText("扫描已取消；表格保留已完成查询及未处理项目。")
+        elif not preview.plans and not preview.scan.candidates:
+            self.status_label.setProperty("state", "success")
+            self.status_label.setText("未发现可整理的作品文件夹；未修改本地文件。")
         else:
             self.status_label.setProperty("state", "success")
             self.status_label.setText("预览生成完成；未修改本地文件。")
@@ -536,6 +578,7 @@ class OrganizerPage(QWidget):
 
     @Slot()
     def _scan_finished(self) -> None:
+        logger.debug("organizer scan thread finished; clearing UI busy state")
         self._thread = None
         self._worker = None
         self._set_loading(False)

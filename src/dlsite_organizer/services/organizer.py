@@ -108,7 +108,7 @@ class OrganizerService:
         Work codes are looked up sequentially and only once per run.  A failed
         lookup becomes a single failed row; it does not abort other works.
         """
-        scan = self._scanner.scan(root_path)
+        scan = self._scanner.scan(root_path, cancel_check=cancel_check)
         return self._preview_scan(
             scan, progress_callback=progress_callback, cancel_check=cancel_check
         )
@@ -122,7 +122,7 @@ class OrganizerService:
         cancel_check: CancelCheck | None = None,
     ) -> OrganizerPreview:
         """Build a preview for explicitly selected direct child directories only."""
-        scan = self._scanner.scan_paths(root_path, paths)
+        scan = self._scanner.scan_paths(root_path, paths, cancel_check=cancel_check)
         return self._preview_scan(
             scan, progress_callback=progress_callback, cancel_check=cancel_check
         )
@@ -146,7 +146,7 @@ class OrganizerService:
             if work_code is not None and work_code not in work_codes:
                 work_codes.append(work_code)
         lookup_by_code: dict[str, WorkLookup] = {}
-        cancelled = False
+        cancelled = scan.cancelled
         completed = 0
 
         logger.info(
@@ -186,6 +186,9 @@ class OrganizerService:
                     result=result,
                 )
             completed += 1
+            if cancel_check():
+                cancelled = True
+                break
 
         if completed < len(work_codes):
             cancelled = True

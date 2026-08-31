@@ -6,7 +6,7 @@ import ctypes
 import logging
 import ntpath
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from enum import StrEnum
 from pathlib import Path
 
@@ -20,6 +20,7 @@ from dlsite_organizer.domain.organizer import (
 from dlsite_organizer.domain.work_code import extract_work_codes
 
 logger = logging.getLogger(__name__)
+CancelCheck = Callable[[], bool]
 
 
 class FolderScanFailureKind(StrEnum):
@@ -41,7 +42,12 @@ class FolderScanFailure(Exception):
 class FolderScanner:
     """Scan only the direct, non-symlink child directories of a root."""
 
-    def scan(self, root: Path | str) -> ScanResult:
+    def scan(
+        self,
+        root: Path | str,
+        *,
+        cancel_check: CancelCheck | None = None,
+    ) -> ScanResult:
         """Return valid and ambiguous candidates without touching their contents."""
         root_path = self._validated_root(root)
         try:
@@ -56,9 +62,15 @@ class FolderScanner:
                 "无法读取作品根目录，请检查权限后重试。",
             ) from exc
 
-        return self._scan_children(root_path, children)
+        return self._scan_children(root_path, children, cancel_check=cancel_check)
 
-    def scan_paths(self, root: Path | str, paths: Sequence[Path | str]) -> ScanResult:
+    def scan_paths(
+        self,
+        root: Path | str,
+        paths: Sequence[Path | str],
+        *,
+        cancel_check: CancelCheck | None = None,
+    ) -> ScanResult:
         """Scan only explicitly selected direct children of ``root``.
 
         This is intentionally narrower than :meth:`scan`: it never traverses
@@ -75,7 +87,7 @@ class FolderScanner:
         children = tuple(
             sorted(normalized, key=lambda path: (path.name.casefold(), path.name))
         )
-        return self._scan_children(root_path, children)
+        return self._scan_children(root_path, children, cancel_check=cancel_check)
 
     def _validated_root(self, root: Path | str) -> Path:
         try:
@@ -93,11 +105,21 @@ class FolderScanner:
             )
         return root_path
 
-    def _scan_children(self, root_path: Path, children: Sequence[Path]) -> ScanResult:
+    def _scan_children(
+        self,
+        root_path: Path,
+        children: Sequence[Path],
+        *,
+        cancel_check: CancelCheck | None = None,
+    ) -> ScanResult:
 
         candidates: list[ScanCandidate] = []
         skipped: list[ScanSkipped] = []
+        cancelled = False
         for child in children:
+            if cancel_check is not None and cancel_check():
+                cancelled = True
+                break
             reason = self._skip_reason(child)
             if reason is not None:
                 skipped.append(ScanSkipped(source_path=child, reason=reason))
@@ -140,12 +162,18 @@ class FolderScanner:
             )
 
         logger.info(
-            "Scanned organizer root %s: %d candidates, %d skipped",
+            "Scanned organizer root %s: %d candidates, %d skipped, cancelled=%s",
             root_path,
             len(candidates),
             len(skipped),
+            cancelled,
         )
-        return ScanResult(root_path=root_path, candidates=tuple(candidates), skipped=tuple(skipped))
+        return ScanResult(
+            root_path=root_path,
+            candidates=tuple(candidates),
+            skipped=tuple(skipped),
+            cancelled=cancelled,
+        )
 
     @staticmethod
     def _skip_reason(path: Path) -> ScanSkipReason | None:

@@ -1,10 +1,20 @@
+import threading
+import time
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 from typing import cast
 
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QTableWidgetItem
+from tests.services.test_lookup_cache import (
+    MutableClock,
+    SequencedProvider,
+    make_lookup,
+    open_service,
+)
 
 from dlsite_organizer.domain.organizer import RenamePlanStatus
 from dlsite_organizer.domain.rename_execution import RenameExecutionResult, TransactionStatus
@@ -19,9 +29,45 @@ from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 
 
 class FakeLookupService:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.thread_ids: list[int] = []
+
     def lookup(self, raw_workno: str) -> LookupResult:
+        self.calls.append(raw_workno)
+        self.thread_ids.append(threading.get_ident())
         work = Work(workno=raw_workno, title="Preview Title", maker_name="Circle")
         return LookupResult(work=work, formatted_name=f"[Circle][{raw_workno}] Preview Title")
+
+
+class BlockingLookupService(FakeLookupService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = Event()
+        self.release = Event()
+        self.block_next = True
+
+    def lookup(self, raw_workno: str) -> LookupResult:
+        if self.block_next:
+            self.block_next = False
+            self.entered.set()
+            self.release.wait(timeout=5)
+        return super().lookup(raw_workno)
+
+
+class FlakyOrganizerService:
+    def __init__(self) -> None:
+        self._fallback = OrganizerService(FakeLookupService())
+        self.fail_next = True
+
+    def preview(self, root_path, **kwargs):
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("fixture failure")
+        return self._fallback.preview(root_path, **kwargs)
+
+    def preview_paths(self, root_path, paths, **kwargs):
+        return self._fallback.preview_paths(root_path, paths, **kwargs)
 
 
 @pytest.fixture
@@ -30,6 +76,197 @@ def qapp() -> QApplication:
     if isinstance(application, QApplication):
         return application
     return QApplication([])
+
+
+def _wait_for(qapp: QApplication, predicate, *, timeout_seconds: float = 3.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        if predicate():
+            return
+        time.sleep(0.01)
+    qapp.processEvents()
+    assert predicate(), "timed out waiting for organizer UI state"
+
+
+def _wait_for_scan_idle(qapp: QApplication, page: OrganizerPage) -> None:
+    _wait_for(
+        qapp,
+        lambda: (
+            not page.is_busy()
+            and page.scan_button.isEnabled()
+            and not page.cancel_button.isEnabled()
+        ),
+    )
+
+
+def test_organizer_page_scan_button_empty_root_completes_and_clears_busy(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    root = tmp_path / "empty-root"
+    root.mkdir()
+    lookup = FakeLookupService()
+    page = OrganizerPage(OrganizerService(lookup))
+    page.set_root_path(root)
+
+    try:
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+
+        assert page._preview is not None
+        assert page._preview.scan.candidates == ()
+        assert page._preview.plans == ()
+        assert lookup.calls == []
+        assert page.table.rowCount() == 0
+        assert page.status_label.text() == "未发现可整理的作品文件夹；未修改本地文件。"
+        assert not page.is_busy()
+        assert page.scan_button.isEnabled()
+        assert not page.cancel_button.isEnabled()
+    finally:
+        page.close()
+
+
+def test_organizer_page_scan_button_uses_fresh_cache_without_provider_call(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    root = tmp_path / "one-work-root"
+    (root / "RJ01609020 test").mkdir(parents=True)
+    provider = SequencedProvider([make_lookup(Work(workno="RJ01609020", title="Cached"))])
+    database, _store, lookup_service = open_service(
+        tmp_path / "metadata.sqlite3",
+        provider,
+        MutableClock(datetime(2026, 8, 31, 10, 0, tzinfo=UTC)),
+    )
+    lookup_service.lookup("RJ01609020")
+    assert provider.calls == ["RJ01609020"]
+    assert provider.calls is not None
+    provider.calls.clear()
+    page = OrganizerPage(OrganizerService(lookup_service))
+    page.set_root_path(root)
+
+    try:
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+
+        assert provider.calls == []
+        assert page._preview is not None
+        assert len(page._preview.plans) == 1
+        assert page._preview.plans[0].status is RenamePlanStatus.READY
+        assert page.table.rowCount() == 1
+    finally:
+        page.close()
+        database.dispose()
+
+
+def test_organizer_page_scan_lookup_runs_outside_gui_thread(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    (tmp_path / "RJ01609020 test").mkdir()
+    lookup = FakeLookupService()
+    page = OrganizerPage(OrganizerService(lookup))
+    page.set_root_path(tmp_path)
+    gui_thread_id = threading.get_ident()
+
+    try:
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+
+        assert lookup.thread_ids
+        assert all(thread_id != gui_thread_id for thread_id in lookup.thread_ids)
+    finally:
+        page.close()
+
+
+def test_organizer_page_cancel_is_cooperative_and_leaves_idle_state(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    (tmp_path / "one RJ01609020").mkdir()
+    (tmp_path / "two RJ01636949").mkdir()
+    lookup = BlockingLookupService()
+    page = OrganizerPage(OrganizerService(lookup))
+    page.set_root_path(tmp_path)
+
+    try:
+        page.scan_button.click()
+        assert lookup.entered.wait(timeout=2)
+        assert not page.scan_button.isEnabled()
+        assert page.cancel_button.isEnabled()
+
+        page.cancel_button.click()
+        assert not page.cancel_button.isEnabled()
+        lookup.release.set()
+        _wait_for_scan_idle(qapp, page)
+
+        assert page._preview is not None
+        assert page._preview.cancelled
+        assert lookup.calls == ["RJ01609020"]
+        assert page.status_label.text().startswith("扫描已取消")
+    finally:
+        lookup.release.set()
+        page.close()
+
+
+def test_organizer_page_cancel_then_rescan_succeeds(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    (tmp_path / "one RJ01609020").mkdir()
+    (tmp_path / "two RJ01636949").mkdir()
+    lookup = BlockingLookupService()
+    page = OrganizerPage(OrganizerService(lookup))
+    page.set_root_path(tmp_path)
+
+    try:
+        page.scan_button.click()
+        assert lookup.entered.wait(timeout=2)
+        page.cancel_button.click()
+        lookup.release.set()
+        _wait_for_scan_idle(qapp, page)
+
+        lookup.entered.clear()
+        lookup.release.clear()
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+
+        assert page._preview is not None
+        assert not page._preview.cancelled
+        assert lookup.calls == ["RJ01609020", "RJ01609020", "RJ01636949"]
+    finally:
+        lookup.release.set()
+        page.close()
+
+
+def test_organizer_page_repeated_scans_do_not_leave_stale_workers(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    page = OrganizerPage(OrganizerService(FakeLookupService()))
+    page.set_root_path(tmp_path)
+
+    try:
+        for _ in range(5):
+            page.scan_button.click()
+            _wait_for_scan_idle(qapp, page)
+            assert not page.is_busy()
+    finally:
+        page.close()
+
+
+def test_organizer_page_scan_exception_clears_busy_and_allows_retry(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    service = FlakyOrganizerService()
+    page = OrganizerPage(service)  # type: ignore[arg-type]
+    page.set_root_path(tmp_path)
+
+    try:
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+        assert "扫描时发生意外错误" in page.status_label.text()
+
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+        assert page.status_label.text() == "未发现可整理的作品文件夹；未修改本地文件。"
+    finally:
+        page.close()
 
 
 def test_organizer_page_initializes_and_renders_preview(qapp: QApplication, tmp_path: Path) -> None:
