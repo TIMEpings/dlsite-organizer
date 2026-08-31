@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from dlsite_organizer.domain.work import Availability, Work
+from dlsite_organizer.domain.work import AgeCategory, Availability, Work, WorkLanguage
 
 
 def test_work_normalizes_required_and_optional_fields() -> None:
@@ -46,3 +46,19 @@ def test_work_deduplicates_list_values_preserving_order() -> None:
 
     assert work.cvs == ["Alice", "Bob"]
     assert work.tags == ["音声", "癒し"]
+
+
+def test_work_normalizes_rich_metadata_and_exposes_immutable_views() -> None:
+    work = Work(
+        workno="RJ01234567",
+        title="Title",
+        cvs=["Alice", " Alice "],
+        tags=["音声", "音声"],
+        language="chi-hans",
+        age_category=AgeCategory.R18,
+    )
+
+    assert work.cv_names == ("Alice",)
+    assert work.tag_names == ("音声",)
+    assert work.language is WorkLanguage.CHI_HANS
+    assert work.age_category is AgeCategory.R18

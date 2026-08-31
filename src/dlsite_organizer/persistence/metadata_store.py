@@ -12,7 +12,15 @@ from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
-from dlsite_organizer.domain.work import Availability, Work
+from dlsite_organizer.domain.work import (
+    AgeCategory,
+    Availability,
+    TranslationAttribution,
+    Work,
+    WorkLanguage,
+    normalize_age_category,
+    normalize_language_code,
+)
 from dlsite_organizer.domain.candidate import CandidateSnapshotSource, KnownWorkSnapshot
 from dlsite_organizer.persistence.database import Base, Database
 from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
@@ -28,6 +36,9 @@ class WorkMetadataCache(Base):
     maker_name: Mapped[str | None] = mapped_column(String, nullable=True)
     release_date: Mapped[date | None] = mapped_column(nullable=True)
     regist_datetime: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    work_regist_datetime: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     series_name: Mapped[str | None] = mapped_column(String, nullable=True)
     cvs_json: Mapped[str] = mapped_column(Text, default="[]")
     tags_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -35,6 +46,11 @@ class WorkMetadataCache(Base):
     availability: Mapped[str] = mapped_column(String(32), default=Availability.UNKNOWN.value)
     source_section: Mapped[str | None] = mapped_column(String(32), nullable=True)
     translation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    age_category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    translation_attribution_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    core_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metadata_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source: Mapped[str] = mapped_column(String(64))
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -55,12 +71,41 @@ class MetadataObservation(Base):
     source: Mapped[str] = mapped_column(String(64))
     translation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     bonus_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    series_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    cvs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    translation_attribution_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    core_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metadata_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
     @property
     def bonus_evidence(self) -> BonusEvidenceSnapshot | None:
         """Decode the optional typed bonus snapshot without changing legacy rows."""
         return _parse_bonus_evidence(self.bonus_evidence_json)
+
+    @property
+    def cvs(self) -> tuple[str, ...] | None:
+        """Return observed CVs, preserving NULL as not observed."""
+        return _parse_string_list(self.cvs_json)
+
+    @property
+    def tags(self) -> tuple[str, ...] | None:
+        """Return observed tags, preserving NULL as not observed."""
+        return _parse_string_list(self.tags_json)
+
+    @property
+    def cv_names(self) -> tuple[str, ...] | None:
+        return self.cvs
+
+    @property
+    def tag_names(self) -> tuple[str, ...] | None:
+        return self.tags
+
+    @property
+    def translation_attribution(self) -> TranslationAttribution | None:
+        return _parse_translation_attribution(self.translation_attribution_json)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +115,9 @@ class CachedMetadata:
     source: str
     fetched_at: datetime
     regist_datetime: datetime | None = None
+    translation_attribution: TranslationAttribution | None = None
+    core_source: str | None = None
+    metadata_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,9 +153,12 @@ class MetadataStore:
                     maker_id=row.maker_id,
                     maker_name=row.maker_name,
                     release_date=row.release_date,
+                    regist_datetime=_as_utc(row.work_regist_datetime),
                     series_name=row.series_name,
-                    cvs=json.loads(row.cvs_json),
-                    tags=json.loads(row.tags_json),
+                    cvs=list(_parse_string_list(row.cvs_json) or ()),
+                    tags=list(_parse_string_list(row.tags_json) or ()),
+                    language=normalize_language_code(row.language),
+                    age_category=normalize_age_category(row.age_category),
                     cover_url=row.cover_url,
                     availability=Availability(row.availability),
                     source_section=row.source_section,
@@ -121,6 +172,9 @@ class MetadataStore:
                     row.source,
                     fetched_at,
                     _as_utc(row.regist_datetime),
+                    _parse_translation_attribution(row.translation_attribution_json),
+                    row.core_source,
+                    row.metadata_source,
                 )
         except Exception:
             logger.exception("Metadata cache read failed for %s", workno)
@@ -268,9 +322,14 @@ class MetadataStore:
         work_type: str | None = None,
         age_category: str | int | None = None,
         regist_datetime: datetime | None = None,
+        translation_attribution: TranslationAttribution | None = None,
+        core_source: str | None = None,
+        metadata_source: str | None = None,
     ) -> None:
         now = _as_utc(fetched_at) or datetime.now(UTC)
-        normalized_regist_datetime = _as_utc(regist_datetime)
+        normalized_regist_datetime = _as_utc(regist_datetime or work.regist_datetime)
+        stored_age_category = _storage_age_category(age_category, work.age_category)
+        stored_language = _storage_language(work.language)
         try:
             with self._database.session() as session:
                 row = session.get(WorkMetadataCache, work.workno) or WorkMetadataCache(
@@ -281,19 +340,27 @@ class MetadataStore:
                     work.release_date,
                     normalized_regist_datetime,
                 )
+                row.work_regist_datetime = _as_utc(work.regist_datetime)
                 row.series_name, row.cvs_json, row.tags_json = (
                     work.series_name,
-                    json.dumps(work.cvs),
-                    json.dumps(work.tags),
+                    json.dumps(work.cvs, ensure_ascii=False),
+                    json.dumps(work.tags, ensure_ascii=False),
                 )
                 row.cover_url, row.availability, row.source_section = (
                     work.cover_url,
                     work.availability.value,
                     work.source_section,
                 )
+                row.age_category, row.language = stored_age_category, stored_language
                 row.translation_json = (
                     translation_info.model_dump_json() if translation_info else None
                 )
+                row.translation_attribution_json = (
+                    translation_attribution.model_dump_json()
+                    if translation_attribution is not None
+                    else None
+                )
+                row.core_source, row.metadata_source = core_source, metadata_source
                 row.source, row.fetched_at = source, now
                 session.add(row)
                 session.commit()
@@ -311,9 +378,14 @@ class MetadataStore:
         age_category: str | int | None = None,
         regist_datetime: datetime | None = None,
         bonus_evidence: BonusEvidenceSnapshot | None = None,
+        translation_attribution: TranslationAttribution | None = None,
+        core_source: str | None = None,
+        metadata_source: str | None = None,
     ) -> None:
         normalized_observed_at = _as_utc(observed_at) or datetime.now(UTC)
-        normalized_regist_datetime = _as_utc(regist_datetime)
+        normalized_regist_datetime = _as_utc(regist_datetime or work.regist_datetime)
+        stored_age_category = _storage_age_category(age_category, work.age_category)
+        stored_language = _storage_language(work.language)
         try:
             with self._database.session() as session:
                 session.add(
@@ -325,12 +397,23 @@ class MetadataStore:
                         release_date=work.release_date,
                         regist_datetime=normalized_regist_datetime,
                         work_type=work_type,
-                        age_category=str(age_category) if age_category is not None else None,
+                        age_category=stored_age_category,
                         availability=work.availability.value,
                         source=source,
                         translation_json=translation_info.model_dump_json()
                         if translation_info
                         else None,
+                        series_name=work.series_name,
+                        cvs_json=json.dumps(work.cvs, ensure_ascii=False),
+                        tags_json=json.dumps(work.tags, ensure_ascii=False),
+                        language=stored_language,
+                        translation_attribution_json=(
+                            translation_attribution.model_dump_json()
+                            if translation_attribution is not None
+                            else None
+                        ),
+                        core_source=core_source,
+                        metadata_source=metadata_source,
                         bonus_evidence_json=bonus_evidence.model_dump_json()
                         if bonus_evidence is not None
                         else None,
@@ -365,3 +448,50 @@ def _parse_bonus_evidence(value: str | None) -> BonusEvidenceSnapshot | None:
     except Exception:
         logger.warning("Ignoring malformed persisted bonus evidence snapshot", exc_info=True)
         return None
+
+
+def _parse_string_list(value: str | None) -> tuple[str, ...] | None:
+    """Decode a nullable JSON string list without turning corruption into data."""
+    if value is None:
+        return None
+    try:
+        decoded = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        logger.warning("Ignoring malformed persisted metadata string list", exc_info=True)
+        return None
+    if not isinstance(decoded, list):
+        return None
+    return tuple(
+        dict.fromkeys(
+            item.strip()
+            for item in decoded
+            if isinstance(item, str) and item.strip()
+        )
+    )
+
+
+def _parse_translation_attribution(value: str | None) -> TranslationAttribution | None:
+    if not value:
+        return None
+    try:
+        return TranslationAttribution.model_validate_json(value)
+    except Exception:
+        logger.warning("Ignoring malformed persisted translation attribution", exc_info=True)
+        return None
+
+
+def _storage_age_category(
+    value: str | int | AgeCategory | None,
+    fallback: AgeCategory,
+) -> str:
+    if value is None:
+        return fallback.value
+    if isinstance(value, AgeCategory):
+        return value.value
+    return str(value).strip() or fallback.value
+
+
+def _storage_language(value: WorkLanguage | str | None) -> str | None:
+    if value is None:
+        return None
+    return value.value if isinstance(value, WorkLanguage) else str(value).strip() or None

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, inspect
 
 from dlsite_organizer.domain.candidate import CandidateEvidenceKind, CandidateSnapshotSource
 from dlsite_organizer.domain.manual_review import CandidateEvidenceSnapshot
-from dlsite_organizer.domain.work import Availability, Work
+from dlsite_organizer.domain.work import AgeCategory, Availability, TranslationAttribution, Work
 from dlsite_organizer.persistence.database import (
     Database,
     RenameOperationRecord,
@@ -160,6 +160,65 @@ def test_metadata_store_round_trips_complete_work_and_source_fields_across_resta
     assert "raw_html" not in observation.translation_json
     assert "unknown_optional_key" in observation.translation_json
     restarted_database.dispose()
+
+
+def test_metadata_store_round_trips_rich_fields_and_provenance(tmp_path: Path) -> None:
+    database = Database(tmp_path / "metadata.sqlite3")
+    database.initialize()
+    store = MetadataStore(database)
+    work = Work(
+        workno="RJ01637033",
+        title="中性测试作品",
+        maker_id="RG01058997",
+        maker_name="原作社团",
+        release_date=date(2026, 7, 7),
+        regist_datetime=datetime(2026, 7, 7, 0, 0, tzinfo=UTC),
+        series_name="测试系列",
+        cvs=["CV A", "CV B"],
+        tags=["ASMR", "标签"],
+        language="CHI_HANS",
+        age_category=AgeCategory.R18,
+        cover_url="https://img.example.test/rich.jpg",
+        availability=Availability.AVAILABLE,
+        source_section="maniax",
+    )
+    attribution = TranslationAttribution(maker_id="RG01001331", maker_name="翻译署名")
+    observed_at = datetime(2026, 8, 31, 1, 2, 3, tzinfo=UTC)
+
+    store.save(
+        work,
+        None,
+        source="DLSITE_PRODUCT_INFO_AJAX+DLSITE_PRODUCT_JSON",
+        fetched_at=observed_at,
+        translation_attribution=attribution,
+        core_source="DLSITE_PRODUCT_INFO_AJAX",
+        metadata_source="DLSITE_PRODUCT_JSON",
+    )
+    store.append_observation(
+        work,
+        None,
+        source="DLSITE_PRODUCT_INFO_AJAX+DLSITE_PRODUCT_JSON",
+        observed_at=observed_at,
+        translation_attribution=attribution,
+        core_source="DLSITE_PRODUCT_INFO_AJAX",
+        metadata_source="DLSITE_PRODUCT_JSON",
+    )
+
+    cached = store.get(work.workno)
+    assert cached is not None
+    assert cached.work == work
+    assert cached.translation_attribution == attribution
+    assert cached.core_source == "DLSITE_PRODUCT_INFO_AJAX"
+    assert cached.metadata_source == "DLSITE_PRODUCT_JSON"
+    observation = store.list_observations(work.workno)[0]
+    assert observation.series_name == "测试系列"
+    assert observation.cvs == ("CV A", "CV B")
+    assert observation.tags == ("ASMR", "标签")
+    assert observation.language == "CHI_HANS"
+    assert observation.translation_attribution == attribution
+    assert observation.core_source == "DLSITE_PRODUCT_INFO_AJAX"
+    assert observation.metadata_source == "DLSITE_PRODUCT_JSON"
+    database.dispose()
 
 
 def test_metadata_observations_are_append_only_preserve_maker_identity_and_are_ordered(
@@ -430,6 +489,27 @@ def test_legacy_database_upgrade_preserves_metadata_reviews_journal_and_unknown_
     assert "bonus_evidence_json" in {
         column["name"] for column in inspect(engine).get_columns("metadata_observations")
     }
+    assert {
+        "work_regist_datetime",
+        "age_category",
+        "language",
+        "translation_attribution_json",
+        "core_source",
+        "metadata_source",
+    } <= {
+        column["name"] for column in inspect(engine).get_columns("work_metadata_cache")
+    }
+    assert {
+        "series_name",
+        "cvs_json",
+        "tags_json",
+        "language",
+        "translation_attribution_json",
+        "core_source",
+        "metadata_source",
+    } <= {
+        column["name"] for column in inspect(engine).get_columns("metadata_observations")
+    }
     engine.dispose()
 
     observation = store.list_observations("RJ01609020")[0]
@@ -437,10 +517,18 @@ def test_legacy_database_upgrade_preserves_metadata_reviews_journal_and_unknown_
     assert observation.translation_json == translation_json
     assert observation.bonus_evidence_json is None
     assert observation.bonus_evidence is None
+    assert observation.series_name is None
+    assert observation.cvs is None
+    assert observation.tags is None
+    assert observation.language is None
+    assert observation.translation_attribution is None
     assert store.list_bonus_observations("RJ01609020")[0].evidence is None
 
     cached = store.get("RJ01609020")
     assert cached is not None and cached.translation_info == make_translation()
+    assert cached.work.age_category is AgeCategory.UNKNOWN
+    assert cached.work.language is None
+    assert cached.translation_attribution is None
     review = reviews.latest_for_pair("RJ01609020", "RJ01637033")
     assert review is not None
     assert review.notes == "legacy note"

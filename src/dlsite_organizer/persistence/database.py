@@ -125,17 +125,32 @@ class Database:
         # Additive migration for metadata history created before transient
         # bonus evidence was retained.  Existing rows remain NULL/unknown.
         with self._engine.begin() as connection:
-            columns = {
-                row[1]
-                for row in connection.execute(text("PRAGMA table_info(metadata_observations)"))
-            }
-            if "bonus_evidence_json" not in columns:
-                connection.execute(
-                    text(
-                        "ALTER TABLE metadata_observations "
-                        "ADD COLUMN bonus_evidence_json TEXT"
-                    )
-                )
+            self._add_missing_columns(
+                connection,
+                "work_metadata_cache",
+                {
+                    "work_regist_datetime": "DATETIME",
+                    "age_category": "VARCHAR(32)",
+                    "language": "VARCHAR(32)",
+                    "translation_attribution_json": "TEXT",
+                    "core_source": "VARCHAR(64)",
+                    "metadata_source": "VARCHAR(64)",
+                },
+            )
+            self._add_missing_columns(
+                connection,
+                "metadata_observations",
+                {
+                    "bonus_evidence_json": "TEXT",
+                    "series_name": "VARCHAR",
+                    "cvs_json": "TEXT",
+                    "tags_json": "TEXT",
+                    "language": "VARCHAR(32)",
+                    "translation_attribution_json": "TEXT",
+                    "core_source": "VARCHAR(64)",
+                    "metadata_source": "VARCHAR(64)",
+                },
+            )
         # Manual review events are initialized with the metadata subsystem so
         # the v0.7 minimum-core schema remains backwards compatible.
         from dlsite_organizer.persistence.manual_reviews import ManualRelationReviewRecord
@@ -154,6 +169,18 @@ class Database:
         from sqlalchemy.orm import Session
 
         return Session(self._engine)
+
+    @staticmethod
+    def _add_missing_columns(connection, table_name: str, definitions: dict[str, str]) -> None:
+        """Apply only nullable additive migrations to old local databases."""
+        columns = {
+            row[1] for row in connection.execute(text(f"PRAGMA table_info({table_name})"))
+        }
+        for name, definition in definitions.items():
+            if name not in columns:
+                connection.execute(
+                    text(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
+                )
 
     def dispose(self) -> None:
         """Release pooled SQLite connections."""

@@ -1,5 +1,5 @@
 from dlsite_organizer.domain.naming import sanitize_windows_name
-from dlsite_organizer.domain.work import Work
+from dlsite_organizer.domain.work import AgeCategory, Work
 from dlsite_organizer.services.naming import NamingService
 
 
@@ -31,3 +31,26 @@ def test_replaces_windows_illegal_characters_and_trailing_dot_space() -> None:
 def test_prefixes_windows_reserved_names() -> None:
     assert sanitize_windows_name("CON") == "_CON"
     assert sanitize_windows_name("lpt1.txt") == "_lpt1.txt"
+
+
+def test_supports_rich_metadata_aliases_without_changing_default_template() -> None:
+    work = Work(
+        workno="RJ01234567",
+        title="Work Title",
+        maker_name="Circle Name",
+        series_name="Series",
+        cvs=["Alice", "Bob"],
+        tags=["ASMR", "Healing"],
+        age_category=AgeCategory.R15,
+        language="ENG",
+    )
+
+    formatted = NamingService(
+        "{rjcode}-{work_name}-{maker_id}-{maker_name}-{series_name}-"
+        "{cv_list}-{cv_list_str}-{tags_list}-{tags_list_str}-{age_category}-{language}"
+    ).format(work)
+
+    assert formatted == (
+        "RJ01234567-Work Title--Circle Name-Series-Alice, Bob-Alice, Bob-"
+        "ASMR, Healing-ASMR, Healing-r15-ENG"
+    )

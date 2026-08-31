@@ -56,11 +56,19 @@ from dlsite_organizer.domain.rename_execution import (
     UndoResult,
     UndoStatus,
 )
-from dlsite_organizer.domain.work import Work
+from dlsite_organizer.domain.work import (
+    AgeCategory,
+    TranslationAttribution,
+    Work,
+    WorkLanguage,
+    normalize_age_category,
+    normalize_language_code,
+)
 from dlsite_organizer.domain.work_code import WorkCode, WorkCodeError, extract_work_codes
 
 __all__ = [
     "MANUAL_RELATION_DIRECTIONALITY",
+    "AgeCategory",
     "BonusEvidence",
     "BonusEvidenceSnapshot",
     "CandidateEvidence",
@@ -102,14 +110,18 @@ __all__ = [
     "ScanSkipReason",
     "ScanSkipped",
     "TransactionStatus",
+    "TranslationAttribution",
     "TranslationRole",
     "UndoResult",
     "UndoStatus",
     "Work",
     "WorkCode",
     "WorkCodeError",
+    "WorkLanguage",
     "WorkRelation",
     "extract_work_codes",
     "is_manual_relation_directional",
+    "normalize_age_category",
+    "normalize_language_code",
     "parse_candidate_evidence_snapshot",
 ]

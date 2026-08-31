@@ -9,9 +9,21 @@ DLsite `product/info/ajax` responses. They retain the relevant real envelope,
 field names, nesting, values, and null/array/object types. They contain no
 cookie, session, or account identifiers.
 
+`dlsite/product_metadata_RJ01609020.json`,
+`dlsite/product_metadata_RJ01636949.json`, and
+`dlsite/product_metadata_RJ01637033.json` are minimized, title-redacted
+captures of the live `/{section}/api/=/product.json?workno=<RJ>&locale=ja_jp`
+shape observed on 2026-08-31. They retain only the fields used by the rich
+metadata contract: maker identity, age, registration date, voice, genres,
+language edition, and primary image. The title value is intentionally
+redacted; these files are endpoint-shape regression evidence, not a title
+catalogue.
+
 ## Synthetic edge-case fixture
 
 `product_semantic.html` is a synthetic Schema.org Product JSON-LD fixture.
 It is only used to exercise the HTML fallback; it is not evidence of a live
 DLsite response. Malformed AJAX inputs are constructed inline in tests and are
 explicitly edge cases, not normal-response contracts.
+Rich-source cases with a non-empty series, unknown language/age, or malformed
+optional fields are also constructed inline and are explicitly synthetic.

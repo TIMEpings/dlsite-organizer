@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from dlsite_organizer.domain.relation import RelationType, TranslationRole
 from dlsite_organizer.domain.manual_review import ManualReviewEvent, canonical_pair
+from dlsite_organizer.domain.work import AgeCategory, TranslationAttribution, WorkLanguage
 from dlsite_organizer.domain.candidate import (
     CandidateEvidenceKind,
     CandidateSearchResult,
@@ -123,17 +124,23 @@ class LookupPage(QWidget):
         self.workno_value = _value_label()
         self.title_value = _value_label()
         self.maker_value = _value_label()
+        self.maker_id_value = _value_label()
         self.release_value = _value_label()
         self.series_value = _value_label()
         self.cvs_value = _value_label()
         self.tags_value = _value_label()
+        self.language_value = _value_label()
+        self.age_value = _value_label()
         form.addRow("RJcode", self.workno_value)
         form.addRow("标题", self.title_value)
         form.addRow("社团", self.maker_value)
+        form.addRow("社团编号", self.maker_id_value)
         form.addRow("发售日期", self.release_value)
         form.addRow("系列", self.series_value)
         form.addRow("CV", self.cvs_value)
         form.addRow("标签", self.tags_value)
+        form.addRow("作品语言", self.language_value)
+        form.addRow("年龄分级", self.age_value)
         details.addLayout(form)
         details.addStretch(1)
         result_layout.addLayout(details, 1)
@@ -171,10 +178,12 @@ class LookupPage(QWidget):
         self.relation_source_value = _value_label()
         self.relation_confidence_value = _value_label()
         self.relation_language_value = _value_label()
+        self.relation_attribution_value = _value_label()
         relation_form.addRow("角色", self.relation_role_value)
         relation_form.addRow("来源", self.relation_source_value)
         relation_form.addRow("可信度", self.relation_confidence_value)
         relation_form.addRow("语言", self.relation_language_value)
+        relation_form.addRow("翻译署名", self.relation_attribution_value)
         relation_layout.addLayout(relation_form)
         self.relation_details_value = _value_label()
         relation_layout.addWidget(self.relation_details_value)
@@ -261,18 +270,23 @@ class LookupPage(QWidget):
         self.code_input.setText(work.workno)
         self.workno_value.setText(work.workno)
         self.title_value.setText(work.title)
-        maker = work.maker_name or "—"
-        if work.maker_id and work.maker_name:
-            maker = f"{work.maker_name} ({work.maker_id})"
-        self.maker_value.setText(maker)
+        self.maker_value.setText(work.maker_name or "—")
+        self.maker_id_value.setText(work.maker_id or "—")
         self.release_value.setText(work.release_date.isoformat() if work.release_date else "—")
         self.series_value.setText(work.series_name or "—")
         self.cvs_value.setText("、".join(work.cvs) if work.cvs else "—")
         self.tags_value.setText("、".join(work.tags) if work.tags else "—")
+        self.language_value.setText(_language_label(work.language))
+        self.age_value.setText(_age_label(work.age_category))
         self._formatted_name = result.formatted_name
         self.name_output.setText(result.formatted_name)
         self.copy_button.setEnabled(True)
-        self._show_relations(result.translation, result.historical_relations, result.candidate_relations)
+        self._show_relations(
+            result.translation,
+            result.historical_relations,
+            result.candidate_relations,
+            result.translation_attribution,
+        )
         self.status_label.setProperty("state", "success")
         label = {
             LookupFreshness.LIVE: "实时",
@@ -335,10 +349,13 @@ class LookupPage(QWidget):
             self.workno_value,
             self.title_value,
             self.maker_value,
+            self.maker_id_value,
             self.release_value,
             self.series_value,
             self.cvs_value,
             self.tags_value,
+            self.language_value,
+            self.age_value,
         ):
             label.setText("—")
         self.cover_label.clear()
@@ -350,6 +367,7 @@ class LookupPage(QWidget):
         analysis: TranslationAnalysis,
         historical=None,
         candidates: CandidateSearchResult | None = None,
+        attribution: TranslationAttribution | None = None,
     ) -> None:
         """Render application-level relation facts without reading provider DTOs."""
         self.relation_role_value.setText(_role_label(analysis.role))
@@ -359,6 +377,7 @@ class LookupPage(QWidget):
         )
         self.relation_confidence_value.setText(_confidence_label(analysis.status))
         self.relation_language_value.setText(analysis.language or "—")
+        self.relation_attribution_value.setText(_attribution_label(attribution))
 
         relation_lines = [
             f"{_relation_label(relation.relation_type)}：{relation.target_workno}"
@@ -514,6 +533,7 @@ class LookupPage(QWidget):
         self.relation_source_value.setText("—")
         self.relation_confidence_value.setText("—")
         self.relation_language_value.setText("—")
+        self.relation_attribution_value.setText("—")
         self.relation_details_value.setText("—")
         self.historical_relations_value.setText("—")
         self.candidate_relations_value.setText("—")
@@ -549,6 +569,51 @@ def _confidence_label(status: TranslationAnalysisStatus) -> str:
         TranslationAnalysisStatus.INCOMPLETE: "部分确认",
         TranslationAnalysisStatus.INVALID: "数据矛盾",
     }.get(status, "—")
+
+
+def _language_label(value: WorkLanguage | str | None) -> str:
+    if value is None:
+        return "—"
+    code = value.value if isinstance(value, WorkLanguage) else str(value)
+    if not code:
+        return "—"
+    return {
+        "JPN": "日语（JPN）",
+        "CHI_HANS": "简体中文（CHI_HANS）",
+        "CHI_HANT": "繁体中文（CHI_HANT）",
+        "ENG": "英语（ENG）",
+        "KO_KR": "韩语（KO_KR）",
+        "KOR": "韩语（KOR）",
+        "SPA": "西班牙语（SPA）",
+        "GER": "德语（GER）",
+        "FRE": "法语（FRE）",
+        "IND": "印度尼西亚语（IND）",
+        "ITA": "意大利语（ITA）",
+        "POR": "葡萄牙语（POR）",
+        "SWE": "瑞典语（SWE）",
+        "THA": "泰语（THA）",
+        "VIE": "越南语（VIE）",
+    }.get(code, f"未知（{code}）")
+
+
+def _age_label(value: AgeCategory | str | None) -> str:
+    if value is None:
+        return "—"
+    code = value.value if isinstance(value, AgeCategory) else str(value)
+    return {
+        AgeCategory.GENERAL.value: "全年龄",
+        AgeCategory.R15.value: "R15",
+        AgeCategory.R18.value: "R18",
+        AgeCategory.UNKNOWN.value: "未知",
+    }.get(code, f"未知（{code}）")
+
+
+def _attribution_label(value: TranslationAttribution | None) -> str:
+    if value is None:
+        return "—"
+    if value.maker_name and value.maker_id:
+        return f"{value.maker_name} ({value.maker_id})"
+    return value.maker_name or value.maker_id or "—"
 
 
 def _relation_label(relation_type: RelationType) -> str:

@@ -11,7 +11,7 @@ from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
 from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
 from dlsite_organizer.domain.candidate import CandidateSearchResult
 from dlsite_organizer.domain.manual_review import ManualReviewEvent
-from dlsite_organizer.domain.work import Work
+from dlsite_organizer.domain.work import TranslationAttribution, Work
 from dlsite_organizer.domain.work_code import WorkCodeError, normalize_rjcode
 from dlsite_organizer.persistence.metadata_store import MetadataStore
 from dlsite_organizer.providers.base import WorkProvider
@@ -81,6 +81,9 @@ class LookupResult:
     historical_relations: HistoricalRelations = field(default_factory=HistoricalRelations)
     candidate_relations: CandidateSearchResult | None = None
     manual_reviews: tuple[ManualReviewEvent, ...] = ()
+    core_source: str | None = None
+    metadata_source: str | None = None
+    translation_attribution: TranslationAttribution | None = None
 
     @property
     def translation_role(self) -> TranslationRole | None:
@@ -150,9 +153,21 @@ class LookupService:
                 LookupFreshness.CACHE_FRESH,
                 cached.source,
                 cached.fetched_at,
+                core_source=cached.core_source,
+                metadata_source=cached.metadata_source,
+                translation_attribution=cached.translation_attribution,
             )
         try:
-            work, info, source, fetched, obj = self._fetch_work(workno)
+            (
+                work,
+                info,
+                attribution,
+                source,
+                fetched,
+                core_source,
+                metadata_source,
+                obj,
+            ) = self._fetch_work(workno)
         except WorkNotFoundError as exc:
             raise LookupFailure(LookupFailureKind.NOT_FOUND, f"Work not found: {workno}") from exc
         except DlsiteParseError as exc:
@@ -170,6 +185,9 @@ class LookupService:
                     LookupFreshness.CACHE_STALE_FALLBACK,
                     cached.source,
                     cached.fetched_at,
+                    core_source=cached.core_source,
+                    metadata_source=cached.metadata_source,
+                    translation_attribution=cached.translation_attribution,
                 )
             kind = (
                 LookupFailureKind.CONNECTION
@@ -191,7 +209,12 @@ class LookupService:
                 BonusEvidenceSnapshot | None,
                 getattr(obj, "bonus_evidence", None),
             )
-            regist_datetime = cast(datetime | None, getattr(product, "regist_datetime", None))
+            regist_datetime = cast(
+                datetime | None,
+                getattr(obj, "regist_datetime", None)
+                or getattr(product, "regist_datetime", None)
+                or work.regist_datetime,
+            )
             work_type = cast(str | None, getattr(product, "work_type", None))
             age_category = cast(str | int | None, getattr(product, "age_category", None))
             try:
@@ -203,6 +226,9 @@ class LookupService:
                     work_type=work_type,
                     age_category=age_category,
                     regist_datetime=regist_datetime,
+                    translation_attribution=attribution,
+                    core_source=core_source,
+                    metadata_source=metadata_source,
                 )
             except Exception:
                 logger.exception("Metadata cache persistence failed for %s", workno)
@@ -216,10 +242,23 @@ class LookupService:
                     age_category=age_category,
                     regist_datetime=regist_datetime,
                     bonus_evidence=bonus_evidence,
+                    translation_attribution=attribution,
+                    core_source=core_source,
+                    metadata_source=metadata_source,
                 )
             except Exception:
                 logger.exception("Metadata observation persistence failed for %s", workno)
-        return self._result(workno, work, info, LookupFreshness.LIVE, source, fetched)
+        return self._result(
+            workno,
+            work,
+            info,
+            LookupFreshness.LIVE,
+            source,
+            fetched,
+            core_source=core_source,
+            metadata_source=metadata_source,
+            translation_attribution=attribution,
+        )
 
     @property
     def manual_review_service(self) -> ManualReviewService | None:
@@ -228,8 +267,17 @@ class LookupService:
     def _fetch_work(self, workno):
         if isinstance(self._provider, _SourceAwareProvider):
             x = self._provider.fetch_work_lookup(workno)
-            return x.work, x.translation_info, getattr(x, "source", "LIVE"), self._now(), x
-        return self._provider.fetch_work(workno), None, "LIVE", self._now(), None
+            return (
+                x.work,
+                x.translation_info,
+                getattr(x, "translation_attribution", None),
+                getattr(x, "source", "LIVE"),
+                self._now(),
+                getattr(x, "core_source", None),
+                getattr(x, "metadata_source", None),
+                x,
+            )
+        return self._provider.fetch_work(workno), None, None, "LIVE", self._now(), None, None, None
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -237,7 +285,19 @@ class LookupService:
             raise ValueError("Lookup clock must return a timezone-aware datetime")
         return value.astimezone(UTC)
 
-    def _result(self, workno, work, info, freshness, source, fetched):
+    def _result(
+        self,
+        workno,
+        work,
+        info,
+        freshness,
+        source,
+        fetched,
+        *,
+        core_source: str | None = None,
+        metadata_source: str | None = None,
+        translation_attribution: TranslationAttribution | None = None,
+    ):
         return LookupResult(
             work=work,
             formatted_name=self._naming.format(work),
@@ -245,6 +305,9 @@ class LookupService:
             freshness=freshness,
             source=source,
             fetched_at=fetched,
+            core_source=core_source,
+            metadata_source=metadata_source,
+            translation_attribution=translation_attribution,
             historical_relations=self._historical_relations.for_work(workno) if self._historical_relations else HistoricalRelations(),
             candidate_relations=self._candidate_relations.for_work(workno) if self._candidate_relations else None,
             manual_reviews=(self._manual_review_service.reviews_for_work(workno) if self._manual_review_service else ()),

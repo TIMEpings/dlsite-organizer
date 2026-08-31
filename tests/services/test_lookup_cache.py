@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from dlsite_organizer.domain.relation import Confidence, EvidenceType, RelationType, TranslationRole
-from dlsite_organizer.domain.work import Work
+from dlsite_organizer.domain.work import AgeCategory, TranslationAttribution, Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.metadata_store import MetadataStore, WorkMetadataCache
 from dlsite_organizer.providers.dlsite.client import DlsiteWorkLookup
@@ -171,6 +171,78 @@ def test_cache_miss_saves_live_current_row_and_one_observation(tmp_path: Path) -
     assert cached.fetched_at == now
     assert len(store.list_observations("RJ01609020")) == 1
     database.dispose()
+
+
+def test_lookup_cache_preserves_rich_fields_and_source_provenance(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=UTC)
+    clock = MutableClock(now)
+    work = make_work().model_copy(
+        update={
+            "regist_datetime": datetime(2026, 7, 7, tzinfo=UTC),
+            "language": "CHI_HANS",
+            "age_category": AgeCategory.R18,
+            "series_name": "测试系列",
+            "cvs": ["CV A", "CV B"],
+            "tags": ["ASMR", "标签"],
+        }
+    )
+    attribution = TranslationAttribution(maker_id="RG01001331", maker_name="翻译署名")
+    product = ProductInfoAjaxSource.model_validate(
+        {
+            "requested_workno": work.workno,
+            "envelope_workno": work.workno,
+            "work_name": work.title,
+            "maker_id": work.maker_id,
+            "maker_name": work.maker_name,
+            "regist_date": work.regist_datetime,
+            "age_category": 3,
+            "translation_info": make_translation(),
+        }
+    )
+    provider = SequencedProvider(
+        [
+            DlsiteWorkLookup(
+                work=work,
+                product_info=product,
+                source="DLSITE_PRODUCT_INFO_AJAX+DLSITE_PRODUCT_JSON",
+                core_source="DLSITE_PRODUCT_INFO_AJAX",
+                metadata_source="DLSITE_PRODUCT_JSON",
+                regist_datetime=work.regist_datetime,
+                translation_attribution=attribution,
+            )
+        ]
+    )
+    database, store, service = open_service(tmp_path / "metadata.sqlite3", provider, clock)
+
+    live = service.lookup(work.workno)
+    cached_result = service.lookup(work.workno)
+    cached = store.get(work.workno)
+    observation = store.list_observations(work.workno)[0]
+
+    assert live.work == work
+    assert live.translation_attribution == attribution
+    assert live.core_source == "DLSITE_PRODUCT_INFO_AJAX"
+    assert live.metadata_source == "DLSITE_PRODUCT_JSON"
+    assert cached_result.freshness is LookupFreshness.CACHE_FRESH
+    assert cached_result.work == work
+    assert cached is not None and cached.work == work
+    assert cached.translation_attribution == attribution
+    assert observation.series_name == "测试系列"
+    assert observation.cvs == ("CV A", "CV B")
+    assert observation.tags == ("ASMR", "标签")
+    assert observation.language == "CHI_HANS"
+    assert observation.translation_attribution == attribution
+    assert provider.calls == [work.workno]
+    database.dispose()
+
+    restarted_database = Database(tmp_path / "metadata.sqlite3")
+    restarted_database.initialize()
+    restarted_store = MetadataStore(restarted_database)
+    restarted = restarted_store.get(work.workno)
+    assert restarted is not None
+    assert restarted.work == work
+    assert restarted.translation_attribution == attribution
+    restarted_database.dispose()
 
 
 def test_fresh_cache_hit_does_not_call_provider_or_append_observation(tmp_path: Path) -> None:

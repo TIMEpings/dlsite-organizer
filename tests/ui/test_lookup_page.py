@@ -29,7 +29,7 @@ from dlsite_organizer.domain.relation import (
     TranslationRole,
     WorkRelation,
 )
-from dlsite_organizer.domain.work import Work
+from dlsite_organizer.domain.work import AgeCategory, TranslationAttribution, Work
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.historical_relations import (
     HistoricalRelation,
@@ -225,6 +225,64 @@ def test_lookup_page_renders_application_relation_result(qapp: QApplication) -> 
     assert page.relation_confidence_value.text() == "已确认"
     assert page.relation_language_value.text() == "CHI_HANS"
     assert page.relation_details_value.text() == "翻译原作：RJ01609020"
+    page.close()
+
+
+def test_lookup_page_renders_rich_work_fields_and_separate_translation_attribution(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    result = LookupResult(
+        work=Work(
+            workno="RJ01637033",
+            title="中性测试作品",
+            maker_id="RG01058997",
+            maker_name="原作社团",
+            series_name="测试系列",
+            cvs=["CV A", "CV B"],
+            tags=["ASMR", "标签"],
+            language="CHI_HANS",
+            age_category=AgeCategory.R18,
+        ),
+        formatted_name="[原作社团][RJ01637033] 中性测试作品",
+        translation_attribution=TranslationAttribution(
+            maker_id="RG01001331",
+            maker_name="翻译署名",
+        ),
+    )
+
+    page._show_result(result)
+
+    assert page.maker_value.text() == "原作社团"
+    assert page.maker_id_value.text() == "RG01058997"
+    assert page.series_value.text() == "测试系列"
+    assert page.cvs_value.text() == "CV A、CV B"
+    assert page.tags_value.text() == "ASMR、标签"
+    assert page.language_value.text() == "简体中文（CHI_HANS）"
+    assert page.age_value.text() == "R18"
+    assert page.relation_attribution_value.text() == "翻译署名 (RG01001331)"
+    assert page.maker_value.text() != page.relation_attribution_value.text()
+    page.close()
+
+
+def test_lookup_page_renders_missing_rich_fields_as_dashes(qapp: QApplication) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ01609020", title="只有标题"),
+            formatted_name="[RJ01609020] 只有标题",
+        )
+    )
+
+    assert page.maker_value.text() == "—"
+    assert page.maker_id_value.text() == "—"
+    assert page.series_value.text() == "—"
+    assert page.cvs_value.text() == "—"
+    assert page.tags_value.text() == "—"
+    assert page.language_value.text() == "—"
+    assert page.age_value.text() == "未知"
+    assert page.relation_attribution_value.text() == "—"
     page.close()
 
 

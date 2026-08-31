@@ -1,0 +1,35 @@
+[
+  {
+    "workno": "RJ01637033",
+    "product_id": "RJ01637033",
+    "work_name": "[live title redacted]",
+    "maker_id": "RG01001331",
+    "maker_name": "MYHONYAKU",
+    "circle_id": "RG01001331",
+    "age_category": 1,
+    "age_category_string": "general",
+    "regist_date": "2026-07-07 00:00:00",
+    "series_id": null,
+    "series_name": null,
+    "creaters": {
+      "voice_by": [{"name": "佃煮のりお"}]
+    },
+    "genres": [
+      {"name": "ASMR"},
+      {"name": "VTuber"},
+      {"name": "癒し"},
+      {"name": "人妻"},
+      {"name": "メイド"},
+      {"name": "ほのぼの"}
+    ],
+    "language_editions": [
+      {"workno": "RJ01609020", "edition_type": "language", "display_order": 1, "label": "日本語", "lang": "JPN"},
+      {"workno": "RJ01636949", "edition_type": "language", "display_order": 5, "label": "簡体中文", "lang": "CHI_HANS"},
+      {"workno": "RJ01636978", "edition_type": "language", "display_order": 7, "label": "繁体中文", "lang": "CHI_HANT"},
+      {"workno": "RJ01643990", "edition_type": "language", "display_order": 9, "label": "韓国語", "lang": "KO_KR"}
+    ],
+    "image_main": {
+      "url": "https://img.dlsite.jp/modpub/images2/work/doujin/RJ01610000/RJ01609020_img_main.jpg"
+    }
+  }
+]

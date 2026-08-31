@@ -24,13 +24,21 @@ class NamingService:
     _SUPPORTED_FIELDS = frozenset(
         {
             "workno",
+            "rjcode",
             "title",
+            "work_name",
             "maker_id",
             "maker_name",
             "release_date",
             "series_name",
             "cv",
+            "cv_list",
+            "cv_list_str",
             "tags",
+            "tags_list",
+            "tags_list_str",
+            "age_category",
+            "language",
         }
     )
 
@@ -42,13 +50,21 @@ class NamingService:
         """Return a formatted name with absent values omitted predictably."""
         fields = {
             "workno": work.workno,
+            "rjcode": work.workno,
             "title": work.title,
+            "work_name": work.title,
             "maker_id": work.maker_id or "",
             "maker_name": work.maker_name or "",
             "release_date": _date_text(work.release_date),
             "series_name": work.series_name or "",
             "cv": ", ".join(work.cvs),
+            "cv_list": ", ".join(work.cvs),
+            "cv_list_str": ", ".join(work.cvs),
             "tags": ", ".join(work.tags),
+            "tags_list": ", ".join(work.tags),
+            "tags_list_str": ", ".join(work.tags),
+            "age_category": work.age_category.value,
+            "language": str(work.language) if work.language is not None else "",
         }
         try:
             rendered = self._template.format_map(fields)

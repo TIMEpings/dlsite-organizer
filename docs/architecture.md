@@ -12,10 +12,12 @@ LookupService ─────→ NamingService
 WorkProvider protocol
         ↓
 DlsiteProvider → product_info_ajax parser → ProductInfoAjaxSource ─┐
-        ↓ (only when unusable)                                      │
+        ↓ optional bounded enrichment                               │
+product.json parser → ProductMetadataSource ───────────────────────┤
+        ↓ (only when core is unusable)                              │
 HTML JSON-LD parser → HtmlProductSource ────────────────────────────┤
                                                                      ↓
-                                                                   Work
+                                                    merged normalized Work
                                                                      ↓
                                                 TranslationInfoSource (when available)
                                                                      ↓
@@ -34,24 +36,31 @@ values, and never manipulates widgets or implements parsing policy.
 
 `DlsiteSite` builds every section-scoped URL in one place. `DlsiteProvider` first requests the
 candidate `product/info/ajax?product_id=<WORKNO>` source. A successful response is used only when it
-validates as `ProductInfoAjaxSource`; otherwise the provider makes one HTML fallback request. There is
-no brute-force section probing. The configured section remains a provider implementation detail and
-is the narrow boundary where a future resolver can be introduced.
+validates as `ProductInfoAjaxSource`; it then makes one exact-listing
+`api/=/product.json?workno=<WORKNO>&locale=ja_jp` enrichment request. A translation child may trigger
+one additional rich request for its explicit original work; child lists are never crawled. If the core
+source is unusable, the provider makes one HTML fallback request instead. There is no brute-force
+section probing. The configured section remains a provider implementation detail and is the narrow
+boundary where a future resolver can be introduced.
 
-`ProductInfoAjaxSource` and its nested `TranslationInfoSource` are provider-local Pydantic DTOs with
-`extra="allow"`. They retain a reviewed metadata subset and translation evidence without polluting
-`Work`. The validated AJAX envelope key establishes the queried `Work` identity;
-an optional nested `product_id` is retained separately and must agree when present. The raw
-`regist_date` timestamp is retained as `regist_datetime`, while `Work.release_date` receives only its
-date component for the current UI. `HtmlProductSource` is a separate provider-local dataclass for
-Schema.org Product JSON-LD. Each source is normalized into `Work` only after extraction; the domain
-never imports HTTP, HTML, JSON, or DLsite DTOs.
+`ProductInfoAjaxSource` and its nested `TranslationInfoSource`, together with
+`ProductMetadataSource` and its nested rich DTOs, are provider-local Pydantic models with
+`extra="allow"`. They retain typed reviewed metadata and translation evidence without polluting
+`Work`. The validated AJAX envelope key establishes the queried `Work` identity; an optional nested
+`product_id` is retained separately and must agree when present. The raw `regist_date` timestamp is
+retained as `regist_datetime`, while `Work.release_date` receives its date component. Rich product JSON
+adds maker pair, series, CV, tags, exact listing language, and normalized age. `HtmlProductSource` is a
+separate provider-local dataclass for Schema.org Product JSON-LD. Each source is normalized into `Work`
+only after extraction; the domain never imports HTTP, HTML, JSON, or DLsite DTOs.
 
 `DlsiteProvider.fetch_work_lookup()` is the source-aware extension point. It returns normalized
-`Work` plus the already-validated AJAX DTO in one request flow (or no AJAX DTO when HTML fallback
-was used). `LookupService` consumes only the narrow `translation_info` view and passes it to
-`TranslationRelationService`; the existing `WorkProvider.fetch_work()` protocol remains
-metadata-only for simple callers.
+`Work`, the already-validated AJAX DTO, separate core/rich provenance, and optional translation
+attribution in one bounded request flow (or no AJAX DTO when HTML fallback was used). Core AJAX remains
+authoritative for translation topology, bonus evidence, precise registration, and availability; rich
+JSON fills descriptive metadata. A rich failure degrades to the validated core work. The application
+exposes only its nested `translation_info` to `TranslationRelationService`, which maps explicit flags
+and references into confirmed directional relations without re-requesting or reparsing raw responses.
+`fetch_work()` remains the metadata-only API for simple callers.
 
 `TranslationRelationService` is the only place that interprets DLsite translation topology. A true
 `is_original`, `is_parent`, or `is_child` flag determines `TranslationRole`; concrete target RJcodes
@@ -80,7 +89,9 @@ observation schemas are initialized separately from the v0.4 `rename_transaction
 `rename_operations` journal tables.
 The nullable `metadata_observations.bonus_evidence_json` field is an additive,
 versioned snapshot of bonus evidence reported by that response; `NULL` remains
-distinct from an explicitly empty bonus list. See [historical bonus evidence](bonus-evidence-history.md).
+distinct from an explicitly empty bonus list. Phase A adds nullable rich-field and provenance columns
+to both current cache and historical observations, so old rows load as not captured/unknown. See
+[historical bonus evidence](bonus-evidence-history.md) and the [DLsite metadata source contract](dlsite-data-contract.md).
 Lookup results use the cache for current metadata and preserve provider provenance separately from
 delivery freshness. Translation relations are reconstructed from the normalized cached
 `translation_info`; no relation-history query or inference is implemented.

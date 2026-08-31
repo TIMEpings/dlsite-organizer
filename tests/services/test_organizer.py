@@ -2,12 +2,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dlsite_organizer.domain.organizer import RenamePlanStatus
-from dlsite_organizer.domain.work import Work
+from dlsite_organizer.domain.work import AgeCategory, Work
 from dlsite_organizer.services.lookup import LookupFailure, LookupFailureKind, LookupResult
+from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import (
     OrganizerService,
     WorkLookupStatus,
 )
+from dlsite_organizer.services.rename_planner import RenamePlanner
 
 
 @dataclass
@@ -61,6 +63,31 @@ def test_organizer_maps_metadata_and_deduplicates_batch_requests(tmp_path: Path)
         (0, 2, "RJ01609020"),
         (1, 2, "RJ01636949"),
     ]
+
+
+def test_organizer_preview_reuses_the_same_rich_work_and_naming_fields(tmp_path: Path) -> None:
+    (tmp_path / "source RJ01609020").mkdir()
+    rich_work = Work(
+        workno="RJ01609020",
+        title="中性测试作品",
+        maker_id="RG12345",
+        maker_name="测试社团",
+        series_name="测试系列",
+        cvs=["CV A"],
+        tags=["ASMR"],
+        language="CHI_HANS",
+        age_category=AgeCategory.R15,
+    )
+    naming = NamingService(
+        "{maker_name}|{series_name}|{cv_list}|{tags_list}|{age_category}|{language}"
+    )
+    provider = FakeBatchLookupService(works={rich_work.workno: rich_work})
+
+    preview = OrganizerService(provider, planner=RenamePlanner(naming)).preview(tmp_path)
+
+    assert preview.lookups[0].work == rich_work
+    assert preview.plans[0].work == rich_work
+    assert naming.format(rich_work) == "测试社团_测试系列_CV A_ASMR_r15_CHI_HANS"
 
 
 def test_organizer_isolates_one_lookup_failure_and_keeps_result_order(tmp_path: Path) -> None:
