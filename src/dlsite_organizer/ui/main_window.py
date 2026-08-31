@@ -240,10 +240,9 @@ QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
 #statusLabel[state="loading"] { color: #315fc9; }
 #statusLabel[state="success"] { color: #16805b; }
 #statusLabel[state="error"] { color: #c53b47; }
-#dropZone { background: #ffffff; border: 2px dashed #a9b8d0; border-radius: 10px; }
-#dropZone[dragActive="true"] { background: #edf3ff; border-color: #3867e8; }
-#dropZoneTitle { color: #23499d; font-size: 16px; font-weight: 600; }
-#dropZoneDescription { color: #64748b; }
+#dropZone { background: transparent; border: 0; }
+#dropZoneTitle { background: transparent; color: #23499d; font-size: 16px; font-weight: 600; }
+#dropZoneDescription { background: transparent; color: #64748b; }
 #modeButton { color: #c9d2e3; background: #222e43; border-color: #3b4a64; }
 #modeButton:hover { background: #2e3c55; color: white; }
 """

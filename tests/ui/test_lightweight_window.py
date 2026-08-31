@@ -1,7 +1,8 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QMimeData, QUrl
+from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage
 from PySide6.QtWidgets import QApplication, QLabel
 
 from dlsite_organizer.app.settings import AppSettings, SettingsService
@@ -14,7 +15,8 @@ from dlsite_organizer.services.quick_rename import QuickRenameService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.lightweight_window import LightweightWindow
-from dlsite_organizer.ui.widgets.drop_zone import local_directory_paths
+from dlsite_organizer.ui.widgets import drop_zone as drop_zone_module
+from dlsite_organizer.ui.widgets.drop_zone import DirectoryDropZone, local_directory_paths
 
 
 class FakeLookupService:
@@ -49,9 +51,19 @@ def test_lightweight_window_has_explicit_drop_zone_and_controls(
     window = _window(tmp_path)
 
     assert window.windowTitle() == "DLsite Organizer — 轻量模式"
-    assert window.branding_image.objectName() == "lightweightBrandingImage"
-    pixmap = window.branding_image.pixmap()
+    central = window.centralWidget()
+    assert central is not None
+    content_labels = central.findChildren(QLabel)
+    content_text = [label.text() for label in content_labels]
+    assert "DLsite Organizer · 轻量模式" not in content_text
+    assert (
+        "拖入一个或多个同一父目录下的 DLsite 作品文件夹，即按当前设置安全重命名。"
+        not in content_text
+    )
+    assert window.findChild(QLabel, "lightweightBrandingImage") is None
+    pixmap = window.drop_zone.branding_pixmap
     assert pixmap is not None and not pixmap.isNull()
+    assert pytest.approx(0.18) == DirectoryDropZone.WATERMARK_OPACITY
     assert window.drop_zone.acceptDrops()
     assert window.undo_button.text() == "撤销最近一次"
     assert window.settings_button.text() == "设置"
@@ -62,7 +74,12 @@ def test_lightweight_window_has_explicit_drop_zone_and_controls(
     assert detail_item is not None
     detail = detail_item.widget()
     assert isinstance(detail, QLabel)
-    assert "立即按当前设置重命名" in detail.text()
+    assert detail.text() == "拖入后立即按当前设置重命名"
+    assert window.height() < 360
+    assert window.minimumHeight() >= window.minimumSizeHint().height()
+    window.show()
+    qapp.processEvents()
+    assert not window.drop_zone.geometry().intersects(window.status_label.geometry())
     window.close()
 
 
@@ -82,6 +99,75 @@ def test_drop_zone_accepts_only_local_directories(tmp_path: Path) -> None:
     assert local_directory_paths(directory_mime) == (folder,)
     assert local_directory_paths(mixed_mime) == ()
     assert local_directory_paths(remote_mime) == ()
+
+
+def test_drop_zone_accepts_directory_drag_and_emits_paths(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    folder = tmp_path / "RJ01609020"
+    folder.mkdir()
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(folder))])
+    zone = DirectoryDropZone("title", "detail")
+    captured: list[tuple[Path, ...]] = []
+    zone.paths_dropped.connect(captured.append)
+
+    enter = QDragEnterEvent(
+        QPoint(20, 20),
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    zone.dragEnterEvent(enter)
+    assert enter.isAccepted()
+    assert zone.property("dragActive") is True
+
+    drop = QDropEvent(
+        QPointF(20, 20),
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    zone.dropEvent(drop)
+
+    assert drop.isAccepted()
+    assert captured == [(folder,)]
+    assert zone.property("dragActive") is False
+    zone.close()
+
+
+def test_drop_zone_custom_paint_handles_normal_and_hover_states(qapp: QApplication) -> None:
+    zone = DirectoryDropZone("title", "detail")
+    zone.resize(420, zone.minimumHeight())
+    zone.show()
+    qapp.processEvents()
+    image = QImage(zone.size(), QImage.Format.Format_ARGB32)
+    zone.render(image)
+
+    zone._set_highlight(True)
+    qapp.processEvents()
+    zone.render(image)
+
+    assert zone.WATERMARK_OPACITY >= 0.15
+    assert zone.WATERMARK_OPACITY <= 0.25
+    zone.close()
+
+
+def test_drop_zone_without_branding_still_paints(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(drop_zone_module, "load_branding_pixmap", lambda _size: None)
+    zone = DirectoryDropZone("title", "detail")
+    zone.resize(420, zone.minimumHeight())
+    zone.show()
+    qapp.processEvents()
+    image = QImage(zone.size(), QImage.Format.Format_ARGB32)
+    zone.render(image)
+
+    assert zone.branding_pixmap is None
+    zone.close()
 
 
 def test_explorer_entry_point_forwards_one_path_batch_to_drop_handler(

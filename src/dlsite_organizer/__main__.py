@@ -164,7 +164,7 @@ def _schedule_startup_smoke(
     ]
     expected_about = f"关于 · v{__version__}"
     about_pixmap = window.about_page.branding_image.pixmap()
-    lightweight_pixmap = lightweight_window.branding_image.pixmap()
+    lightweight_pixmap = lightweight_window.drop_zone.branding_pixmap
     icon_ready = not application.windowIcon().isNull()
     about_branding_ready = about_pixmap is not None and not about_pixmap.isNull()
     lightweight_branding_ready = (

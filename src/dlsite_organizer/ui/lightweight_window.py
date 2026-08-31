@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtCore import QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from dlsite_organizer.app.branding import load_branding_pixmap
 from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import SettingsService
 from dlsite_organizer.domain.organizer import RenamePlanStatus
@@ -61,9 +60,13 @@ class LightweightWindow(QMainWindow):
         self._last_result: QuickRenameResult | None = None
         self._last_undo_result: UndoResult | None = None
         self.setWindowTitle("DLsite Organizer — 轻量模式")
-        self.resize(540, 360)
-        self.setMinimumSize(460, 280)
         self._build_ui()
+        # Derive the compact default from the post-header layout rather than
+        # preserving a screenshot-sized fixed height.  The explicit minimum
+        # keeps the operation list and action row usable on resize.
+        minimum_height = self.minimumSizeHint().height()
+        self.setMinimumSize(460, max(280, minimum_height))
+        self.resize(540, max(minimum_height, self.sizeHint().height()))
         self.drop_zone.paths_dropped.connect(self._handle_drop)
         self.undo_button.clicked.connect(self.undo_recent)
         self.settings_button.clicked.connect(self.settings_requested.emit)
@@ -77,39 +80,12 @@ class LightweightWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(10)
-
-        header = QHBoxLayout()
-        self.branding_image = QLabel()
-        self.branding_image.setObjectName("lightweightBrandingImage")
-        self.branding_image.setFixedSize(60, 60)
-        self.branding_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.branding_image.setAccessibleName("DLsite Organizer 图标")
-        pixmap = load_branding_pixmap(60)
-        if pixmap is None:
-            self.branding_image.hide()
-        else:
-            self.branding_image.setPixmap(pixmap)
-        header.addWidget(self.branding_image)
-
-        header_copy = QVBoxLayout()
-        heading = QLabel("DLsite Organizer · 轻量模式")
-        heading.setObjectName("pageTitle")
-        header_copy.addWidget(heading)
-        description = QLabel(
-            "拖入一个或多个同一父目录下的 DLsite 作品文件夹，即按当前设置安全重命名。"
-        )
-        description.setObjectName("pageDescription")
-        description.setWordWrap(True)
-        header_copy.addWidget(description)
-        header_copy.addStretch(1)
-        header.addLayout(header_copy, 1)
-        layout.addLayout(header)
+        layout.setContentsMargins(22, 14, 22, 14)
+        layout.setSpacing(8)
 
         self.drop_zone = DirectoryDropZone(
             "将 DLsite 作品文件夹拖到这里",
-            "拖入后将立即按当前设置重命名",
+            "拖入后立即按当前设置重命名",
         )
         layout.addWidget(self.drop_zone)
 
@@ -123,7 +99,7 @@ class LightweightWindow(QMainWindow):
         layout.addWidget(recent_label)
         self.operation_list = QListWidget()
         self.operation_list.setObjectName("quickOperationList")
-        self.operation_list.setMaximumHeight(105)
+        self.operation_list.setMaximumHeight(96)
         layout.addWidget(self.operation_list, 1)
 
         actions = QHBoxLayout()
@@ -380,13 +356,10 @@ class LightweightWindow(QMainWindow):
 _STYLE = """
 QMainWindow, QWidget { background: #f5f7fb; }
 QWidget { color: #1e293b; font-family: "Segoe UI", "Microsoft YaHei UI"; font-size: 14px; }
-#pageTitle { font-size: 21px; font-weight: 700; color: #111827; }
-#pageDescription { color: #64748b; }
 #sectionLabel { font-weight: 600; color: #334155; }
-#dropZone { background: #ffffff; border: 2px dashed #a9b8d0; border-radius: 10px; }
-#dropZone[dragActive="true"] { background: #edf3ff; border-color: #3867e8; }
-#dropZoneTitle { color: #23499d; font-size: 16px; font-weight: 600; }
-#dropZoneDescription { color: #64748b; }
+#dropZone { background: transparent; border: 0; }
+#dropZoneTitle { background: transparent; color: #23499d; font-size: 16px; font-weight: 600; }
+#dropZoneDescription { background: transparent; color: #64748b; }
 #statusLabel { color: #64748b; min-height: 22px; }
 #statusLabel[state="loading"] { color: #315fc9; }
 #statusLabel[state="success"] { color: #16805b; }
