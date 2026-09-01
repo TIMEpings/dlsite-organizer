@@ -40,7 +40,7 @@ analysis = Analysis(
         (str(_branding_png), str(Path("assets") / "branding")),
     ],
     hiddenimports=collect_submodules("selectolax") + collect_submodules("sqlalchemy"),
-    hookspath=[],
+    hookspath=[str(project_root / "packaging" / "hooks")],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],

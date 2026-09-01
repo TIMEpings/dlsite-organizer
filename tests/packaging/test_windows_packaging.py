@@ -158,6 +158,14 @@ def test_packaging_spec_excludes_selectolax_development_sources() -> None:
     for suffix in ("c", "pxd", "pxi", "pyi", "pyx", "typed"):
         assert f'"**/*.{suffix}"' in spec_text
     assert 'collect_data_files("selectolax", excludes=_selectolax_data_excludes)' in spec_text
+    assert 'hookspath=[str(project_root / "packaging" / "hooks")]' in spec_text
+
+    hook_path = _HELPER_PATH.parents[0] / "hooks" / "hook-selectolax.py"
+    hook_text = hook_path.read_text(encoding="utf-8")
+    assert (
+        'datas = collect_data_files("selectolax", excludes=_selectolax_data_excludes)'
+        in hook_text
+    )
 
 
 def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(
