@@ -1,6 +1,6 @@
 """Single source of truth for the application version."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 def application_user_agent() -> str:

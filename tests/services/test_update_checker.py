@@ -19,7 +19,7 @@ RELEASE_URL = "https://github.com/TIMEpings/dlsite-organizer/releases/tag/{}"
 def run_check(
     payload: object,
     *,
-    current_version: str = "1.0.0",
+    current_version: str = __version__,
     status_code: int = 200,
     response_text: str | None = None,
     handler: Callable[[httpx.Request], httpx.Response] | None = None,
@@ -71,6 +71,15 @@ def test_version_decision(remote: str, current: str, expected: UpdateCheckStatus
     assert result.status is expected
     assert result.latest_version == remote
     assert result.release_url == RELEASE_URL.format(remote)
+
+
+def test_candidate_is_up_to_date_when_published_release_is_older() -> None:
+    result, _ = run_check(valid_payload("v1.0.0"), current_version=__version__)
+
+    assert result.status is UpdateCheckStatus.UP_TO_DATE
+    assert result.current_version == __version__
+    assert result.latest_version == "v1.0.0"
+    assert result.release_url == RELEASE_URL.format("v1.0.0")
 
 
 @pytest.mark.parametrize("value", ["1.0", "1.0.0.0", "1.01.0", "v1.0", "1.0.0-01"])
@@ -184,7 +193,8 @@ def test_release_url_can_use_percent_encoding_for_the_same_path() -> None:
         valid_payload(
             "v1.1.0",
             "https://github.com/TIMEpings/dlsite-organizer/releases/tag/%76%31.1.0",
-        )
+        ),
+        current_version="1.0.0",
     )
 
     assert result.status is UpdateCheckStatus.UPDATE_AVAILABLE
@@ -195,7 +205,7 @@ def test_request_contract_and_environment_tokens_are_ignored(monkeypatch) -> Non
     monkeypatch.setenv("GH_TOKEN", "SHOULD_NOT_BE_USED")
     monkeypatch.setenv("GITHUB_TOKEN", "SHOULD_NOT_BE_USED")
 
-    result, requests = run_check(valid_payload())
+    result, requests = run_check(valid_payload("v1.2.0"))
 
     assert result.status is UpdateCheckStatus.UPDATE_AVAILABLE
     assert len(requests) == 1
@@ -210,7 +220,9 @@ def test_request_contract_and_environment_tokens_are_ignored(monkeypatch) -> Non
 
 def test_injected_client_is_not_closed_by_service() -> None:
     client = httpx.Client(
-        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=valid_payload()))
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=valid_payload("v1.2.0"))
+        )
     )
     try:
         result = UpdateCheckService(current_version=__version__, client=client).check()
