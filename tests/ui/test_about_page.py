@@ -87,6 +87,8 @@ def test_about_page_exposes_public_identity_and_resource_actions(qapp: QApplicat
     assert "contributors" not in page.copyright_value.text()
     assert page.license_value.text() == "MIT"
     assert "非官方工具" in page.disclaimer_value.text()
+    assert "GitHub" in page.privacy_value.text()
+    assert "检查更新" in page.privacy_value.text()
     assert {
         "查看 LICENSE",
         "查看 THIRD_PARTY_NOTICES",

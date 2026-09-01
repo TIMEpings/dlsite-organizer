@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.0 — 2026-09-01
+
+- Added: manual update check from the About page using the public GitHub Releases API.
+- Changed: Lightweight mode now uses a more compact unified drop/recent-operation surface.
+- Fixed: the recent-operation presentation stays compact after Undo.
+
 ## v1.0.0 — 2026-08-31
 
 首个 Windows standalone release。该版本冻结 feature behavior，并聚焦 packaging、

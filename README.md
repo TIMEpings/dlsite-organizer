@@ -10,6 +10,7 @@ DLsite Organizer 是一个面向 Windows 的桌面工具，用于查询 DLsite �
 - 自定义命名模板和元数据格式；
 - 完整模式拖放预览，轻量模式拖放后立即按当前设置安全重命名；
 - 使用持久化 journal 支持撤销最近一次重命名；
+- 在 About 页面手动检查 GitHub Releases 更新，并在有新版本时打开发布页；
 - 在 Windows 资源管理器右键菜单中调用轻量重命名。
 
 作品关系只根据明确的 DLsite 信息或本地历史确认结果显示，不会把推测当作事实。应用会保存观察到的 bonus metadata 历史，但尚未实现过期限定特典关系的自动恢复或识别。
@@ -20,7 +21,7 @@ DLsite Organizer 是一个面向 Windows 的桌面工具，用于查询 DLsite �
 
 应用以 PyInstaller onedir ZIP 形式分发，不需要安装器。解压后启动 `dlsite-organizer.exe`；首次启动会自动创建本机数据目录和 SQLite schema。
 
-当前源码版本为 `1.0.0`，仍需完成用户验收后再进行正式发布。
+当前源码版本为 `1.1.0`；仍需完成候选构建和用户验收后再进行正式发布。
 
 ### 从源码运行
 
@@ -66,6 +67,13 @@ python -m dlsite_organizer
 
 拖入是轻量操作的明确确认，仍会执行 metadata lookup、命名规划、安全预检和 journal 记录。失败的前置检查不会修改文件；需要时可以使用“撤销最近一次”。轻量模式可通过“设置”返回完整模式或打开完整模式的设置页。
 
+## 版本更新
+
+About 页面提供“检查更新”。只有用户主动点击时，应用才会通过匿名 HTTPS 请求公开的
+GitHub Releases API，并将当前版本与最新正式 Release 比较。发现新版本时可打开对应的
+GitHub Release 页面；应用不会自动下载或安装，也不需要 GitHub 登录或 token。应用没有
+启动时检查或后台轮询。
+
 ## Explorer 右键菜单
 
 在“设置 → 资源管理器集成”中可以为当前 Windows 用户注册、更新或移除右键菜单。该功能只写入应用自己的 HKCU 注册表项，不需要管理员权限，也不会自动注册。Windows 11 中菜单可能位于“显示更多选项”。
@@ -110,7 +118,9 @@ python -m dlsite_organizer
 | 日志 | `logs\dlsite-organizer.log` | 有界诊断信息 |
 | 封面 cache | 不落盘 | 仅保留在当前进程内存 |
 
-应用没有 telemetry、analytics 或 remote error reporting。作品查询和可选封面下载会访问 DLsite；本地整理、预览、重命名和撤销不需要联网。
+应用没有 telemetry、analytics 或 remote error reporting。作品查询和可选封面下载会访问
+DLsite；只有用户主动点击“检查更新”时才会以匿名 HTTPS 访问 GitHub 公开 Releases。本地
+整理、预览、重命名和撤销不需要联网。
 
 ## 安全重命名 / Undo
 

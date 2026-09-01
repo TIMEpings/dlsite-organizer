@@ -139,7 +139,8 @@ class AboutPage(QWidget):
         layout.addWidget(self.disclaimer_value)
 
         self.privacy_value = QLabel(
-            "应用数据保存在本机。没有遥测或分析上报。作品查询会访问 DLsite。"
+            "应用数据保存在本机。没有遥测、分析或远程错误上报。作品查询和可选封面下载会访问 "
+            "DLsite；只有用户点击“检查更新”时才会以匿名 HTTPS 访问 GitHub 公开 Releases。"
         )
         self.privacy_value.setObjectName("aboutPrivacy")
         self.privacy_value.setWordWrap(True)

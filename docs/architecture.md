@@ -258,6 +258,29 @@ under **显示更多选项**; no modern COM or MSIX shell extension is part of t
 The footer About entry is the only About navigation entry and derives its version from the package
 version source; the main navigation remains `整理`, `查询`, `设置`.
 
+## Phase 4A update check and compact presentation
+
+The About page's update action is a manual-only application flow:
+
+```text
+UpdateCheckService
+        ↓
+UpdateCheckWorker
+        ↓
+AboutPage
+```
+
+`UpdateCheckService` calls the fixed public GitHub endpoint
+`https://api.github.com/repos/TIMEpings/dlsite-organizer/releases/latest` over anonymous HTTPS.
+It compares the package version with the latest formal release, validates the canonical release
+page URL, and fails soft on network or response errors. The flow has no authentication or token,
+does not check at startup or poll in the background, and has no download or install pipeline. It is
+independent from the DLsite provider.
+
+Lightweight mode presents drag-and-drop and the latest recent operation through the
+`UnifiedDropZone` presentation/layout surface. The recent-operation row is not authoritative
+transaction history: SQLite and the journal remain authoritative for mutation and Undo state.
+
 The journal transaction-creation check uses SQLite `BEGIN IMMEDIATE` to serialize the health check
 and durable transaction intent across independent processes. SQLite WAL is not enabled as an
 automatic side effect. Thus two near-simultaneous invocations cannot both commit overlapping
