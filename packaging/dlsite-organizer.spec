@@ -17,6 +17,14 @@ _packaging_helper_spec.loader.exec_module(_packaging_helper)
 
 _branding_png = project_root / "assets" / "branding" / "app_icon.png"
 _branding_ico = project_root / "assets" / "branding" / "app_icon.ico"
+_selectolax_data_excludes = [
+    "**/*.c",
+    "**/*.pxd",
+    "**/*.pxi",
+    "**/*.pyi",
+    "**/*.pyx",
+    "**/*.typed",
+]
 for _branding_path in (_branding_png, _branding_ico):
     if not _branding_path.is_file():
         raise SystemExit(f"Branding asset not found: {_branding_path}")
@@ -25,7 +33,7 @@ analysis = Analysis(
     [str(source_root / "dlsite_organizer" / "__main__.py")],
     pathex=[str(source_root)],
     binaries=[],
-    datas=collect_data_files("selectolax")
+    datas=collect_data_files("selectolax", excludes=_selectolax_data_excludes)
     + [
         (str(project_root / "LICENSE"), "."),
         (str(project_root / "THIRD_PARTY_NOTICES.md"), "."),

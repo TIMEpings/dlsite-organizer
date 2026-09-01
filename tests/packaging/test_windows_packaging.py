@@ -151,6 +151,15 @@ def test_packaging_spec_embeds_ico_and_collects_runtime_png() -> None:
     assert 'str(Path("assets") / "branding")' in spec_text
 
 
+def test_packaging_spec_excludes_selectolax_development_sources() -> None:
+    spec_path = _HELPER_PATH.parents[0] / "dlsite-organizer.spec"
+    spec_text = spec_path.read_text(encoding="utf-8")
+
+    for suffix in ("c", "pxd", "pxi", "pyi", "pyx", "typed"):
+        assert f'"**/*.{suffix}"' in spec_text
+    assert 'collect_data_files("selectolax", excludes=_selectolax_data_excludes)' in spec_text
+
+
 def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(
     tmp_path: Path,
 ) -> None:
