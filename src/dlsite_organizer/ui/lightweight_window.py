@@ -11,7 +11,6 @@ from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -29,7 +28,7 @@ from dlsite_organizer.services.quick_rename import (
     QuickRenameStatus,
 )
 from dlsite_organizer.services.undo_service import UndoService
-from dlsite_organizer.ui.widgets.drop_zone import DirectoryDropZone
+from dlsite_organizer.ui.widgets.drop_zone import UnifiedDropZone
 from dlsite_organizer.ui.workers.quick_rename_worker import QuickRenameWorker
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 
@@ -83,7 +82,7 @@ class LightweightWindow(QMainWindow):
         layout.setContentsMargins(22, 14, 22, 14)
         layout.setSpacing(8)
 
-        self.drop_zone = DirectoryDropZone(
+        self.drop_zone = UnifiedDropZone(
             "将 DLsite 作品文件夹拖到这里",
             "拖入后立即按当前设置重命名",
         )
@@ -94,13 +93,9 @@ class LightweightWindow(QMainWindow):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        recent_label = QLabel("最近操作：")
-        recent_label.setObjectName("sectionLabel")
-        layout.addWidget(recent_label)
-        self.operation_list = QListWidget()
-        self.operation_list.setObjectName("quickOperationList")
-        self.operation_list.setMaximumHeight(96)
-        layout.addWidget(self.operation_list, 1)
+        # Keep the historical attribute for callers/tests while the unified
+        # surface owns the one authoritative recent-operation list.
+        self.operation_list = self.drop_zone.operation_list
 
         actions = QHBoxLayout()
         self.undo_button = QPushButton("撤销最近一次")
@@ -169,7 +164,11 @@ class LightweightWindow(QMainWindow):
                 outcome = "无需重命名"
             else:
                 outcome = plan.error or "未执行"
-            self.operation_list.addItem(f"{code}  {outcome}\n{plan.current_name} → {target}")
+            self.operation_list.add_full_text(
+                f"{code}  {outcome}\n{plan.current_name} → {target}"
+            )
+        if self.operation_list.count() == 0:
+            self.operation_list.add_full_text("暂无最近操作")
 
         if result.status is QuickRenameStatus.SUCCESS:
             self.status_label.setProperty("state", "success")
@@ -260,7 +259,7 @@ class LightweightWindow(QMainWindow):
         if result.status.name == "UNDONE":
             self.status_label.setProperty("state", "success")
             self.status_label.setText(f"撤销完成：恢复 {result.success_count} 个目录。")
-            self.operation_list.addItem(f"撤销  ✓ 已恢复 {result.success_count} 个目录")
+            self.operation_list.add_full_text(f"撤销  ✓ 已恢复 {result.success_count} 个目录")
         elif result.status.name == "RECOVERY_REQUIRED":
             self._show_error("需要恢复：撤销状态需要恢复，请先处理该事务。")
         else:
@@ -356,8 +355,10 @@ class LightweightWindow(QMainWindow):
 _STYLE = """
 QMainWindow, QWidget { background: #f5f7fb; }
 QWidget { color: #1e293b; font-family: "Segoe UI", "Microsoft YaHei UI"; font-size: 14px; }
-#sectionLabel { font-weight: 600; color: #334155; }
-#dropZone { background: transparent; border: 0; }
+#unifiedDropZone { background: transparent; border: 0; }
+#dropMainArea, #recentOperationArea { background: transparent; }
+#recentOperationLabel { color: #334155; font-size: 12px; font-weight: 600; }
+#recentOperationSeparator { background: transparent; color: #dbe3ef; }
 #dropZoneTitle { background: transparent; color: #23499d; font-size: 16px; font-weight: 600; }
 #dropZoneDescription { background: transparent; color: #64748b; }
 #statusLabel { color: #64748b; min-height: 22px; }
@@ -367,5 +368,6 @@ QWidget { color: #1e293b; font-family: "Segoe UI", "Microsoft YaHei UI"; font-si
 QPushButton { background: white; border: 1px solid #cbd5e1; border-radius: 7px; padding: 7px 12px; }
 QPushButton:hover { background: #f1f5f9; }
 QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
-QListWidget { background: white; border: 1px solid #e2e8f0; border-radius: 7px; }
+#quickOperationList { background: transparent; border: 0; border-radius: 0; padding: 0; }
+#quickOperationList::item { padding: 2px 0; color: #475569; }
 """
