@@ -259,6 +259,10 @@ class LightweightWindow(QMainWindow):
         if result.status.name == "UNDONE":
             self.status_label.setProperty("state", "success")
             self.status_label.setText(f"撤销完成：恢复 {result.success_count} 个目录。")
+            # The surface presents the latest operation only.  Appending the
+            # undo result to the previous rename row can exceed the compact
+            # viewport and make Qt show an unnecessary vertical scrollbar.
+            self.operation_list.clear()
             self.operation_list.add_full_text(f"撤销  ✓ 已恢复 {result.success_count} 个目录")
         elif result.status.name == "RECOVERY_REQUIRED":
             self._show_error("需要恢复：撤销状态需要恢复，请先处理该事务。")

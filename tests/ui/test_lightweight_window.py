@@ -6,6 +6,13 @@ from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget
 
 from dlsite_organizer.app.settings import AppSettings, SettingsService
+from dlsite_organizer.domain.rename_execution import (
+    ExecutionStatus,
+    RenameOperation,
+    TransactionStatus,
+    UndoResult,
+    UndoStatus,
+)
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.rename_journal import TransactionJournal
@@ -326,3 +333,42 @@ def test_explorer_entry_point_forwards_one_path_batch_to_drop_handler(
 
     assert captured == [paths]
     window.close()
+
+
+def test_undo_replaces_previous_recent_operation_without_scrollbar(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    window = _window(tmp_path)
+    operation = RenameOperation(
+        transaction_id="tx",
+        sequence=1,
+        source_path=tmp_path / "RJ01609020",
+        target_path=tmp_path / "[RJ01609020] Target",
+        status=ExecutionStatus.SUCCESS,
+        undo_status=UndoStatus.SUCCESS,
+    )
+    result = UndoResult(
+        status=TransactionStatus.UNDONE,
+        transaction=None,
+        operations=(operation,),
+    )
+
+    try:
+        window.show()
+        qapp.processEvents()
+        window.operation_list.add_full_text("RJ01609020  ✓ 已重命名")
+        window._show_undo_result(result)
+        qapp.processEvents()
+
+        assert window.operation_list.count() == 1
+        assert window.operation_list.item(0) is not None
+        assert window.operation_list.item(0).data(Qt.ItemDataRole.UserRole) == (
+            "撤销  ✓ 已恢复 1 个目录"
+        )
+        scrollbar = window.operation_list.verticalScrollBar()
+        assert scrollbar.minimum() == 0
+        assert scrollbar.maximum() == 0
+        assert scrollbar.value() == 0
+        assert not scrollbar.isVisible()
+    finally:
+        window.close()
