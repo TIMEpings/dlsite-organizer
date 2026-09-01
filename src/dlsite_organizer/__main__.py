@@ -66,6 +66,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     window = MainWindow(
         components.lookup_service,
         components.cover_service,
+        update_check_service=components.update_check_service,
         organizer_service=components.organizer_service,
         rename_executor=components.rename_executor,
         undo_service=components.undo_service,

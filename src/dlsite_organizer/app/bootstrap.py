@@ -28,6 +28,7 @@ from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.quick_rename import QuickRenameService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_planner import RenamePlanner
+from dlsite_organizer.services.update_checker import UpdateCheckService
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.services.candidate_review_queue import CandidateReviewQueueService
 
@@ -39,6 +40,7 @@ class ApplicationComponents:
     """Long-lived objects composed once at startup."""
 
     lookup_service: LookupService
+    update_check_service: UpdateCheckService
     organizer_service: OrganizerService
     cover_service: CoverService
     database: Database
@@ -122,6 +124,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
     quick_rename_service = QuickRenameService(organizer_service, rename_executor)
     return ApplicationComponents(
         lookup_service=lookup_service,
+        update_check_service=UpdateCheckService(),
         organizer_service=organizer_service,
         cover_service=CoverService(),
         database=database,

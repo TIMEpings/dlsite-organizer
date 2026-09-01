@@ -1,5 +1,9 @@
+import threading
+import time
+
 import pytest
 from PySide6.QtCore import QPoint, QRect
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 
@@ -7,6 +11,7 @@ from dlsite_organizer import __version__
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
+from dlsite_organizer.services.update_checker import UpdateCheckResult, UpdateCheckStatus
 from dlsite_organizer.ui.main_window import MainWindow
 
 
@@ -16,6 +21,29 @@ def qapp() -> QApplication:
     if isinstance(application, QApplication):
         return application
     return QApplication([])
+
+
+class BlockingUpdateService:
+    def __init__(self, result: UpdateCheckResult) -> None:
+        self.result = result
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def check(self) -> UpdateCheckResult:
+        self.started.set()
+        self.release.wait(timeout=2)
+        return self.result
+
+
+def _wait_until(qapp: QApplication, predicate, timeout_seconds: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        if predicate():
+            return
+        time.sleep(0.005)
+    qapp.processEvents()
+    assert predicate(), "timed out waiting for Qt state"
 
 
 def test_main_window_exposes_organizer_page_without_running_filesystem_work(
@@ -100,4 +128,72 @@ def test_organizer_minimum_height_keeps_table_and_footer_disjoint(
                 assert not table_rect.intersects(widget_rect)
                 assert widget_rect.bottom() <= page.rect().bottom()
     finally:
+        window.close()
+
+
+def test_main_window_close_guard_includes_about_update_worker(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = BlockingUpdateService(
+        UpdateCheckResult(
+            status=UpdateCheckStatus.UP_TO_DATE,
+            current_version=__version__,
+        )
+    )
+    window = MainWindow(
+        LookupService(FakeProvider(), NamingService()),
+        CoverService(),
+        update_check_service=service,
+    )
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *_args: None)
+    window.show()
+
+    try:
+        window.show_about_page()
+        window.about_page.check_update_button.click()
+        _wait_until(qapp, service.started.is_set)
+
+        close_while_busy = QCloseEvent()
+        window.closeEvent(close_while_busy)
+        assert not close_while_busy.isAccepted()
+        assert window.is_busy()
+
+        service.release.set()
+        _wait_until(qapp, lambda: not window.about_page.is_busy())
+        close_after_finish = QCloseEvent()
+        window.closeEvent(close_after_finish)
+        assert close_after_finish.isAccepted()
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not window.about_page.is_busy())
+        window.close()
+
+
+def test_about_update_survives_navigation_away_and_back(qapp: QApplication) -> None:
+    service = BlockingUpdateService(
+        UpdateCheckResult(
+            status=UpdateCheckStatus.UP_TO_DATE,
+            current_version=__version__,
+        )
+    )
+    window = MainWindow(
+        LookupService(FakeProvider(), NamingService()),
+        CoverService(),
+        update_check_service=service,
+    )
+    window.show()
+
+    try:
+        window.show_about_page()
+        window.about_page.check_update_button.click()
+        _wait_until(qapp, service.started.is_set)
+        window.navigation_list.setCurrentRow(window.page_indices["organizer"])
+        service.release.set()
+        _wait_until(qapp, lambda: not window.about_page.is_busy())
+        window.show_about_page()
+        assert window.about_page.update_status_label.text() == "已是最新版本"
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not window.about_page.is_busy())
         window.close()

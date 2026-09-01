@@ -35,6 +35,7 @@ from dlsite_organizer.ui.pages.about_page import AboutPage
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
+from dlsite_organizer.ui.workers.update_check_worker import UpdateCheckServiceLike
 
 
 class MainPage(StrEnum):
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         quick_rename_service=None,
         explorer_integration_service: ExplorerIntegrationService | None = None,
         runtime_signals: RuntimeSignals | None = None,
+        update_check_service: UpdateCheckServiceLike | None = None,
     ) -> None:
         super().__init__()
         self._lookup_service = lookup_service
@@ -123,7 +125,7 @@ class MainWindow(QMainWindow):
             self._settings_service,
             explorer_integration_service=explorer_integration_service,
         )
-        self.about_page = AboutPage()
+        self.about_page = AboutPage(update_check_service=update_check_service)
         self._settings_service.subscribe(self._settings_saved)
         page_definitions = (
             (MainPage.ORGANIZER, "整理", self.organizer_page),
@@ -192,7 +194,11 @@ class MainWindow(QMainWindow):
 
     def is_busy(self) -> bool:
         """Return whether any full-mode background operation is active."""
-        return self.lookup_page.is_busy() or self.organizer_page.is_busy()
+        return (
+            self.lookup_page.is_busy()
+            or self.organizer_page.is_busy()
+            or self.about_page.is_busy()
+        )
 
     @Slot(object)
     def _settings_saved(self, settings: object) -> None:
@@ -211,7 +217,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Avoid destroying a running QThread during a bounded network request."""
-        if self.lookup_page.is_busy() or self.organizer_page.is_busy():
+        if self.is_busy():
             event.ignore()
             QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再退出。")
             return
