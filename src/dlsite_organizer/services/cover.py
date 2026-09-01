@@ -6,6 +6,8 @@ import logging
 
 import httpx
 
+from dlsite_organizer import application_user_agent
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,7 +29,7 @@ class CoverService:
             with httpx.Client(
                 timeout=self._timeout,
                 follow_redirects=True,
-                headers={"User-Agent": "dlsite-organizer/0.1 (cover lookup)"},
+                headers={"User-Agent": application_user_agent()},
             ) as client:
                 response = client.get(url)
                 response.raise_for_status()

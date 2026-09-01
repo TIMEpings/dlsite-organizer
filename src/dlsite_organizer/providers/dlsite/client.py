@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 import httpx
 
+from dlsite_organizer import application_user_agent
 from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
 from dlsite_organizer.domain.work import TranslationAttribution, Work
 from dlsite_organizer.domain.work_code import WorkCode
@@ -416,7 +417,7 @@ class DlsiteProvider:
             timeout=self._timeout,
             follow_redirects=True,
             headers={
-                "User-Agent": "dlsite-organizer/0.1 (desktop metadata lookup)",
+                "User-Agent": application_user_agent(),
                 "Accept": "application/json,text/html,application/xhtml+xml",
                 "Accept-Language": "ja,en;q=0.8",
             },

@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from dlsite_organizer import __version__, application_user_agent
 from dlsite_organizer.domain.work_code import WorkCode
 from dlsite_organizer.providers.dlsite.client import (
     DlsiteProvider,
@@ -61,6 +62,19 @@ def client_factory(
         )
 
     return create
+
+
+def test_default_metadata_client_uses_authoritative_application_user_agent() -> None:
+    client = DlsiteProvider()._new_client()
+    try:
+        request = client.build_request("GET", "https://example.test/metadata")
+        assert request.headers["User-Agent"] == f"dlsite-organizer/{__version__}"
+    finally:
+        client.close()
+
+
+def test_application_user_agent_tracks_authoritative_version() -> None:
+    assert application_user_agent() == f"dlsite-organizer/{__version__}"
 
 
 def test_source_route_is_typed_and_bounded_for_all_supported_prefixes() -> None:
