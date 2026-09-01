@@ -43,6 +43,12 @@ from dlsite_organizer.services.translation_relations import (
     TranslationContractError,
     TranslationRelationService,
 )
+from dlsite_organizer.services.update_checker import (
+    SemVer,
+    UpdateCheckResult,
+    UpdateCheckService,
+    UpdateCheckStatus,
+)
 
 __all__ = [
     "EVALUATION_POLICY_VERSION",
@@ -66,10 +72,14 @@ __all__ = [
     "OrganizerPreview",
     "OrganizerService",
     "RenamePlanner",
+    "SemVer",
     "TranslationAnalysis",
     "TranslationAnalysisStatus",
     "TranslationContractError",
     "TranslationRelationService",
+    "UpdateCheckResult",
+    "UpdateCheckService",
+    "UpdateCheckStatus",
     "WorkLookup",
     "WorkLookupStatus",
     "build_quick_rename_command",
