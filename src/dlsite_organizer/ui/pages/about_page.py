@@ -63,10 +63,10 @@ class AboutPage(QWidget):
         self.description_value = QLabel("DLsite 作品元数据查询与文件夹整理工具")
         self.description_value.setWordWrap(True)
         self.description_value.setObjectName("aboutDescriptionValue")
-        self.developer_value = QLabel("dlsite-organizer contributors")
+        self.developer_value = QLabel("TIMEpings")
         self.developer_value.setObjectName("aboutDeveloperValue")
         self.developer_label = self.developer_value
-        self.copyright_value = QLabel("Copyright © 2026 dlsite-organizer contributors")
+        self.copyright_value = QLabel("Copyright © 2026 TIMEpings")
         self.copyright_value.setObjectName("aboutCopyrightValue")
         self.copyright_label = self.copyright_value
         self.license_value = QLabel("MIT")

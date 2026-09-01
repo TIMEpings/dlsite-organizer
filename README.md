@@ -148,6 +148,12 @@ git diff --check
 
 数据契约、历史关系、bonus observation、研究型关系候选和人工审阅实现细节位于 `docs/`，不属于普通用户主导航。正式发布前还需要完成真实 Explorer 拖放和右键菜单点击验收。
 
+## 项目署名
+
+- Developer & Maintainer: TIMEpings
+- Copyright © 2026 TIMEpings
+- License: MIT
+
 ## License
 
 本项目使用 MIT License，详见 [`LICENSE`](LICENSE)。运行时第三方组件的许可证和来源见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)；它们不因本项目使用 MIT 而改变。

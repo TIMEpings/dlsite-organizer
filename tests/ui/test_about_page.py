@@ -23,8 +23,10 @@ def test_about_page_exposes_public_identity_and_resource_actions(qapp: QApplicat
     assert pixmap is not None and not pixmap.isNull()
     assert page.version_value.text() == f"v{__version__}"
     assert page.description_value.text() == "DLsite 作品元数据查询与文件夹整理工具"
-    assert page.developer_value.text() == "dlsite-organizer contributors"
-    assert page.copyright_value.text() == "Copyright © 2026 dlsite-organizer contributors"
+    assert page.developer_value.text() == "TIMEpings"
+    assert "contributors" not in page.developer_value.text()
+    assert page.copyright_value.text() == "Copyright © 2026 TIMEpings"
+    assert "contributors" not in page.copyright_value.text()
     assert page.license_value.text() == "MIT"
     assert "非官方工具" in page.disclaimer_value.text()
     assert {
