@@ -167,6 +167,11 @@ def test_packaging_spec_excludes_selectolax_development_sources() -> None:
         in hook_text
     )
 
+    certifi_hook_path = _HELPER_PATH.parents[0] / "hooks" / "hook-certifi.py"
+    certifi_hook_text = certifi_hook_path.read_text(encoding="utf-8")
+    assert "from certifi import where" in certifi_hook_text
+    assert 'datas = [(where(), ".")]' in certifi_hook_text
+
 
 def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(
     tmp_path: Path,
