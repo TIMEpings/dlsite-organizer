@@ -1,0 +1,25 @@
+{
+  "VJ00000001": {
+    "work_name": "Fixture software listing",
+    "product_id": "VJ00000001",
+    "maker_id": "VG00001",
+    "maker_name": "Fixture Studio",
+    "regist_date": "2026-02-03 00:00:00",
+    "work_image": "//img.example.test/VJ00000001.jpg",
+    "work_type": "ADV",
+    "age_category": 1,
+    "bonuses": [],
+    "translation_info": {
+      "is_original": true,
+      "is_parent": false,
+      "is_child": false,
+      "is_translation_agree": false,
+      "is_volunteer": false,
+      "is_translation_bonus_child": false,
+      "lang": null,
+      "original_workno": null,
+      "parent_workno": null,
+      "child_worknos": []
+    }
+  }
+}

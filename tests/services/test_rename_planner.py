@@ -19,14 +19,14 @@ def test_planner_creates_ready_plan_without_mutating_source(tmp_path: Path) -> N
 
     assert plan.status is RenamePlanStatus.READY
     assert plan.current_name == "old title RJ01609020"
-    assert plan.proposed_name == "[Circle Name][RJ01609020] Work Title"
+    assert plan.proposed_name == "[RJ01609020][Circle Name]Work Title"
     assert plan.target_path == tmp_path / plan.proposed_name
     assert sorted(path.name for path in tmp_path.iterdir()) == before
 
 
 def test_planner_marks_already_formatted_directory_unchanged(tmp_path: Path) -> None:
     work = make_work()
-    source = tmp_path / "[Circle Name][RJ01609020] Work Title"
+    source = tmp_path / "[RJ01609020][Circle Name]Work Title"
     source.mkdir()
 
     plan = RenamePlanner().plan(tmp_path, source, work.workno, work)
@@ -36,7 +36,7 @@ def test_planner_marks_already_formatted_directory_unchanged(tmp_path: Path) -> 
 
 def test_planner_marks_existing_target_as_conflict(tmp_path: Path) -> None:
     source = tmp_path / "old RJ01609020"
-    target = tmp_path / "[Circle Name][RJ01609020] Work Title"
+    target = tmp_path / "[RJ01609020][Circle Name]Work Title"
     source.mkdir()
     target.mkdir()
 
@@ -77,7 +77,7 @@ def test_planner_uses_naming_service_sanitization(tmp_path: Path) -> None:
     plan = RenamePlanner(NamingService()).plan(tmp_path, source, work.workno, work)
 
     assert plan.status is RenamePlanStatus.READY
-    assert plan.proposed_name == "[Circle Name][RJ01609020] Rain_ _Night__"
+    assert plan.proposed_name == "[RJ01609020][Circle Name]Rain_ _Night__"
     assert ":" not in (plan.proposed_name or "")
     assert "?" not in (plan.proposed_name or "")
 
@@ -144,7 +144,7 @@ def test_planner_supports_unicode_metadata(tmp_path: Path) -> None:
 
     plan = RenamePlanner().plan(tmp_path, source, work.workno, work)
 
-    assert plan.proposed_name == "[Circle Name][RJ01609020] 雨音の夜・中文标题"
+    assert plan.proposed_name == "[RJ01609020][Circle Name]雨音の夜・中文标题"
 
 
 def test_planner_warns_on_conservative_long_path_threshold(tmp_path: Path) -> None:

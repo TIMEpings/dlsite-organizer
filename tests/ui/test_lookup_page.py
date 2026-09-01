@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication, QLabel
 from tests.services.test_lookup import FakeProvider
 
@@ -47,6 +48,49 @@ def historical_relation(target: str) -> HistoricalRelation:
         observation_count=1,
         evidence=(),
     )
+
+
+def test_lookup_page_uses_generic_work_code_placeholder_and_subtitle(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+
+    assert page.code_input.placeholderText() == "输入完整RJ|BJ|VJ号"
+    assert "RJ01609020" not in page.code_input.placeholderText()
+    labels = "\n".join(label.text() for label in page.findChildren(QLabel))
+    assert "读取当前作品信息并生成安全的格式化名称。" in labels
+    assert "输入 RJcode" not in labels
+    assert page.status_label.text() == "请输入作品编号开始查询。"
+    assert page.status_label.property("state") != "error"
+    page.close()
+
+
+@pytest.mark.parametrize("workno", ["RJ00000001", "BJ00000001", "VJ00000001"])
+def test_lookup_page_starts_lookup_for_every_supported_work_code(
+    qapp: QApplication, workno: str
+) -> None:
+    page = LookupPage(
+        LookupService(
+            FakeProvider(work=Work(workno=workno, title="Fixture title")),
+            NamingService(),
+        ),
+        CoverService(),
+    )
+    page.code_input.setText(workno.lower())
+
+    page.start_lookup()
+    thread = page._thread
+    assert thread is not None
+
+    loop = QEventLoop()
+    thread.finished.connect(loop.quit)
+    QTimer.singleShot(3000, loop.quit)
+    loop.exec()
+    qapp.processEvents()
+
+    assert page.status_label.text().startswith("查询完成")
+    assert page.workno_value.text() == workno
+    page.close()
 
 
 def test_lookup_page_renders_application_relation_result(qapp: QApplication) -> None:

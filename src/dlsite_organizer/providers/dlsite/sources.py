@@ -179,7 +179,7 @@ class TranslationInfoSource(BaseModel):
         stripped = value.strip()
         if not stripped:
             return None
-        return str(WorkCode.parse(stripped, allowed_prefixes={"RJ"}))
+        return str(WorkCode.parse(stripped))
 
     @field_validator("lang")
     @classmethod
@@ -194,7 +194,7 @@ class TranslationInfoSource(BaseModel):
     def normalize_child_worknos(cls, values: list[str]) -> list[str]:
         return list(
             dict.fromkeys(
-                str(WorkCode.parse(value.strip(), allowed_prefixes={"RJ"}))
+                str(WorkCode.parse(value.strip()))
                 for value in values
                 if value.strip()
             )
@@ -278,7 +278,7 @@ class ProductMetadataLanguageEditionSource(BaseModel):
         if not stripped:
             return None
         try:
-            return str(WorkCode.parse(stripped, allowed_prefixes={"RJ"}))
+            return str(WorkCode.parse(stripped))
         except WorkCodeError:
             return None
 
@@ -522,7 +522,7 @@ def parse_product_metadata(payload: str, requested_workno: str) -> ProductMetada
 
     try:
         normalized_metadata_workno = str(
-            WorkCode.parse(source.workno, allowed_prefixes={"RJ"})
+            WorkCode.parse(source.workno)
         )
     except WorkCodeError as exc:
         raise DlsiteParseError("product_metadata contained malformed core metadata") from exc
@@ -611,7 +611,7 @@ class ProductInfoAjaxSource(BaseModel):
         stripped = value.strip()
         if not stripped:
             return None
-        return str(WorkCode.parse(stripped, allowed_prefixes={"RJ"}))
+        return str(WorkCode.parse(stripped))
 
 
 def parse_product_info_ajax(payload: str, requested_workno: str) -> ProductInfoAjaxSource:
@@ -622,7 +622,7 @@ def parse_product_info_ajax(payload: str, requested_workno: str) -> ProductInfoA
         raise DlsiteParseError("product_info_ajax did not return valid JSON") from exc
 
     try:
-        normalized_requested_workno = str(WorkCode.parse(requested_workno, allowed_prefixes={"RJ"}))
+        normalized_requested_workno = str(WorkCode.parse(requested_workno))
     except WorkCodeError as exc:
         raise DlsiteParseError("product_info_ajax was requested with an invalid workno") from exc
 

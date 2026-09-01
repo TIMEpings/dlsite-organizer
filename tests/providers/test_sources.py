@@ -57,6 +57,44 @@ def test_real_original_response_maps_metadata_and_preserves_regist_datetime() ->
     assert source.translation_info.lang is None
 
 
+@pytest.mark.parametrize(
+    ("workno", "section", "maker_id"),
+    [
+        ("BJ00000001", "books", "BG00001"),
+        ("VJ00000001", "soft", "VG00001"),
+    ],
+)
+def test_bj_and_vj_sources_use_the_same_typed_normalization_pipeline(
+    workno: str,
+    section: str,
+    maker_id: str,
+) -> None:
+    source = parse_product_info_ajax(fixture_payload(workno), workno.lower())
+    work = normalize_product_info_ajax(source, section=section)
+    rich = parse_product_metadata(rich_fixture_payload(workno), workno)
+    merged = merge_product_metadata(work, rich)
+
+    assert source.requested_workno == workno
+    assert work.workno == workno
+    assert work.maker_id == maker_id
+    assert merged.workno == workno
+    assert merged.maker_id == maker_id
+    assert merged.maker_name is not None
+    assert merged.cover_url is not None
+
+
+def test_non_rj_rich_source_optional_fields_remain_absent_without_failing() -> None:
+    rich = parse_product_metadata(
+        rich_fixture_payload("BJ00000001"),
+        "BJ00000001",
+    )
+
+    assert rich.series_name == "Fixture Series"
+    assert rich.cv_names == ()
+    assert rich.language_for("BJ00000001") is None
+    assert rich.tag_names == ("Fixture genre",)
+
+
 def test_real_parent_response_preserves_translation_topology() -> None:
     source = parse_product_info_ajax(fixture_payload("RJ01636949"), "RJ01636949")
 

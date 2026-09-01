@@ -156,7 +156,7 @@ class ManualReviewEvent(BaseModel):
     def normalize_direction_workno(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return str(WorkCode.parse(value, allowed_prefixes={"RJ"}))
+        return str(WorkCode.parse(value))
 
     @model_validator(mode="before")
     @classmethod
@@ -164,8 +164,8 @@ class ManualReviewEvent(BaseModel):
         if isinstance(values, dict):
             a, b = values.get("workno_a"), values.get("workno_b")
             if a is not None and b is not None:
-                a = str(WorkCode.parse(a, allowed_prefixes={"RJ"}))
-                b = str(WorkCode.parse(b, allowed_prefixes={"RJ"}))
+                a = str(WorkCode.parse(a))
+                b = str(WorkCode.parse(b))
                 if a > b:
                     values = dict(values)
                     values["workno_a"], values["workno_b"] = b, a
@@ -205,8 +205,8 @@ ManualRelationReview = ManualReviewEvent
 
 
 def canonical_pair(left: str, right: str) -> tuple[str, str]:
-    a = str(WorkCode.parse(left, allowed_prefixes={"RJ"}))
-    b = str(WorkCode.parse(right, allowed_prefixes={"RJ"}))
+    a = str(WorkCode.parse(left))
+    b = str(WorkCode.parse(right))
     if a == b:
         raise ValueError("A work cannot be reviewed against itself")
     return (a, b) if a < b else (b, a)

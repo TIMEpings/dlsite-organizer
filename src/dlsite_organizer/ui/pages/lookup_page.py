@@ -1,4 +1,4 @@
-"""Public RJcode lookup page."""
+"""Public DLsite work-number lookup page."""
 
 from __future__ import annotations
 # ruff: noqa
@@ -70,7 +70,7 @@ class LookupPage(QWidget):
 
         heading = QLabel("查询作品")
         heading.setObjectName("pageTitle")
-        description = QLabel("输入 RJcode，读取当前作品信息并生成安全的格式化名称。")
+        description = QLabel("读取当前作品信息并生成安全的格式化名称。")
         description.setObjectName("pageDescription")
         layout.addWidget(heading)
         layout.addWidget(description)
@@ -78,7 +78,7 @@ class LookupPage(QWidget):
         query_row = QHBoxLayout()
         query_row.setSpacing(10)
         self.code_input = QLineEdit()
-        self.code_input.setPlaceholderText("例如 RJ01609020")
+        self.code_input.setPlaceholderText("输入完整RJ|BJ|VJ号")
         self.code_input.setClearButtonEnabled(True)
         self.code_input.setMinimumHeight(40)
         self.query_button = QPushButton("查询")
@@ -89,7 +89,7 @@ class LookupPage(QWidget):
         query_row.addWidget(self.refresh_button)
         layout.addLayout(query_row)
 
-        self.status_label = QLabel("请输入 RJcode 开始查询。")
+        self.status_label = QLabel("请输入作品编号开始查询。")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -122,7 +122,7 @@ class LookupPage(QWidget):
         self.tags_value = _value_label()
         self.language_value = _value_label()
         self.age_value = _value_label()
-        form.addRow("RJcode", self.workno_value)
+        form.addRow("作品编号", self.workno_value)
         form.addRow("标题", self.title_value)
         form.addRow("社团", self.maker_value)
         form.addRow("社团编号", self.maker_id_value)
@@ -387,7 +387,7 @@ class LookupPage(QWidget):
         elif analysis.status is TranslationAnalysisStatus.INCOMPLETE:
             message = "DLsite 关系信息不完整；仅显示已明确且安全的关系。"
         elif not relation_lines:
-            message = "当前响应未列出具体的关联 RJcode。"
+            message = "当前响应未列出具体的关联作品编号。"
         else:
             message = "\n".join(relation_lines)
         self.relation_details_value.setText(message)

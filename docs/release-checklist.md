@@ -2,6 +2,20 @@
 
 这是 `dlsite-organizer` 的发布前核验清单。Phase E 完成后停止功能开发，先由用户验收，再决定是否创建 tag、发布 portable ZIP 或进行其他发行操作。本清单不会代替真实 Windows 桌面验收。
 
+本轮 `Work Code + Final Defaults Update` 只完成兼容性、默认值和公开 UI 文案调整，仍停留在
+Final Release Readiness 之前：不会创建 `v1.0.0` tag、push、上传或发布，也不会把本轮验证
+误记为正式 Release Readiness。
+
+## Compatibility update before readiness
+
+- [ ] RJ / BJ / VJ 都通过同一个 typed `WorkCode`、Lookup、Naming、Organizer 和 Quick Rename pipeline
+- [ ] BJ 使用 `books`，VJ 使用有限的 `soft` / `pro` public-page resolution；不进行全 section brute-force
+- [ ] 新 profile 默认 `lightweight`
+- [ ] 新 profile 默认 `[{workno}][{maker_name}]{title}`
+- [ ] 新 profile metadata locale 按支持的系统语言映射，无法匹配时回退 `ja_jp`
+- [ ] 已有 `startup_mode`、`metadata_locale` 和 naming template 原样保留
+- [ ] Explorer 仍为单文件夹 `--quick-rename`；不宣传或恢复 multi-select verb
+
 ## Automated gates
 
 - [x] Full offline tests: `QT_QPA_PLATFORM=offscreen python -m pytest`
@@ -65,7 +79,11 @@ Before release, also perform the visible GUI walkthrough:
 → 完整模式 / 轻量模式 → clean exit → restart
 ```
 
-Verify real lookup examples `RJ01609020`, `RJ01636949` and `RJ01637033`, preview-before-mutation in full mode, immediate safe rename in lightweight mode, Undo, About resources, and Explorer integration wording.
+Verify real lookup examples for `RJ`, `BJ`, and `VJ`, the placeholder `输入完整RJ|BJ|VJ号`,
+the simplified Lookup subtitle, no duplicate Organizer subtitle, fresh lightweight startup,
+`[{workno}][{maker_name}]{title}`, system-mapped metadata locale or `ja_jp` fallback,
+preview-before-mutation in full mode, immediate safe rename in lightweight mode, Undo, About
+resources, and Explorer single-folder integration wording.
 
 ## Git and release status
 

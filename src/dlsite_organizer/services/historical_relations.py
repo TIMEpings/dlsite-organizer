@@ -11,7 +11,7 @@ from typing import Protocol
 from dlsite_organizer.domain.relation import Confidence, RelationType, WorkRelation
 from dlsite_organizer.persistence.metadata_store import MetadataObservation, MetadataStore
 from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
-from dlsite_organizer.domain.work_code import normalize_rjcode
+from dlsite_organizer.domain.work_code import normalize_workno
 from dlsite_organizer.services.translation_relations import TranslationRelationService
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class HistoricalRelationService:
         self._translation = translation_service or TranslationRelationService()
 
     def for_work(self, workno: str) -> HistoricalRelations:
-        workno = normalize_rjcode(workno)
+        workno = normalize_workno(workno)
         outgoing: list[HistoricalRelation] = []
         incoming: list[HistoricalRelation] = []
         aggregates: dict[tuple[str, RelationType, str], list[RelationEvidenceRecord]] = {}

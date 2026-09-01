@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Barrier
 
+import pytest
+
 from dlsite_organizer.domain.rename_execution import TransactionStatus
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
@@ -84,6 +86,23 @@ def test_quick_rename_happy_path_and_undo(tmp_path: Path) -> None:
     assert undone.status is TransactionStatus.UNDONE
     assert source.is_dir()
     assert not target.exists()
+
+
+@pytest.mark.parametrize("workno", ["BJ00000001", "VJ00000001"])
+def test_quick_rename_uses_the_same_pipeline_for_non_rj_work_codes(
+    tmp_path: Path,
+    workno: str,
+) -> None:
+    source = tmp_path / f"{workno} old"
+    source.mkdir()
+    lookup = FakeLookup({workno: Work(workno=workno, title="Target")})
+    service, _journal = _quick(tmp_path, lookup)
+
+    result = service.rename((source,))
+
+    assert result.status is QuickRenameStatus.SUCCESS
+    assert (tmp_path / f"[{workno}] Target").is_dir()
+    assert lookup.requested == [workno]
 
 
 def test_quick_rename_batch_uses_one_transaction_and_one_undo(tmp_path: Path) -> None:

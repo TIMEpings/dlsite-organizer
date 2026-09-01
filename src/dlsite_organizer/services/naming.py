@@ -16,13 +16,13 @@ from typing import Any
 from dlsite_organizer.domain.naming import sanitize_windows_name
 from dlsite_organizer.domain.work import Work
 
-DEFAULT_NAMING_TEMPLATE = "[{maker_name}][{workno}] {title}"
+DEFAULT_NAMING_TEMPLATE = "[{workno}][{maker_name}]{title}"
 
 # These are the tokens the Settings UI recommends for new templates.  The
 # names follow the normalized Work contract where possible; ``cv``, ``tags``,
 # ``age``, and ``language`` are deliberately user-facing formatter values.
 CANONICAL_TEMPLATE_VARIABLES = (
-    ("RJ编号", "{workno}"),
+    ("作品编号", "{workno}"),
     ("标题", "{title}"),
     ("社团", "{maker_name}"),
     ("社团ID", "{maker_id}"),

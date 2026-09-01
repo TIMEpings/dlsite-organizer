@@ -16,7 +16,7 @@ from dlsite_organizer.domain.organizer import (
     ScanCandidateStatus,
 )
 from dlsite_organizer.domain.work import Work
-from dlsite_organizer.domain.work_code import WorkCodeError, normalize_rjcode
+from dlsite_organizer.domain.work_code import WorkCodeError, normalize_workno
 from dlsite_organizer.services.naming import NamingService
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ class RenamePlanner:
         *,
         formatted_name: str | None = None,
     ) -> RenamePlan:
-        """Build one plan from a validated RJcode and normalized Work.
+        """Build one plan from a validated work number and normalized Work.
 
         ``formatted_name`` is accepted from ``LookupResult`` so the organizer
         reuses the existing NamingService pipeline.  Direct callers can omit it
@@ -62,7 +62,7 @@ class RenamePlanner:
         source = Path(source_path)
         current_name = source.name
         try:
-            normalized_code = normalize_rjcode(work_code)
+            normalized_code = normalize_workno(work_code)
         except WorkCodeError as exc:
             return RenamePlan(
                 source_path=source,
@@ -84,7 +84,7 @@ class RenamePlanner:
                 proposed_name=None,
                 target_path=None,
                 status=RenamePlanStatus.INVALID_CODE,
-                error="目录 RJcode 与查询到的作品编号不一致。",
+                error="目录作品编号与查询到的作品编号不一致。",
                 work_codes=(normalized_code,),
             )
 
@@ -200,7 +200,7 @@ class RenamePlanner:
             proposed_name=None,
             target_path=None,
             status=status,
-            error=candidate.error or "无法从目录名确定唯一的 RJcode。",
+            error=candidate.error or "无法从目录名确定唯一的作品编号。",
             work_codes=candidate.work_codes,
         )
 

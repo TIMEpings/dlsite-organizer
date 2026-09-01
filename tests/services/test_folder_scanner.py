@@ -60,7 +60,21 @@ def test_scanner_deduplicates_repeated_code_and_reports_ambiguity(tmp_path: Path
     assert valid.work_codes == ("RJ01609020",)
     assert ambiguous.work_code is None
     assert ambiguous.work_codes == ("RJ01609020", "RJ01636949")
-    assert "多个不同 RJcode" in (ambiguous.error or "")
+    assert "多个不同作品编号" in (ambiguous.error or "")
+
+
+@pytest.mark.parametrize("prefix", ["RJ", "BJ", "VJ"])
+def test_scanner_accepts_one_folder_for_each_supported_prefix(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    folder = tmp_path / f"fixture {prefix}00000001"
+    folder.mkdir()
+
+    result = FolderScanner().scan(tmp_path)
+
+    assert result.candidates[0].work_code == f"{prefix}00000001"
+    assert result.candidates[0].work_codes == (f"{prefix}00000001",)
 
 
 def test_scanner_ignores_files_and_hidden_directories(tmp_path: Path) -> None:

@@ -44,7 +44,7 @@ class WorkLookupStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class WorkLookup:
-    """The metadata result for one RJcode, or a safe failure description."""
+    """The metadata result for one work number, or a safe failure description."""
 
     work_code: str
     status: WorkLookupStatus
@@ -150,7 +150,7 @@ class OrganizerService:
         completed = 0
 
         logger.info(
-            "Preparing organizer preview for %s: %d unique RJcodes",
+            "Preparing organizer preview for %s: %d unique work numbers",
             scan.root_path,
             len(work_codes),
         )

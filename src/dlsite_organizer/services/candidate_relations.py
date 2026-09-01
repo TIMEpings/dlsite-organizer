@@ -21,7 +21,7 @@ from dlsite_organizer.domain.candidate import (
     KnownWorkSnapshot,
 )
 from dlsite_organizer.domain.manual_review import CandidateReviewOutcome, ManualReviewEvent
-from dlsite_organizer.domain.work_code import WorkCodeError, normalize_rjcode
+from dlsite_organizer.domain.work_code import WorkCodeError, normalize_workno
 from dlsite_organizer.services.historical_relations import HistoricalRelationService
 
 
@@ -138,7 +138,7 @@ class CandidateRelationService:
         evaluated_at = self._now()
         policy_provenance = self._policy_provenance()
         try:
-            normalized = normalize_rjcode(workno)
+            normalized = normalize_workno(workno)
         except WorkCodeError as exc:
             return CandidateSearchResult(
                 state=CandidateSearchState.INSUFFICIENT_METADATA,
@@ -257,8 +257,12 @@ def normalize_maker_name(value: str | None) -> str | None:
 
 def rj_numeric_distance(left: str, right: str) -> int | None:
     try:
-        a = int(normalize_rjcode(left)[2:])
-        b = int(normalize_rjcode(right)[2:])
+        a_code = normalize_workno(left)
+        b_code = normalize_workno(right)
+        if a_code[:2] != b_code[:2]:
+            return None
+        a = int(a_code[2:])
+        b = int(b_code[2:])
     except (TypeError, ValueError, WorkCodeError):
         return None
     return abs(a - b)

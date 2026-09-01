@@ -6,17 +6,17 @@ model.
 
 ## Naming
 
-Default behavior is unchanged:
+Fresh profiles use this naming default:
 
 ```text
-[{maker_name}][{workno}] {title}
+[{workno}][{maker_name}]{title}
 ```
 
 Canonical variables:
 
 | Variable | Meaning |
 | --- | --- |
-| `{workno}` | Canonical RJ work number from the normalized `Work` |
+| `{workno}` | Canonical RJ / BJ / VJ work number from the normalized `Work` |
 | `{title}` | Work title |
 | `{maker_name}` | DLsite listing maker/circle name |
 | `{maker_id}` | DLsite listing maker/circle ID |
@@ -57,24 +57,36 @@ English      en_us
 한국어       ko_kr
 ```
 
-The default is always `ja_jp`, independent of the UI language. Existing cache rows are not silently
-reinterpreted after a locale change; fresh rows continue until TTL expiry, and live/force refreshes
-use the new locale. Cache TTL is edited in hours, provider timeout in seconds, and both are applied
-to subsequent requests without an application restart.
+For a fresh profile or a missing config field, the default is derived from Qt's system locale:
+Japanese maps to `ja_jp`, English to `en_us`, Simplified Chinese to `zh_cn`, Traditional Chinese
+to `zh_tw`, and Korean to `ko_kr`. Unsupported languages fall back to `ja_jp`. This is the
+metadata display/request locale, not `Work.language`. Existing explicit values are never replaced
+when the system locale changes. Existing cache rows are not silently reinterpreted after a locale
+change; fresh rows continue until TTL expiry, and live/force refreshes use the new locale. Cache TTL
+is edited in hours, provider timeout in seconds, and both are applied to subsequent requests without
+an application restart.
+
+Qt's Chinese script is preferred over a language-only prefix: `zh_CN` and `zh_SG` map to `zh_cn`,
+while `zh_TW`, `zh_HK`, and `zh_MO` map to `zh_tw`. This keeps Traditional Chinese from being
+mistaken for Simplified Chinese on systems whose locale name is not sufficient by itself.
 
 ## Startup mode and drag-and-drop
 
 The **启动模式** setting controls which window appears on the next launch:
 
 ```text
-完整模式       full          (default)
+完整模式       full
 轻量模式       lightweight
 ```
+
+Fresh profiles default to `lightweight`. An existing explicit `startup_mode = "full"` remains
+`full`; loading a legacy file with the field omitted uses the new default and does not rewrite the
+file until the user saves it.
 
 It does not change the behavior of a temporary runtime mode switch. Full mode accepts a dropped
 root or explicitly selected same-parent work folders and generates a preview; it never executes
 because of a drop. Lightweight mode accepts only one or more existing work folders from the same
-parent. Each basename must contain exactly one valid RJcode; a missing or ambiguous RJcode is
+parent. Each basename must contain exactly one valid RJ / BJ / VJ work number; a missing or ambiguous work number is
 rejected and no lookup or filesystem mutation starts.
 
 In lightweight mode, actively dropping folders onto the clearly labelled **将 DLsite 作品文件夹拖到这里 / 拖入后将立即按当前设置重命名** zone is the confirmation for that Quick Rename action. The
@@ -148,4 +160,6 @@ Folder buttons use Qt desktop services and open the parent directory when the fi
 exist.
 
 Reset defaults loads values into the page after confirmation. It does not write the file until the
-user presses **保存设置**.
+user presses **保存设置**. The reset values are the current fresh-profile defaults: lightweight
+startup, `[{workno}][{maker_name}]{title}`, and the current supported system locale or `ja_jp`
+fallback.

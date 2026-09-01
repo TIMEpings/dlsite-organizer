@@ -91,7 +91,7 @@ class KnownWorkSnapshot(BaseModel):
     @field_validator("workno")
     @classmethod
     def normalize_workno(cls, value: str) -> str:
-        return str(WorkCode.parse(value, allowed_prefixes={"RJ"}))
+        return str(WorkCode.parse(value))
 
     @field_validator("regist_datetime", "observed_at", "fetched_at")
     @classmethod
@@ -130,7 +130,7 @@ class CandidateRelation(BaseModel):
     @field_validator("source_workno", "target_workno")
     @classmethod
     def normalize_workno(cls, value: str) -> str:
-        return str(WorkCode.parse(value, allowed_prefixes={"RJ"}))
+        return str(WorkCode.parse(value))
 
     @field_validator("evaluated_at")
     @classmethod

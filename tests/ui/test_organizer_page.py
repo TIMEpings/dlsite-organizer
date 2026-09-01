@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtWidgets import QApplication, QMessageBox, QTableWidgetItem
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QTableWidgetItem
 from tests.services.test_lookup_cache import (
     MutableClock,
     SequencedProvider,
@@ -286,7 +286,7 @@ def test_organizer_page_initializes_and_renders_preview(qapp: QApplication, tmp_
         header = page.table.horizontalHeaderItem(index)
         assert header is not None
         headers.append(header.text())
-    assert headers == ["状态", "当前目录名", "RJcode", "社团", "标题", "目标目录名"]
+    assert headers == ["状态", "当前目录名", "作品编号", "社团", "标题", "目标目录名"]
     assert "详情" not in headers
     status_item = cast(QTableWidgetItem, page.table.item(0, 0))
     current_item = cast(QTableWidgetItem, page.table.item(0, 1))
@@ -299,6 +299,19 @@ def test_organizer_page_initializes_and_renders_preview(qapp: QApplication, tmp_
     assert "可执行 1" in page.summary_label.text()
     assert page.status_label.text() == "预览生成完成；未修改本地文件。"
     assert sorted(path.name for path in tmp_path.iterdir()) == before
+    page.close()
+
+
+def test_organizer_page_removes_duplicate_subtitle_but_keeps_drop_safety_copy(
+    qapp: QApplication,
+) -> None:
+    page = OrganizerPage(OrganizerService(FakeLookupService()))
+
+    labels = "\n".join(label.text() for label in page.findChildren(QLabel))
+
+    assert "可选择根目录，也可将文件夹拖入此窗口" not in labels
+    assert "将作品文件夹或作品根目录拖到这里" in labels
+    assert "完整模式只生成预览，不会因拖放立即重命名。" in labels
     page.close()
 
 

@@ -35,7 +35,18 @@ def test_lookup_normalizes_fetches_and_names_work() -> None:
     result = service.lookup(" rj01609020 ")
 
     assert provider.received_workno == "RJ01609020"
-    assert result.formatted_name == "[サークル][RJ01609020] 日本語タイトル"
+    assert result.formatted_name == "[RJ01609020][サークル]日本語タイトル"
+
+
+@pytest.mark.parametrize("workno", ["RJ01609020", "BJ00000001", "VJ00000001"])
+def test_lookup_accepts_every_supported_work_code(workno: str) -> None:
+    provider = FakeProvider(work=Work(workno=workno, title="Fixture title"))
+
+    result = LookupService(provider, NamingService()).lookup(workno.lower())
+
+    assert provider.received_workno == workno
+    assert result.work.workno == workno
+    assert result.formatted_name.startswith(f"[{workno}]")
 
 
 def test_lookup_exposes_validation_error_as_user_safe_failure() -> None:
@@ -44,7 +55,7 @@ def test_lookup_exposes_validation_error_as_user_safe_failure() -> None:
         service.lookup("not-a-code")
 
     assert caught.value.kind is LookupFailureKind.INVALID_CODE
-    assert "RJ" in caught.value.user_message
+    assert caught.value.user_message == "请输入完整的 RJ、BJ 或 VJ 编号。"
 
 
 def test_lookup_maps_connection_failure_for_ui() -> None:

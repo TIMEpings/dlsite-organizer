@@ -19,7 +19,7 @@ def test_formats_complete_metadata() -> None:
         maker_id="RG12345",
         maker_name="Circle Name",
     )
-    assert NamingService().format(work) == "[Circle Name][RJ01234567] Work Title"
+    assert NamingService().format(work) == "[RJ01234567][Circle Name]Work Title"
 
 
 def test_default_template_placeholders_are_advertised_as_canonical() -> None:
@@ -38,13 +38,26 @@ def test_default_template_placeholders_are_advertised_as_canonical() -> None:
 
 def test_omits_missing_maker_group() -> None:
     work = Work(workno="RJ01234567", title="Work Title")
-    assert NamingService().format(work) == "[RJ01234567] Work Title"
+    assert NamingService().format(work) == "[RJ01234567]Work Title"
     assert "None" not in NamingService().format(work)
 
 
 def test_preserves_unicode_and_japanese() -> None:
     work = Work(workno="RJ01234567", title="雨音の夜・中文标题", maker_name="星空サークル")
-    assert NamingService().format(work) == "[星空サークル][RJ01234567] 雨音の夜・中文标题"
+    assert NamingService().format(work) == "[RJ01234567][星空サークル]雨音の夜・中文标题"
+
+
+@pytest.mark.parametrize("workno", ["RJ01234567", "BJ00000001", "VJ00000001"])
+def test_workno_placeholder_renders_the_complete_canonical_code(workno: str) -> None:
+    work = Work(workno=workno, title="Work Title")
+
+    assert NamingService("{workno}").format(work) == workno
+
+
+def test_new_default_template_is_the_fresh_profile_golden() -> None:
+    work = Work(workno="BJ00000001", title="Work Title", maker_name="Circle Name")
+
+    assert NamingService().format(work) == "[BJ00000001][Circle Name]Work Title"
 
 
 def test_replaces_windows_illegal_characters_and_trailing_dot_space() -> None:

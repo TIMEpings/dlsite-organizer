@@ -1,0 +1,23 @@
+[
+  {
+    "workno": "VJ00000001",
+    "product_id": "VJ00000001",
+    "work_name": "Fixture software listing",
+    "maker_id": "VG00001",
+    "maker_name": "Fixture Studio",
+    "age_category": 1,
+    "regist_datetime": "2026-02-03 00:00:00",
+    "genres": [
+      {"name": "Fixture genre"}
+    ],
+    "creaters": {
+      "voice_by": [
+        {"name": "Fixture Voice"}
+      ]
+    },
+    "language_editions": [],
+    "image_main": {
+      "url": "//img.example.test/VJ00000001.jpg"
+    }
+  }
+]

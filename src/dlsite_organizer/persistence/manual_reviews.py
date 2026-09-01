@@ -185,7 +185,7 @@ class ManualReviewRepository:
             return tuple(result)
 
     def reviews_for_work(self, workno: str) -> tuple[ManualReviewEvent, ...]:
-        normalized = str(WorkCode.parse(workno, allowed_prefixes={"RJ"}))
+        normalized = str(WorkCode.parse(workno))
         with self._database.session() as session:
             rows = session.scalars(
                 select(ManualRelationReviewRecord)

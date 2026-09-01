@@ -76,7 +76,7 @@ class PreviewStaleReason(StrEnum):
 class OrganizerPage(QWidget):
     """Present scan results and expose explicit rename and undo actions."""
 
-    _COLUMNS = ("状态", "当前目录名", "RJcode", "社团", "标题", "目标目录名")
+    _COLUMNS = ("状态", "当前目录名", "作品编号", "社团", "标题", "目标目录名")
 
     def __init__(
         self,
@@ -125,13 +125,7 @@ class OrganizerPage(QWidget):
 
         heading = QLabel("整理")
         heading.setObjectName("pageTitle")
-        description = QLabel(
-            "可选择根目录，也可将文件夹拖入此窗口。完整模式拖入只生成预览，不会立即重命名。"
-        )
-        description.setObjectName("pageDescription")
-        description.setWordWrap(True)
         layout.addWidget(heading)
-        layout.addWidget(description)
 
         self.drop_zone = DirectoryDropZone(
             "将作品文件夹或作品根目录拖到这里",
@@ -951,8 +945,8 @@ def _plan_status_label(status: RenamePlanStatus) -> str:
         RenamePlanStatus.UNCHANGED: "无需重命名",
         RenamePlanStatus.CONFLICT: "冲突",
         RenamePlanStatus.LOOKUP_FAILED: "查询失败",
-        RenamePlanStatus.INVALID_CODE: "无效 RJcode",
-        RenamePlanStatus.AMBIGUOUS_CODE: "RJcode 不唯一",
+        RenamePlanStatus.INVALID_CODE: "无效作品编号",
+        RenamePlanStatus.AMBIGUOUS_CODE: "作品编号不唯一",
         RenamePlanStatus.INVALID_TARGET: "目标名称无效",
         RenamePlanStatus.CANCELLED: "已取消",
     }.get(status, "需检查")

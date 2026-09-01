@@ -64,10 +64,19 @@ from dlsite_organizer.domain.work import (
     normalize_age_category,
     normalize_language_code,
 )
-from dlsite_organizer.domain.work_code import WorkCode, WorkCodeError, extract_work_codes
+from dlsite_organizer.domain.work_code import (
+    INVALID_WORK_CODE_MESSAGE,
+    SUPPORTED_WORK_CODE_PREFIXES,
+    WorkCode,
+    WorkCodeError,
+    extract_work_codes,
+    normalize_workno,
+)
 
 __all__ = [
+    "INVALID_WORK_CODE_MESSAGE",
     "MANUAL_RELATION_DIRECTIONALITY",
+    "SUPPORTED_WORK_CODE_PREFIXES",
     "AgeCategory",
     "BonusEvidence",
     "BonusEvidenceSnapshot",
@@ -123,5 +132,6 @@ __all__ = [
     "is_manual_relation_directional",
     "normalize_age_category",
     "normalize_language_code",
+    "normalize_workno",
     "parse_candidate_evidence_snapshot",
 ]

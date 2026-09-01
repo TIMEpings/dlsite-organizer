@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QLocale
 
+from dlsite_organizer.app.locale import metadata_locale_for
 from dlsite_organizer.app.settings import (
     AppSettings,
     CacheSettings,
@@ -11,11 +13,21 @@ from dlsite_organizer.app.settings import (
     StartupMode,
     load_settings,
 )
+from dlsite_organizer.services.naming import DEFAULT_NAMING_TEMPLATE
 
 
-def test_missing_config_uses_defaults(tmp_path: Path) -> None:
+def test_missing_config_uses_fresh_profile_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "dlsite_organizer.app.settings.default_metadata_locale",
+        lambda: "en_us",
+    )
     settings = load_settings(tmp_path / "missing.toml")
-    assert settings.naming_template == "[{maker_name}][{workno}] {title}"
+    assert settings.naming_template == DEFAULT_NAMING_TEMPLATE
+    assert settings.startup_mode is StartupMode.LIGHTWEIGHT
+    assert settings.provider.metadata_locale == "en_us"
     assert settings.provider.section == "maniax"
 
 
@@ -73,21 +85,30 @@ def test_settings_service_saves_atomically_and_round_trips_new_fields(tmp_path: 
     assert not any(config_path.parent.glob(f".{config_path.name}.*.tmp"))
 
 
-def test_legacy_toml_uses_defaults_for_new_fields(tmp_path: Path) -> None:
+def test_legacy_toml_uses_defaults_for_new_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     path = tmp_path / "config.toml"
     path.write_text('naming_template = "[{workno}] {title}"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "dlsite_organizer.app.settings.default_metadata_locale",
+        lambda: "zh_tw",
+    )
 
     settings = load_settings(path)
 
     assert settings.naming_template == "[{workno}] {title}"
-    assert settings.provider.metadata_locale == "ja_jp"
+    assert settings.provider.metadata_locale == "zh_tw"
     assert settings.max_tags == 0
 
 
-def test_startup_mode_round_trips_and_legacy_config_defaults_to_full(tmp_path: Path) -> None:
+def test_startup_mode_round_trips_and_legacy_config_defaults_to_lightweight(
+    tmp_path: Path,
+) -> None:
     legacy = tmp_path / "legacy.toml"
     legacy.write_text('naming_template = "[{workno}] {title}"\n', encoding="utf-8")
-    assert load_settings(legacy).startup_mode is StartupMode.FULL
+    assert load_settings(legacy).startup_mode is StartupMode.LIGHTWEIGHT
 
     path = tmp_path / "config.toml"
     service = SettingsService(
@@ -99,3 +120,48 @@ def test_startup_mode_round_trips_and_legacy_config_defaults_to_full(tmp_path: P
 
     assert saved.startup_mode is StartupMode.LIGHTWEIGHT
     assert load_settings(path).startup_mode is StartupMode.LIGHTWEIGHT
+
+
+@pytest.mark.parametrize(
+    ("system_locale", "expected"),
+    [
+        ("ja_JP", "ja_jp"),
+        ("en_US", "en_us"),
+        ("zh_CN", "zh_cn"),
+        ("zh_SG", "zh_cn"),
+        ("zh_TW", "zh_tw"),
+        ("zh_HK", "zh_tw"),
+        ("zh_MO", "zh_tw"),
+        ("ko_KR", "ko_kr"),
+        ("fr_FR", "ja_jp"),
+    ],
+)
+def test_system_locale_maps_to_verified_provider_locale(
+    system_locale: str,
+    expected: str,
+) -> None:
+    assert metadata_locale_for(QLocale(system_locale)) == expected
+
+
+def test_existing_explicit_settings_are_preserved_when_system_locale_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'startup_mode = "full"\n'
+        'naming_template = "[{rjcode}] custom"\n'
+        '[provider]\n'
+        'metadata_locale = "ja_jp"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "dlsite_organizer.app.settings.default_metadata_locale",
+        lambda: "zh_cn",
+    )
+
+    settings = load_settings(path)
+
+    assert settings.startup_mode is StartupMode.FULL
+    assert settings.naming_template == "[{rjcode}] custom"
+    assert settings.provider.metadata_locale == "ja_jp"

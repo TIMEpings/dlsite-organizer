@@ -54,7 +54,7 @@ class DropInputService:
             if not codes:
                 return DroppedDirectorySelection(root_path=path, selected_paths=None)
             if len(codes) > 1:
-                raise DropInputError("检测到多个 RJ 编号，无法确定作品。")
+                raise DropInputError("检测到多个不同作品编号，无法确定作品。")
             _validate_parent(path)
             return DroppedDirectorySelection(
                 root_path=path.parent,
@@ -86,10 +86,10 @@ class DropInputService:
             found = _codes_or_empty(path)
             if not found:
                 raise DropInputError(
-                    f"目录“{path.name}”不包含 RJ 编号，无法执行轻量重命名。"
+                    f"目录“{path.name}”不包含作品编号，无法执行轻量重命名。"
                 )
             if len(found) > 1:
-                raise DropInputError("检测到多个 RJ 编号，无法确定作品。")
+                raise DropInputError("检测到多个不同作品编号，无法确定作品。")
             codes.append(found[0])
         return DroppedDirectorySelection(
             root_path=parent,

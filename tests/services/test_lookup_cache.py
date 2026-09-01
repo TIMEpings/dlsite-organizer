@@ -491,6 +491,57 @@ def test_restart_returns_fresh_cache_without_process_memory_or_provider_call(
 
 
 @pytest.mark.parametrize(
+    ("workno", "section"),
+    [("BJ00000001", "books"), ("VJ00000001", "soft")],
+)
+def test_non_rj_work_code_cache_round_trip_skips_provider_after_restart(
+    tmp_path: Path,
+    workno: str,
+    section: str,
+) -> None:
+    path = tmp_path / f"{workno}.sqlite3"
+    start = datetime(2026, 8, 30, 10, 0, tzinfo=UTC)
+    work = make_work(workno).model_copy(update={"source_section": section})
+    first_provider = SequencedProvider([make_lookup(work)])
+    first_database, _store, first_service = open_service(path, first_provider, MutableClock(start))
+
+    first_service.lookup(workno.lower())
+    first_database.dispose()
+
+    restarted_provider = SequencedProvider([])
+    second_database, second_store, second_service = open_service(
+        path,
+        restarted_provider,
+        MutableClock(start + timedelta(minutes=5)),
+    )
+    result = second_service.lookup(workno)
+
+    assert result.freshness is LookupFreshness.CACHE_FRESH
+    assert result.work.workno == workno
+    assert result.work.source_section == section
+    assert restarted_provider.calls == []
+    assert second_store.get(workno) is not None
+    second_database.dispose()
+
+
+def test_cache_identity_keeps_same_digits_separate_by_work_code_prefix(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "identity.sqlite3")
+    database.initialize()
+    store = MetadataStore(database)
+
+    store.save(make_work("RJ00000001", title="RJ fixture"), None, source="fixture")
+    store.save(make_work("BJ00000001", title="BJ fixture"), None, source="fixture")
+
+    assert store.get("RJ00000001") is not None
+    assert store.get("RJ00000001").work.title == "RJ fixture"  # type: ignore[union-attr]
+    assert store.get("BJ00000001") is not None
+    assert store.get("BJ00000001").work.title == "BJ fixture"  # type: ignore[union-attr]
+    database.dispose()
+
+
+@pytest.mark.parametrize(
     ("workno", "role", "relations"),
     [
         ("RJ01609020", TranslationRole.ORIGINAL, ()),

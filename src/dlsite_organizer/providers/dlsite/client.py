@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from urllib.parse import quote
 
 import httpx
@@ -40,6 +41,47 @@ DLSITE_PRODUCT_INFO_AJAX = "DLSITE_PRODUCT_INFO_AJAX"
 DLSITE_PRODUCT_JSON = "DLSITE_PRODUCT_JSON"
 DLSITE_HTML_JSONLD = "DLSITE_HTML_JSONLD"
 DLSITE_ENRICHED_SOURCE = f"{DLSITE_PRODUCT_INFO_AJAX}+{DLSITE_PRODUCT_JSON}"
+
+
+class DlsiteSection(StrEnum):
+    """Known public DLsite sections used by the bounded routing policy."""
+
+    MANIAX = "maniax"
+    HOME = "home"
+    GIRLS = "girls"
+    BOOKS = "books"
+    SOFT = "soft"
+    PRO = "pro"
+
+
+@dataclass(frozen=True, slots=True)
+class DlsiteSourceRoute:
+    """A deterministic, bounded route policy for one WorkCode."""
+
+    sections: tuple[str, ...]
+    resolve_public_page: bool = False
+
+
+def source_route_for(
+    work_code: WorkCode,
+    *,
+    configured_section: str,
+) -> DlsiteSourceRoute:
+    """Map a typed work code to its known public sections.
+
+    RJ keeps the user's configured section for backwards compatibility.  BJ
+    has one known books route.  VJ is published in both soft and pro; the
+    public product page is consulted in that fixed order so the provider never
+    brute-forces storefront sections.
+    """
+    if work_code.prefix == "BJ":
+        return DlsiteSourceRoute((DlsiteSection.BOOKS.value,))
+    if work_code.prefix == "VJ":
+        return DlsiteSourceRoute(
+            (DlsiteSection.SOFT.value, DlsiteSection.PRO.value),
+            resolve_public_page=True,
+        )
+    return DlsiteSourceRoute((configured_section,))
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,13 +184,66 @@ class DlsiteProvider:
 
     def fetch_work_lookup(self, workno: str) -> DlsiteWorkLookup:
         """Fetch core evidence, then optionally enrich it from product JSON."""
-        normalized = str(WorkCode.parse(workno, allowed_prefixes={"RJ"}))
+        parsed = WorkCode.parse(workno)
+        normalized = str(parsed)
+        route = source_route_for(parsed, configured_section=self._site.section)
+        last_http_status: int | None = None
+        last_parse_error: DlsiteParseError | None = None
         try:
             with self._client_factory() as client:
-                structured = self._fetch_structured(client, normalized)
-                if structured is not None:
-                    return self._build_enriched_lookup(client, structured)
-                response = client.get(self.build_product_url(normalized))
+                for section in route.sections:
+                    site = self._site_for_section(section)
+                    page_response: httpx.Response | None = None
+                    if route.resolve_public_page:
+                        page_response = self._fetch_public_page(client, normalized, site)
+                        if page_response is not None:
+                            if page_response.status_code == httpx.codes.NOT_FOUND:
+                                continue
+                            site = self._site_for_section(
+                                _resolved_section(page_response, fallback=site.section)
+                            )
+
+                    structured = self._fetch_structured(client, normalized, site)
+                    if structured is not None:
+                        return self._build_enriched_lookup(client, structured, site=site)
+
+                    response = (
+                        page_response
+                        if page_response is not None
+                        else client.get(site.product_page_url(normalized))
+                    )
+                    if response.status_code == httpx.codes.NOT_FOUND:
+                        continue
+                    if response.is_error:
+                        last_http_status = response.status_code
+                        logger.info(
+                            "DLsite product page returned HTTP %s for %s in %s",
+                            response.status_code,
+                            normalized,
+                            site.section,
+                        )
+                        continue
+
+                    try:
+                        source = parse_product_page_source(response.text)
+                        return DlsiteWorkLookup(
+                            work=normalize_product_page_source(
+                                source,
+                                workno=normalized,
+                                section=site.section,
+                            ),
+                            product_info=None,
+                            source=DLSITE_HTML_JSONLD,
+                            core_source=DLSITE_HTML_JSONLD,
+                        )
+                    except DlsiteParseError as exc:
+                        last_parse_error = exc
+                        logger.info(
+                            "DLsite product page unusable for %s in %s: %s",
+                            normalized,
+                            site.section,
+                            exc,
+                        )
         except httpx.TimeoutException as exc:
             logger.warning("DLsite request timed out for %s", normalized)
             raise DlsiteConnectionError("DLsite request timed out") from exc
@@ -156,48 +251,41 @@ class DlsiteProvider:
             logger.warning("DLsite connection failed for %s: %s", normalized, exc)
             raise DlsiteConnectionError("DLsite connection failed") from exc
 
-        if response.status_code == httpx.codes.NOT_FOUND:
+        if last_parse_error is not None:
+            raise last_parse_error
+        if last_http_status is None:
             raise WorkNotFoundError(normalized)
-        if response.is_error:
-            logger.warning("DLsite returned HTTP %s for %s", response.status_code, normalized)
-            raise DlsiteHttpError(f"Unexpected HTTP status {response.status_code}")
-
-        try:
-            source = parse_product_page_source(response.text)
-            return DlsiteWorkLookup(
-                work=normalize_product_page_source(
-                    source,
-                    workno=normalized,
-                    section=self._site.section,
-                ),
-                product_info=None,
-                source=DLSITE_HTML_JSONLD,
-                core_source=DLSITE_HTML_JSONLD,
-            )
-        except DlsiteParseError:
-            logger.exception("Failed to parse DLsite metadata for %s", normalized)
-            raise
+        logger.warning("DLsite returned HTTP %s for %s", last_http_status, normalized)
+        raise DlsiteHttpError(f"Unexpected HTTP status {last_http_status}")
 
     def build_product_url(self, workno: str) -> str:
-        """Build a section-scoped public product URL in one centralized location."""
-        return self._site.product_page_url(workno)
+        """Build a routed public product URL in one centralized location."""
+        normalized = str(WorkCode.parse(workno))
+        return self._site_for_workno(normalized).product_page_url(normalized)
 
     def build_product_info_url(self, workno: str) -> str:
-        """Build the candidate structured endpoint URL for the configured site."""
-        return self._site.product_info_url(workno)
+        """Build the candidate structured endpoint URL for the routed section."""
+        normalized = str(WorkCode.parse(workno))
+        return self._site_for_workno(normalized).product_info_url(normalized)
 
     def build_product_metadata_url(self, workno: str) -> str:
         """Build the optional rich product metadata URL for one exact listing."""
-        return self._site.product_metadata_url(workno, locale=self._metadata_locale)
+        normalized = str(WorkCode.parse(workno))
+        return self._site_for_workno(normalized).product_metadata_url(
+            normalized,
+            locale=self._metadata_locale,
+        )
 
     def _build_enriched_lookup(
         self,
         client: httpx.Client,
         structured: ProductInfoAjaxSource,
+        *,
+        site: DlsiteSite,
     ) -> DlsiteWorkLookup:
         """Combine one core response with bounded, non-recursive rich probes."""
-        core_work = normalize_product_info_ajax(structured, section=self._site.section)
-        rich = self._fetch_product_metadata(client, structured.requested_workno)
+        core_work = normalize_product_info_ajax(structured, section=site.section)
+        rich = self._fetch_product_metadata(client, structured.requested_workno, site=site)
         if rich is None:
             return DlsiteWorkLookup(
                 work=core_work,
@@ -213,7 +301,11 @@ class DlsiteProvider:
         if translation is not None and translation.is_child is True and translation.original_workno:
             # This is deliberately one bounded original lookup.  It is not a
             # recursive translation graph crawl and never follows child lists.
-            original_rich = self._fetch_product_metadata(client, translation.original_workno)
+            original_rich = self._fetch_product_metadata(
+                client,
+                translation.original_workno,
+                site=site,
+            )
 
         work = merge_product_metadata(
             core_work,
@@ -239,10 +331,12 @@ class DlsiteProvider:
         self,
         client: httpx.Client,
         workno: str,
+        *,
+        site: DlsiteSite,
     ) -> ProductMetadataSource | None:
         """Fetch optional rich metadata without weakening core lookup."""
         try:
-            response = client.get(self.build_product_metadata_url(workno))
+            response = client.get(site.product_metadata_url(workno, locale=self._metadata_locale))
         except httpx.RequestError as exc:
             logger.info("Rich DLsite source unavailable for %s: %s", workno, exc)
             return None
@@ -259,7 +353,12 @@ class DlsiteProvider:
             logger.info("Rich DLsite source unusable for %s: %s", workno, exc)
             return None
 
-    def _fetch_structured(self, client: httpx.Client, workno: str) -> ProductInfoAjaxSource | None:
+    def _fetch_structured(
+        self,
+        client: httpx.Client,
+        workno: str,
+        site: DlsiteSite,
+    ) -> ProductInfoAjaxSource | None:
         """Return structured evidence when valid, otherwise defer to HTML once.
 
         An unavailable endpoint, an unexpected response, or a contract mismatch
@@ -267,7 +366,7 @@ class DlsiteProvider:
         chance rather than triggering section guessing or further requests.
         """
         try:
-            response = client.get(self.build_product_info_url(workno))
+            response = client.get(site.product_info_url(workno))
         except httpx.RequestError as exc:
             logger.info("Structured DLsite source unavailable for %s: %s", workno, exc)
             return None
@@ -285,6 +384,33 @@ class DlsiteProvider:
             logger.info("Structured DLsite source unusable for %s: %s", workno, exc)
             return None
 
+    def _fetch_public_page(
+        self,
+        client: httpx.Client,
+        workno: str,
+        site: DlsiteSite,
+    ) -> httpx.Response | None:
+        """Resolve multi-section VJ listings through one public-page request."""
+        try:
+            return client.get(site.product_page_url(workno))
+        except httpx.RequestError as exc:
+            logger.info(
+                "DLsite route resolution unavailable for %s in %s: %s",
+                workno,
+                site.section,
+                exc,
+            )
+            return None
+
+    def _site_for_section(self, section: str) -> DlsiteSite:
+        return DlsiteSite(base_url=self._site.base_url, section=section.strip("/"))
+
+    def _site_for_workno(self, workno: str) -> DlsiteSite:
+        """Return the first bounded route site for a public URL helper."""
+        parsed = WorkCode.parse(workno)
+        route = source_route_for(parsed, configured_section=self._site.section)
+        return self._site_for_section(route.sections[0])
+
     def _new_client(self) -> httpx.Client:
         return httpx.Client(
             timeout=self._timeout,
@@ -295,3 +421,15 @@ class DlsiteProvider:
                 "Accept-Language": "ja,en;q=0.8",
             },
         )
+
+
+def _resolved_section(response: httpx.Response, *, fallback: str) -> str:
+    """Read the section selected by DLsite's public-page redirect."""
+    parts = response.url.path.strip("/").split("/")
+    try:
+        work_index = parts.index("work")
+    except ValueError:
+        return fallback
+    if work_index == 0 or not parts[work_index - 1]:
+        return fallback
+    return parts[work_index - 1]

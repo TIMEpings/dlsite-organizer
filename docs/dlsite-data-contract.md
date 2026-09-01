@@ -1,16 +1,90 @@
-# DLsite metadata source contract (Phase A)
+# DLsite metadata source contract (Phase A + WorkCode compatibility)
 
 This document records the Phase A metadata-correctness recovery audit on
 2026-08-31. It separates verified live source behavior from the older
 synthetic HTML fallback fixture and from the public reference implementation
-studied during the audit.
+studied during the audit. The additional RJ/BJ/VJ routing audit was performed
+with small read-only probes on 2026-09-01; no response body or adult title was
+written to the repository.
+
+## WorkCode contract and bounded routing
+
+`WorkCode` is the single parser and domain identity for all supported DLsite
+work numbers. It accepts case-insensitive `RJ`, `BJ`, and `VJ` prefixes, plus
+six through ten decimal digits, and stores the normalized uppercase form. The
+six-to-ten range is the existing application contract retained for historical
+and future identifiers; it is not a claim that every current identifier is
+exactly eight digits. The live samples included eight-digit `RJ`/`BJ` numbers
+and both six- and eight-digit `VJ` numbers.
+
+Folder extraction uses the same parser. A basename with zero valid codes is
+not a candidate, one distinct normalized code is valid, repeated occurrences
+of that code are deduplicated, and two or more distinct codes are ambiguous
+and fail closed. The same normalized `Work.workno` is used by Lookup,
+Organizer, Quick Rename, Naming, persistence, and cache lookup. `{workno}`
+renders all three prefixes; the legacy `{rjcode}` formatter alias resolves to
+that same current work number for compatibility and is not advertised in the
+UI.
+
+Routing is centralized in `DlsiteSection`/`source_route_for`:
+
+| WorkCode prefix | Public page route | Structured/rich route | Routing rule |
+| --- | --- | --- | --- |
+| RJ | `/{configured-section}/work/=/product_id/<WORKNO>.html` | same configured section | preserve the existing configured section |
+| BJ | `/books/work/=/product_id/<WORKNO>.html` | `/books/product/info/ajax`, `/books/api/=/product.json` | deterministic `books` section |
+| VJ | `/soft/...` or `/pro/...` | resolved final section | request `soft`, follow one public-page redirect, then use the final `soft` or `pro` section; bounded fallback is `pro` |
+
+The VJ policy has exactly two known sections and does not brute-force the
+storefront. HTML fallback uses the same resolved section. Prefixes do not
+select different domain or naming pipelines; only the provider route seam is
+prefix-aware.
+
+## Prefix capability matrix
+
+The following matrix records the observed capability of the current public
+routes. `YES` means the field/source was present in the reviewed sample;
+`OPTIONAL` means the endpoint is valid but the category or listing may omit
+the field; `NO` means the reviewed source does not provide that field; and
+`UNVERIFIED` means this small probe did not establish a reliable contract.
+The source columns distinguish core AJAX from rich product JSON where that
+matters.
+
+| Prefix | Valid public page | AJAX | Rich JSON | Required section | title | maker_id | maker_name | series | CV | tags | age | language | release date | cover | translation_info | bonuses |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| RJ | YES: `maniax` sample | YES | YES | `maniax` in probe; configured for app | YES / YES | YES / YES | OPTIONAL / YES | OPTIONAL | YES | YES | YES / YES | OPTIONAL / OPTIONAL | YES / YES | YES / YES | YES | YES |
+| BJ | YES: `books` sample | YES | YES | `books` | YES / YES | YES / YES | OPTIONAL / YES | OPTIONAL | OPTIONAL | YES | YES / YES | OPTIONAL | YES / YES | YES / YES | YES | YES |
+| VJ | YES: `soft` and `pro` samples | YES after route resolution | YES after route resolution | resolved `soft` or `pro` | YES / YES | YES / YES | OPTIONAL / YES | OPTIONAL | YES | YES | YES / YES | OPTIONAL | YES / YES | YES / YES | YES | YES |
+
+For the `title` through `cover` columns, a pair such as `YES / OPTIONAL`
+means core AJAX / rich JSON respectively. `translation_info` and `bonuses`
+are core AJAX fields; the rich endpoint has `NO` for those provider-local
+fields. Rich `series`, CV, tags, language, and cover remain optional at the
+normalized `Work` boundary even when the endpoint supports their shape.
+
+The live samples used for this matrix were `RJ01609020`, `BJ01755969`,
+`VJ01002044`, and `VJ009933`. Their public responses were not persisted. The
+semantic validation report is intentionally title-free:
+
+| WorkNo | resolved section | core | rich | maker id | series | CV count | tag count | age | language |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- |
+| `RJ01609020` | `maniax` | 200 | 200 | `RG01058997` | absent | 1 | 6 | 1 / GENERAL | `JPN` |
+| `BJ01755969` | `books` | 200 | 200 | `BG01210` | present | 0 | 20 | 3 / R18 | absent |
+| `VJ01002044` | `soft` after public redirect | 200 | 200 | `VG01000142` | absent | 8 | 6 | 1 / GENERAL | absent |
+| `VJ009933` | `pro` after public redirect | 200 | 200 | `VG01723` | absent | 9 | 5 | 3 / R18 | absent |
+
+All four probes also returned an HTTP 200 product page with JSON-LD, but the
+observed JSON-LD was not a stable `Product` payload for the normalized rich
+fields. The HTML parser therefore remains a fail-soft fallback, not a claim
+that HTML provides the matrix fields. A missing rich field is represented as
+`None` or an empty tuple/list and the lookup still succeeds.
 
 ## Source matrix
 
-The minimal live probes used the three reviewed translation-topology works
+The original source audit used the three reviewed translation-topology works
 (`RJ01609020`, `RJ01636949`, and `RJ01637033`) in the configured `maniax`
-section and repeated the endpoint shape against `home`. Responses were not
-written to the repository.
+section and repeated the endpoint shape against `home`. The compatibility
+audit above adds one or two small samples for each newly supported prefix.
+Responses were not written to the repository.
 
 | Field / evidence | `product/info/ajax` | `api/=/product.json` | Product-page HTML |
 | --- | --- | --- | --- |
@@ -29,11 +103,14 @@ written to the repository.
 ### Live endpoint observations
 
 The core endpoint
-`https://www.dlsite.com/maniax/product/info/ajax?product_id=<RJ>` returned
-HTTP 200 JSON objects keyed by the requested RJcode. The rich endpoint
-`https://www.dlsite.com/maniax/api/=/product.json?workno=<RJ>&locale=ja_jp`
-returned HTTP 200 JSON arrays containing one product object. The same paths
-were accepted under the probed `home` section.
+`https://www.dlsite.com/<section>/product/info/ajax?product_id=<WORKNO>`
+returned HTTP 200 JSON objects keyed by the requested RJ, BJ, or VJ work
+number for the routes in the matrix. The rich endpoint
+`https://www.dlsite.com/<section>/api/=/product.json?workno=<WORKNO>&locale=ja_jp`
+returned HTTP 200 JSON arrays containing one product object. BJ required the
+`books` section in the live probe. VJ public-page redirects resolved to
+`soft` or `pro`, and the provider then used that resolved section for both
+structured endpoints.
 
 The live product pages returned HTTP 200 HTML and contained JSON-LD documents,
 but the inspected documents were `BreadcrumbList`/`WebSite`, not a usable
@@ -160,9 +237,14 @@ SQLite upgrades use the repository's additive `ALTER TABLE ... ADD COLUMN`
 strategy and do not delete or rewrite existing metadata, relation, review, or
 rename-journal rows.
 
+The cache primary key remains the normalized `workno` string; no prefix column
+or migration is necessary. Because the complete canonical string is the key,
+`RJ00000001`, `BJ00000001`, and `VJ00000001` are distinct identities.
+
 ## Naming, Lookup, and Organizer consumers
 
-`NamingService` keeps the existing default template and can access the
+`NamingService` uses the fresh-profile default template
+`[{workno}][{maker_name}]{title}` and can access the
 correct normalized fields through `workno`/`rjcode`, `title`/`work_name`,
 maker fields, `series_name`, `cv`/`cv_list`, `tags`/`tags_list`,
 `age_category`, and `language`. This is only field access; settings and

@@ -162,7 +162,7 @@ class SettingsPage(QWidget):
         naming_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self.template_input = QLineEdit()
         self.template_input.setObjectName("namingTemplateInput")
-        self.template_input.setPlaceholderText("例如：[{maker_name}][{workno}] {title}")
+        self.template_input.setPlaceholderText("例如：[{workno}][{maker_name}]{title}")
         self.template_input.setToolTip(
             "只支持简单的 {变量名} 占位符；[ ... ] 空段会在内容缺失时清理。"
         )

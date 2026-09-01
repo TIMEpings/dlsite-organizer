@@ -148,7 +148,7 @@ class FolderScanner:
                         work_code=None,
                         work_codes=tuple(codes),
                         status=ScanCandidateStatus.AMBIGUOUS_WORK_CODE,
-                        error=f"目录名包含多个不同 RJcode：{'、'.join(codes)}。",
+                        error=f"目录名包含多个不同作品编号：{'、'.join(codes)}。",
                     )
                 )
                 continue

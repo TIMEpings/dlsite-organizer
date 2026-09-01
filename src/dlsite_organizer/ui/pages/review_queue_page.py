@@ -84,7 +84,7 @@ class ReviewQueuePage(QWidget):
 
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["RJ A", "标题 A", "RJ B", "标题 B", "Maker", "登记日期", "RJ 距离", "审阅状态"]
+            ["作品编号 A", "标题 A", "作品编号 B", "标题 B", "Maker", "登记日期", "编号距离", "审阅状态"]
         )
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -173,7 +173,7 @@ class ReviewQueuePage(QWidget):
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(4)
-        workno = QLabel("RJcode：—")
+        workno = QLabel("作品编号：—")
         workno.setWordWrap(True)
         full_title = QLabel("完整标题：标题不可用")
         full_title.setWordWrap(True)
@@ -350,7 +350,7 @@ class ReviewQueuePage(QWidget):
         provenance: QLabel,
         snapshot: KnownWorkSnapshot,
     ) -> None:
-        workno.setText(f"RJcode：{snapshot.workno}")
+        workno.setText(f"作品编号：{snapshot.workno}")
         title.setText(f"完整标题：{_display_title(snapshot)}")
         maker_id.setText(f"Maker ID：{snapshot.maker_id or 'Maker ID unavailable'}")
         maker_name.setText(f"Maker name：{snapshot.maker_name or 'Maker name unavailable'}")

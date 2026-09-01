@@ -34,14 +34,16 @@ coordinates validation, provider access, error translation, and naming without k
 The UI owns thread lifecycle and presentation only; `LookupWorker` invokes services and emits
 values, and never manipulates widgets or implements parsing policy.
 
-`DlsiteSite` builds every section-scoped URL in one place. `DlsiteProvider` first requests the
-candidate `product/info/ajax?product_id=<WORKNO>` source. A successful response is used only when it
+`DlsiteSite` builds every section-scoped URL in one place. `source_route_for()` maps the typed
+`WorkCode` to a bounded source route: RJ keeps the configured section, BJ uses `books`, and VJ
+resolves a public-page redirect across the fixed `soft`/`pro` pair before requesting structured
+sources. `DlsiteProvider` first requests the candidate `product/info/ajax?product_id=<WORKNO>` source. A successful response is used only when it
 validates as `ProductInfoAjaxSource`; it then makes one exact-listing
 `api/=/product.json?workno=<WORKNO>&locale=<configured-locale>` enrichment request. A translation child may trigger
 one additional rich request for its explicit original work; child lists are never crawled. If the core
 source is unusable, the provider makes one HTML fallback request instead. There is no brute-force
-section probing. The configured section remains a provider implementation detail and is the narrow
-boundary where a future resolver can be introduced.
+section probing. The route seam remains a provider implementation detail and is the narrow boundary
+where future source routing can be introduced.
 
 `ProductInfoAjaxSource` and its nested `TranslationInfoSource`, together with
 `ProductMetadataSource` and its nested rich DTOs, are provider-local Pydantic models with
@@ -63,7 +65,7 @@ and references into confirmed directional relations without re-requesting or rep
 `fetch_work()` remains the metadata-only API for simple callers.
 
 `TranslationRelationService` is the only place that interprets DLsite translation topology. A true
-`is_original`, `is_parent`, or `is_child` flag determines `TranslationRole`; concrete target RJcodes
+`is_original`, `is_parent`, or `is_child` flag determines `TranslationRole`; concrete target work numbers
 are required before creating edges. Every created edge has `Confidence.CONFIRMED` and
 `EvidenceType.EXPLICIT_TRANSLATION_REFERENCE`. It never requests related works, persists relations,
 or uses maker/date/RJ proximity heuristics. `WorkRelation` stores only source/target work identities,
@@ -100,9 +102,11 @@ Settings use `tomllib` and validated Pydantic models. `SettingsPage` edits the s
 schema that TOML loading uses; it never writes TOML directly. `SettingsService` validates a complete
 model, writes UTF-8 TOML through a same-directory temporary file and `os.replace`, then notifies the
 runtime. Missing configuration is normal and uses built-in defaults. Invalid present configuration is
-surfaced rather than silently ignored. The default metadata locale remains `ja_jp`; changing locale
-affects subsequent live/force requests, while fresh existing cache entries remain governed by the
-current TTL rather than being silently reinterpreted.
+surfaced rather than silently ignored. Fresh profiles default to lightweight startup,
+`[{workno}][{maker_name}]{title}`, and the system-mapped supported metadata locale with `ja_jp`
+fallback. Changing locale affects subsequent live/force requests, while fresh existing cache entries
+remain governed by the current TTL rather than being silently reinterpreted; explicit existing
+settings are preserved.
 
 `NamingService` is the one renderer for lookup names, Organizer plans, and Settings preview. Its
 canonical placeholders are `{workno}`, `{title}`, `{maker_name}`, `{maker_id}`, `{series_name}`,
@@ -132,7 +136,7 @@ OrganizerWorker
 OrganizerService
         ↓
 FolderScanner → ScanResult → ScanCandidate[]
-        ↓ direct RJcode batch, sequential and deduplicated
+        ↓ direct RJ / BJ / VJ work-number batch, sequential and deduplicated
 LookupService → WorkLookup[] → Work
         ↓
 NamingService → RenamePlanner → RenamePlan[]
@@ -143,8 +147,8 @@ OrganizerPage preview table
 `FolderScanner` reads only direct child directories. It excludes regular files, hidden entries and
 symlink directories, records no-code children as skipped, and keeps ambiguous multi-code folders
 as visible warning candidates. `extract_work_codes()` lives beside `WorkCode` parsing, so folder
-extraction and manual RJ validation share one normalization rule. V0.3 intentionally does not
-recursively inspect work contents or support VJ/BJ Organizer candidates.
+extraction and manual lookup validation share one normalization rule. It accepts the same RJ / BJ /
+VJ contract; VJ/BJ do not create alternate Organizer pipelines.
 
 The Organizer table is a projection of one authoritative in-memory `OrganizerPreview` collection.
 The explicit **扫描并预览** action uses replace semantics: the new successful result replaces the
@@ -168,10 +172,11 @@ the reason is available on hover. No separate details column is used.
 
 The application has two runtime windows backed by one `ApplicationComponents` instance. Full mode
 keeps the review boundary: a drop becomes a preview. A single dropped directory whose basename has
-one RJcode is treated as one explicitly selected work folder; a basename without RJcode is treated
+one RJ / BJ / VJ work number is treated as one explicitly selected work folder; a basename without a
+work number is treated
 as an organizer root and receives the ordinary direct-child scan. Multiple work folders must be
 direct siblings, and selective preview never scans their other siblings. Files, non-local URLs,
-symlink/junction/reparse-point entries, ambiguous RJcodes, and mixed-parent drops are rejected.
+symlink/junction/reparse-point entries, ambiguous work numbers, and mixed-parent drops are rejected.
 
 Lightweight mode is a second UI entry point, not a second rename implementation:
 
@@ -263,7 +268,7 @@ last-mile source/target checks fail closed without overwrite. The invariant rema
 NO JOURNAL = NO MUTATION
 ```
 
-`WorkLookup` is an in-memory batch record. `OrganizerService` deduplicates RJcodes for one run,
+`WorkLookup` is an in-memory batch record. `OrganizerService` deduplicates work numbers for one run,
 calls the existing `LookupService` sequentially, isolates failures, and emits progress through the
 worker boundary. It shares the persistent `LookupService` metadata cache with the manual lookup
 page; fresh cache hits avoid provider calls, while stale fallback is surfaced as a plan warning.

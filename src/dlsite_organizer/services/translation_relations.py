@@ -61,7 +61,7 @@ class TranslationRelationService:
             return TranslationAnalysis()
 
         try:
-            normalized_workno = str(WorkCode.parse(workno, allowed_prefixes={"RJ"}))
+            normalized_workno = str(WorkCode.parse(workno))
         except WorkCodeError as exc:
             return self._invalid(translation_info, str(exc))
 
@@ -164,7 +164,7 @@ class TranslationRelationService:
         field_name: str,
     ) -> None:
         try:
-            target_workno = str(WorkCode.parse(raw_target_workno, allowed_prefixes={"RJ"}))
+            target_workno = str(WorkCode.parse(raw_target_workno))
         except (TypeError, WorkCodeError) as exc:
             issues.append(f"{field_name} contains an invalid workno: {exc}")
             return

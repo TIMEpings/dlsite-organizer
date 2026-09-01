@@ -27,3 +27,9 @@ DLsite response. Malformed AJAX inputs are constructed inline in tests and are
 explicitly edge cases, not normal-response contracts.
 Rich-source cases with a non-empty series, unknown language/age, or malformed
 optional fields are also constructed inline and are explicitly synthetic.
+
+`product_info_BJ00000001.json`, `product_metadata_BJ00000001.json`,
+`product_info_VJ00000001.json`, and `product_metadata_VJ00000001.json` are
+small neutral synthetic fixtures for the BJ/VJ routing and merge tests. They
+contain no real work title or adult-content catalogue data; live BJ/VJ
+observations are recorded without titles in `docs/dlsite-data-contract.md`.

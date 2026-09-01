@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+
 from dlsite_organizer.domain.organizer import RenamePlanStatus
 from dlsite_organizer.domain.work import AgeCategory, Work
 from dlsite_organizer.services.lookup import LookupFailure, LookupFailureKind, LookupResult
@@ -30,6 +32,27 @@ class FakeBatchLookupService:
             work=work,
             formatted_name=f"[{work.workno}] {work.title}",
         )
+
+
+@pytest.mark.parametrize("workno", ["RJ00000001", "BJ00000001", "VJ00000001"])
+def test_organizer_preview_supports_all_work_code_prefixes(
+    tmp_path: Path,
+    workno: str,
+) -> None:
+    source = tmp_path / f"old {workno}"
+    source.mkdir()
+    provider = FakeBatchLookupService(
+        works={workno: Work(workno=workno, title="Fixture title")}
+    )
+
+    preview = OrganizerService(provider).preview(tmp_path)
+
+    assert provider.requested == [workno]
+    assert len(preview.plans) == 1
+    assert preview.plans[0].status is RenamePlanStatus.READY
+    assert preview.plans[0].work_code == workno
+    assert preview.plans[0].proposed_name == f"[{workno}] Fixture title"
+    assert source.exists()
 
 
 def test_organizer_maps_metadata_and_deduplicates_batch_requests(tmp_path: Path) -> None:

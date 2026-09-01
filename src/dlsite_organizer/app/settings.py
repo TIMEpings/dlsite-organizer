@@ -14,9 +14,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from dlsite_organizer.app.locale import SUPPORTED_METADATA_LOCALES, default_metadata_locale
 from dlsite_organizer.services.naming import DEFAULT_NAMING_TEMPLATE, NamingService
 
-_SUPPORTED_METADATA_LOCALES = frozenset({"ja_jp", "en_us", "zh_cn", "zh_tw", "ko_kr"})
+_SUPPORTED_METADATA_LOCALES = frozenset(SUPPORTED_METADATA_LOCALES)
 _WINDOWS_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _DATE_DIRECTIVES = frozenset("aAbBcdHIjmMpSUwWxXyYZ%")
 
@@ -27,7 +28,7 @@ class ProviderSettings(BaseModel):
     section: str = Field(default="maniax", min_length=1, pattern=r"^[a-z0-9_-]+$")
     base_url: str = "https://www.dlsite.com"
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
-    metadata_locale: str = "ja_jp"
+    metadata_locale: str = Field(default_factory=lambda: default_metadata_locale())
 
     @field_validator("metadata_locale")
     @classmethod
@@ -68,7 +69,7 @@ class AppSettings(BaseModel):
     hide_general_age: bool = False
     date_format: str = "%Y-%m-%d"
     illegal_char_replacement: str = "_"
-    startup_mode: StartupMode = StartupMode.FULL
+    startup_mode: StartupMode = StartupMode.LIGHTWEIGHT
     database_path: Path = Field(default_factory=lambda: default_data_dir() / "metadata.sqlite3")
     provider: ProviderSettings = Field(default_factory=ProviderSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)

@@ -184,6 +184,9 @@ def test_reset_defaults_requires_confirmation_and_does_not_write(
 
     page.reset_defaults()
 
-    assert page.template_input.text() == AppSettings().naming_template
+    defaults = AppSettings()
+    assert page.template_input.text() == defaults.naming_template
+    assert page.startup_mode_input.currentData() == defaults.startup_mode.value
+    assert page.metadata_locale_input.currentData() == defaults.provider.metadata_locale
     assert not config_path.exists()
     page.close()

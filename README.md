@@ -4,7 +4,7 @@ DLsite Organizer 是一个面向 Windows 的桌面工具，用于查询 DLsite �
 
 ## 主要功能
 
-- 通过 RJcode 查询标题、社团、系列、CV、标签、语言、年龄分级和发售日期；
+- 通过 RJ / BJ / VJ 作品编号查询标题、社团、系列、CV、标签、语言、年龄分级和发售日期；
 - 在“查询”页显示 DLsite 明确提供的作品关系，以及本地历史中曾确认的关系；
 - 扫描作品目录并生成可审阅的重命名预览；
 - 自定义命名模板和元数据格式；
@@ -43,16 +43,16 @@ python -m dlsite_organizer
 
 构建输出 `dist\dlsite-organizer\` 和带版本号的 ZIP，并审计应用许可证、第三方许可证及 ICU/native 依赖。构建不会把 `research/`、测试、源码 checkout 或 `.venv` 复制到 artifact。
 
-## 完整模式
+## 启动模式与完整模式
 
-完整模式是默认模式，主导航和 About footer 为：
+全新 profile 默认启动轻量模式；已有配置中的 `startup_mode` 会原样保留。完整模式可从设置或运行时切换进入，主导航和 About footer 为：
 
 ```text
 整理 → 查询 → 设置
 关于 · v<version>
 ```
 
-在“整理”页可选择根目录，也可将文件夹拖入窗口。点击“扫描并预览”会查询 RJcode 并替换当前预览；完整模式拖入会将新的唯一项目追加/合并到当前预览，不会立即重命名。可用“删除选中项”移除一项或多项，也可用“清空”清除当前预览；这两项都不会删除或改名磁盘上的目录。检查需要修改的项目后，点击“执行重命名”并明确确认。
+在“整理”页可选择根目录，也可将文件夹拖入窗口。点击“扫描并预览”会查询 RJ / BJ / VJ 作品编号并替换当前预览；完整模式拖入会将新的唯一项目追加/合并到当前预览，不会立即重命名。可用“删除选中项”移除一项或多项，也可用“清空”清除当前预览；这两项都不会删除或改名磁盘上的目录。检查需要修改的项目后，点击“执行重命名”并明确确认。
 
 扫描、拖放、删除和清空本身都只改变当前内存中的 Preview；只有“执行重命名”才会在 journal 记录后执行文件系统修改。重新拖入同一个 source directory 会按规范化 Windows 路径 upsert，保留原有行位置并刷新预览状态。命名设置变化会使现有 Preview 失效，必须重新扫描或清空后再拖放。
 
@@ -82,6 +82,16 @@ python -m dlsite_organizer
 {workno} {title} {maker_name} {maker_id} {series_name}
 {cv} {tags} {age} {language} {release_date}
 ```
+
+全新 profile 的命名默认值是：
+
+```text
+[{workno}][{maker_name}]{title}
+```
+
+全新 profile 的 metadata locale 会匹配支持的系统语言（日本語 `ja_jp`、English `en_us`、
+简体中文 `zh_cn`、繁體中文 `zh_tw`、한국어 `ko_kr`），无法匹配时回退到 `ja_jp`。
+已有配置和显式保存的字段不会因系统语言或本轮默认值变化而覆盖。
 
 旧配置仍兼容 `{rjcode}`、`{work_name}`、`{series}`、`{cv_list}`、`{cv_list_str}`、
 `{tags_list}`、`{tags_list_str}`、`{age_category}` 和 `{language_code}`；这些 alias 不再作为
@@ -116,7 +126,7 @@ Preview → 明确确认 → 预检 → journal → 文件系统修改
 
 ## 已知限制
 
-- Windows 是主要目标平台；Organizer 目前只支持 root 下直接子目录和 RJcode；
+- Windows 是主要目标平台；Organizer 目前只支持 root 下直接子目录和 RJ / BJ / VJ 作品编号；
 - live Lookup / 强制刷新需要访问 DLsite，网络错误不会阻止应用启动；
 - 右键菜单是普通 Registry shell verb，不是 Windows 11 modern shell extension；
 - 过期 limited-bonus relation 的自动恢复/识别、关系概率、候选评分和批量自动确认尚未实现；

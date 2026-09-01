@@ -5,6 +5,7 @@ from dlsite_organizer.domain.work_code import (
     WorkCodeError,
     extract_work_codes,
     normalize_rjcode,
+    normalize_workno,
 )
 
 
@@ -15,24 +16,33 @@ from dlsite_organizer.domain.work_code import (
         ("rj01234567", "RJ01234567"),
         ("  RJ01609020  ", "RJ01609020"),
         ("RJ1234567890", "RJ1234567890"),
+        ("bj00000001", "BJ00000001"),
+        ("VJ009933", "VJ009933"),
+        ("vj00000001", "VJ00000001"),
     ],
 )
-def test_normalizes_valid_rjcodes(raw: str, expected: str) -> None:
-    assert normalize_rjcode(raw) == expected
+def test_normalizes_valid_work_codes(raw: str, expected: str) -> None:
+    assert normalize_workno(raw) == expected
+
+
+def test_legacy_rjcode_normalizer_uses_the_general_work_code_contract() -> None:
+    assert normalize_rjcode("bj00000001") == "BJ00000001"
+    assert normalize_rjcode("vj00000001") == "VJ00000001"
 
 
 @pytest.mark.parametrize(
     "raw",
     ["", "RJ12345", "RJ12345678901", "RJ12A456", "12345678", "RX123456"],
 )
-def test_rejects_invalid_or_out_of_range_rjcodes(raw: str) -> None:
+def test_rejects_invalid_or_out_of_range_work_codes(raw: str) -> None:
     with pytest.raises(WorkCodeError):
-        normalize_rjcode(raw)
+        normalize_workno(raw)
 
 
-def test_general_work_code_can_represent_future_supported_prefixes() -> None:
-    assert str(WorkCode.parse("vj123456")) == "VJ123456"
-    assert str(WorkCode.parse("BJ12345678")) == "BJ12345678"
+def test_work_code_rejects_unsupported_prefix_and_malformed_number() -> None:
+    for raw in ("RX123456", "R123456", "RJ12A456", "RJ12345", "RJ12345678901"):
+        with pytest.raises(WorkCodeError):
+            WorkCode.parse(raw)
 
 
 @pytest.mark.parametrize(
@@ -45,6 +55,11 @@ def test_general_work_code_can_represent_future_supported_prefixes() -> None:
         ("SomeWorkRJ01609020", ["RJ01609020"]),
         ("RJ01609020 [RJ01609020]", ["RJ01609020"]),
         ("RJ01609020 Something RJ01636949", ["RJ01609020", "RJ01636949"]),
+        ("book BJ00000001", ["BJ00000001"]),
+        ("software vj009933", ["VJ009933"]),
+        ("BJ00000001 [bj00000001]", ["BJ00000001"]),
+        ("RJ01609020 + BJ00000001", ["RJ01609020", "BJ00000001"]),
+        ("BJ00000001 + VJ00000001", ["BJ00000001", "VJ00000001"]),
         ("Misc", []),
     ],
 )

@@ -12,7 +12,7 @@ from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
 from dlsite_organizer.domain.candidate import CandidateSearchResult
 from dlsite_organizer.domain.manual_review import ManualReviewEvent
 from dlsite_organizer.domain.work import TranslationAttribution, Work
-from dlsite_organizer.domain.work_code import WorkCodeError, normalize_rjcode
+from dlsite_organizer.domain.work_code import WorkCodeError, normalize_workno
 from dlsite_organizer.persistence.metadata_store import MetadataStore
 from dlsite_organizer.providers.base import WorkProvider
 from dlsite_organizer.providers.dlsite.exceptions import (
@@ -137,7 +137,7 @@ class LookupService:
 
     def lookup(self, raw_workno: str, *, force_refresh: bool = False) -> LookupResult:
         try:
-            workno = normalize_rjcode(raw_workno)
+            workno = normalize_workno(raw_workno)
         except WorkCodeError as exc:
             raise LookupFailure(LookupFailureKind.INVALID_CODE, str(exc)) from exc
         cached = self._metadata_store.get(workno) if self._metadata_store else None
