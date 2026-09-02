@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from dlsite_organizer.services import explorer_integration
 from dlsite_organizer.services.explorer_integration import (
     EXPLORER_COMMAND_KEY_PATH,
     EXPLORER_ICON_VALUE,
@@ -15,6 +16,12 @@ from dlsite_organizer.services.explorer_integration import (
     build_explorer_icon_value,
     build_quick_rename_command,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_shell_association_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep registry contract tests independent of the host Shell process."""
+    monkeypatch.setattr(explorer_integration, "notify_shell_association_changed", lambda: None)
 
 
 class MemoryRegistry:
@@ -89,6 +96,141 @@ def test_register_inspect_stale_update_and_idempotent_remove() -> None:
     assert removed.state is ExplorerRegistrationState.NOT_REGISTERED
     assert registry.values == {}
     assert moved_service.unregister().state is ExplorerRegistrationState.NOT_REGISTERED
+
+
+def test_register_notifies_shell_once_after_complete_registry_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[None] = []
+    monkeypatch.setattr(
+        explorer_integration,
+        "notify_shell_association_changed",
+        lambda: calls.append(None),
+    )
+
+    registry = MemoryRegistry()
+    _service(registry, r"C:\Apps\dlsite-organizer.exe").register_current_executable()
+
+    assert len(calls) == 1
+
+
+def test_update_notifies_shell_once_for_the_reregistration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[None] = []
+    monkeypatch.setattr(
+        explorer_integration,
+        "notify_shell_association_changed",
+        lambda: calls.append(None),
+    )
+    registry = MemoryRegistry()
+    _service(registry, r"C:\Apps\A\dlsite-organizer.exe").register_current_executable()
+    calls.clear()
+
+    _service(registry, r"C:\Apps\B\dlsite-organizer.exe").register_current_executable()
+
+    assert len(calls) == 1
+
+
+def test_unregister_notifies_shell_once_after_registry_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[None] = []
+    monkeypatch.setattr(
+        explorer_integration,
+        "notify_shell_association_changed",
+        lambda: calls.append(None),
+    )
+    registry = MemoryRegistry()
+    service = _service(registry, r"C:\Apps\dlsite-organizer.exe")
+    service.register_current_executable()
+    calls.clear()
+
+    service.unregister()
+
+    assert len(calls) == 1
+
+
+def test_status_check_does_not_notify_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[None] = []
+    monkeypatch.setattr(
+        explorer_integration,
+        "notify_shell_association_changed",
+        lambda: calls.append(None),
+    )
+
+    _service(MemoryRegistry(), r"C:\Apps\dlsite-organizer.exe").inspect()
+
+    assert calls == []
+
+
+def test_registry_failure_does_not_notify_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[None] = []
+    monkeypatch.setattr(
+        explorer_integration,
+        "notify_shell_association_changed",
+        lambda: calls.append(None),
+    )
+
+    class DeniedRegistry(MemoryRegistry):
+        def write_value(self, key_path: str, value_name: str, value: str) -> None:
+            raise PermissionError("denied")
+
+    with pytest.raises(ExplorerIntegrationError):
+        _service(DeniedRegistry(), r"C:\Apps\dlsite-organizer.exe").register_current_executable()
+
+    assert calls == []
+
+
+def test_registry_write_and_removal_complete_before_shell_notification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class RecordingRegistry(MemoryRegistry):
+        def write_value(self, key_path: str, value_name: str, value: str) -> None:
+            super().write_value(key_path, value_name, value)
+            events.append("write")
+
+        def delete_key(self, key_path: str) -> None:
+            super().delete_key(key_path)
+            events.append("delete")
+
+    monkeypatch.setattr(
+        explorer_integration,
+        "notify_shell_association_changed",
+        lambda: events.append("notify"),
+    )
+    registry = RecordingRegistry()
+    service = _service(registry, r"C:\Apps\dlsite-organizer.exe")
+
+    service.register_current_executable()
+    assert events == ["write", "write", "write", "write", "notify"]
+
+    events.clear()
+    service.unregister()
+    assert events == ["delete", "delete", "notify"]
+
+
+def test_shell_notification_failure_is_reported_after_registry_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_notification() -> None:
+        raise OSError("Shell32 unavailable")
+
+    monkeypatch.setattr(
+        explorer_integration,
+        "notify_shell_association_changed",
+        fail_notification,
+    )
+    registry = MemoryRegistry()
+
+    with pytest.raises(ExplorerIntegrationError):
+        _service(registry, r"C:\Apps\dlsite-organizer.exe").register_current_executable()
+
+    assert registry.values[(EXPLORER_COMMAND_KEY_PATH, "")] == (
+        build_quick_rename_command(r"C:\Apps\dlsite-organizer.exe")
+    )
 
 
 def test_path_comparison_accepts_case_variation() -> None:

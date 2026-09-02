@@ -23,6 +23,12 @@ EXPLORER_MULTI_SELECT_MODEL_VALUE = "MultiSelectModel"
 EXPLORER_MULTI_SELECT_MODEL = "Single"
 EXPLORER_ICON_VALUE = "Icon"
 
+# SHCNE_ASSOCCHANGED tells the Windows Shell that registration/association
+# data changed. SHCNF_IDLIST is required for this event even though both
+# item arguments are unused and must be NULL.
+_SHCNE_ASSOCCHANGED = 0x08000000
+_SHCNF_IDLIST = 0x0000
+
 
 class ExplorerRegistrationState(StrEnum):
     """Typed result of inspecting the application-owned Explorer verb."""
@@ -198,6 +204,7 @@ class ExplorerIntegrationService:
                 build_explorer_icon_value(current),
             )
             self._backend.write_value(EXPLORER_COMMAND_KEY_PATH, "", command)
+            notify_shell_association_changed()
         except Exception as exc:
             logger.exception("Could not register Explorer integration")
             raise ExplorerIntegrationError from exc
@@ -219,6 +226,7 @@ class ExplorerIntegrationService:
                     # Deleting an already absent application-owned key is
                     # idempotent; still attempt the parent verb key.
                     continue
+            notify_shell_association_changed()
         except Exception as exc:
             logger.exception("Could not unregister Explorer integration")
             raise ExplorerIntegrationError from exc
@@ -279,6 +287,30 @@ def _default_backend() -> RegistryBackend | None:
     if os.name != "nt":
         return None
     return WinRegistryBackend()
+
+
+def notify_shell_association_changed() -> None:
+    """Tell Windows Explorer to refresh its cached association state."""
+    if os.name != "nt":
+        return
+
+    import ctypes
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    notify = shell32.SHChangeNotify
+    notify.argtypes = [
+        ctypes.c_long,
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    notify.restype = None
+    notify(
+        ctypes.c_long(_SHCNE_ASSOCCHANGED),
+        ctypes.c_uint(_SHCNF_IDLIST),
+        None,
+        None,
+    )
 
 
 def _absolute_executable_path(path: Path | str) -> str:
