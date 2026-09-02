@@ -1,4 +1,6 @@
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +17,7 @@ from dlsite_organizer.services.explorer_integration import (
     ExplorerRegistrationState,
     build_explorer_icon_value,
     build_quick_rename_command,
+    notify_shell_association_changed,
 )
 
 
@@ -231,6 +234,61 @@ def test_shell_notification_failure_is_reported_after_registry_write(
     assert registry.values[(EXPLORER_COMMAND_KEY_PATH, "")] == (
         build_quick_rename_command(r"C:\Apps\dlsite-organizer.exe")
     )
+
+
+def test_shell_notification_uses_safe_windows_api_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeScalar:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+    class FakeVoidPointer:
+        pass
+
+    class FakeFunction:
+        def __init__(self) -> None:
+            self.argtypes: object = None
+            self.restype: object = "unset"
+            self.calls: list[tuple[object, object, object, object]] = []
+
+        def __call__(self, *args: object) -> None:
+            assert len(args) == 4
+            self.calls.append((args[0], args[1], args[2], args[3]))
+
+    notify = FakeFunction()
+    dll_calls: list[tuple[str, bool]] = []
+
+    def fake_windll(name: str, *, use_last_error: bool) -> SimpleNamespace:
+        dll_calls.append((name, use_last_error))
+        return SimpleNamespace(SHChangeNotify=notify)
+
+    fake_ctypes = SimpleNamespace(
+        WinDLL=fake_windll,
+        c_long=FakeScalar,
+        c_uint=FakeScalar,
+        c_void_p=FakeVoidPointer,
+    )
+    monkeypatch.setattr(explorer_integration.os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+
+    notify_shell_association_changed()
+
+    assert dll_calls == [("shell32", True)]
+    assert notify.argtypes == [FakeScalar, FakeScalar, FakeVoidPointer, FakeVoidPointer]
+    assert notify.restype is None
+    assert len(notify.calls) == 1
+    call = notify.calls[0]
+    event = call[0]
+    flags = call[1]
+    item1 = call[2]
+    item2 = call[3]
+    assert isinstance(event, FakeScalar)
+    assert event.value == 0x08000000
+    assert isinstance(flags, FakeScalar)
+    assert flags.value == 0x2000
+    assert item1 is None
+    assert item2 is None
 
 
 def test_path_comparison_accepts_case_variation() -> None:
