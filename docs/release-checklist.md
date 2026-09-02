@@ -1,18 +1,31 @@
 # v1.1.0 Release Readiness Checklist
 
-这是 `dlsite-organizer` 的发布前核验清单。它记录 v1.1.0 candidate 的状态，不代替真实
-Windows 桌面验收。完成所有 pending gates 并获得用户验收后，才决定是否创建 tag、发布
-portable ZIP 或进行其他发行操作。
+这是 `dlsite-organizer` 的发布前核验清单。它定义 v1.1.0 release line 的验收证据、刷新规则和最终发布门禁，不代替真实 Windows 桌面验收。发布动作只能在最终审计通过后执行。
 
-## Release status
+## Release identity and policy
 
-- Last released: `v1.0.0` (`v1.0.0` tag)
-- Current candidate: `v1.1.0`
-- Development branch: `feature/v1.1.0`
-- Current candidate HEAD: use `git rev-parse HEAD` after the Phase 4A commits
-- Release tag: not created
-- GitHub Release: not created
-- v1.1.0 artifact: not built
+- Last published release: `v1.0.0` (`v1.0.0` tag)
+- Current release line: `v1.1.0`
+- Authoritative version source: `1.1.0`; packaging continues to use dynamic version wiring
+- Release preparation branch/policy: `feature/v1.1.0`; release HEAD must be identified by the final audit
+- Release tag and GitHub Release are created only after the final release-readiness audit
+- Exact artifact filename, size, SHA256, and build-HEAD identity are established during the final audit
+
+## Completed v1.1.0 packaged acceptance baseline
+
+Packaged Windows acceptance for the v1.1.0 release line was completed and accepted as RC #3 manual-UAT evidence. The accepted baseline covers:
+
+- [x] Packaged startup and clean exit
+- [x] DLsite live behavior and manual Update Check
+- [x] Explorer same-user integration, including real drag/drop and classic-menu click
+- [x] Quick Rename, Undo, and cross-mode Undo
+- [x] Lightweight visual behavior
+- [x] Real Windows 100% DPI
+- [x] Real Windows 125% DPI
+- [x] Native, resource, license, and security audits
+- [x] Frozen TLS/certifi smoke
+
+RC #3 is historical evidence of the accepted manual-UAT baseline. Its exact artifact identity is recorded in the Phase 4D.1 audit evidence; it is not itself the release HEAD after any later tracked change.
 
 ## v1.1.0 scope
 
@@ -35,65 +48,73 @@ portable ZIP 或进行其他发行操作。
 - [x] selectolax parser smoke
 - [x] Qt offscreen MainWindow/About/navigation/Lightweight/clean-exit smoke
 - [x] `git diff --check`
-- [x] Authoritative version source is `1.1.0`; packaging continues to use dynamic version wiring
 - [x] One live update-check smoke was attempted; the environment returned no release response
 
-## Pending release gates
+## Post-tracked-change refresh rule
 
-- [ ] v1.1.0 Windows candidate build
-- [ ] Packaged startup / clean exit
-- [ ] Packaged manual Update Check
-- [ ] Packaged Lightweight UAT
-- [ ] Real Windows 100% DPI
-- [ ] Real Windows 125% DPI
-- [ ] Explorer integration regression
-- [ ] Quick Rename / Undo regression
-- [ ] Native binary audit
-- [ ] ICU/Codex/Poppler contamination audit
-- [ ] License/resource audit
-- [ ] Final release readiness audit
-- [ ] Merge, tag, push and GitHub Release
+If any tracked release-preparation change occurs after an accepted packaged-UAT baseline, a fresh artifact must be built from the new release HEAD. Manual UAT may be inherited by the refreshed artifact only when the final audit explicitly proves all of the following:
 
-## Manual gates pending user acceptance
+- same application version
+- runtime and package inputs unchanged
+- identical extracted regular-file path set and file count
+- every extracted file has identical bytes, size, and SHA256
+- native/resource/license/security audits still pass
+- final release audit approves the payload equivalence
+
+ZIP container metadata, archive timestamps, and extraction timestamps do not determine payload equivalence. Differences inside the EXE, DLLs, PYZ, Qt resources, certifi, licenses, icons, or `_internal` payload are content differences. If equivalence is not proven, affected or full packaged UAT must be repeated.
+
+## Final release gates
+
+Before release, the final audit must confirm:
+
+- exact release HEAD and clean working tree
+- exact artifact filename, size, and SHA256
+- artifact built from the exact release HEAD
+- payload correspondence to the accepted packaged-UAT baseline, or completion of required new UAT
+- remote tag absence/presence as appropriate to the release step
+- native, resource, license, TLS, and security state
+- release execution readiness
+
+The final audit must also preserve the evidence needed to explain any refreshed-candidate decision. No tag, push, merge, GitHub Release, or artifact upload is implied until those gates pass and the release action is explicitly authorized.
+
+## Accepted packaged UAT evidence (RC #3)
+
+The accepted RC #3 walkthrough covered the real same-user Windows desktop session:
 
 ```text
 REAL HKCU REGISTER/UPDATE/REMOVE IN THE USER DESKTOP SESSION:
-MANUAL REQUIRED
+PASS — accepted in RC #3 baseline
 
 REAL EXPLORER SINGLE-SELECTION MENU VISIBILITY:
-MANUAL REQUIRED
+PASS — accepted in RC #3 baseline
 
 REAL EXPLORER SINGLE INVOCATION + ONE WINDOW/TRANSACTION/UNDO:
-MANUAL REQUIRED
+PASS — accepted in RC #3 baseline
 
 REAL EXPLORER MULTI-SELECT VERB UNAVAILABLE:
-MANUAL REQUIRED
+PASS — accepted in RC #3 baseline
 
 REAL EXPLORER DRAG/DROP:
-MANUAL REQUIRED
+PASS — accepted in RC #3 baseline
 
 REAL EXPLORER MENU CLICK:
-MANUAL REQUIRED
+PASS — accepted in RC #3 baseline
 ```
 
-Before release, perform the visible GUI walkthrough:
+The visible GUI walkthrough was:
 
 ```text
 启动 → 整理 → 查询 → 设置 → 关于 footer
 → 完整模式 / 轻量模式 → clean exit → restart
 ```
 
-Verify real `RJ`, `BJ`, and `VJ` lookup examples, the placeholder
+It included real `RJ`, `BJ`, and `VJ` lookup examples, the placeholder
 `输入完整RJ|BJ|VJ号`, fresh lightweight startup, `[{workno}][{maker_name}]{title}`,
 preview-before-mutation in full mode, immediate safe rename in lightweight mode, Undo, About
-resources and manual Update Check behavior. The Explorer gates require the user's real desktop
-session and must confirm that the static verb never launches one process per selected folder.
+resources, manual Update Check, and the Explorer single-selection contract.
+
+The Explorer forensic conclusion for the observed environment was `ENVIRONMENT / USER-CONTEXT REGISTRY-HIVE MISMATCH`; the real same-user `TIMEpings` context passed.
 
 ## Artifact and release safety
 
-The existing `dist/dlsite-organizer-1.0.0-windows-x64.zip` is a **NON-AUTHORITATIVE LOCAL REBUILD**.
-It must not be used as release input, uploaded, deleted, renamed, modified or rebuilt during Phase
-4A. Phase 4B will build the new `dlsite-organizer-1.1.0-windows-x64.zip` candidate.
-
-Phase 4A does not build, create a tag, push, merge `main`, create a GitHub Release or upload an
-artifact.
+Any artifact not produced from the exact release HEAD by the authoritative packaging workflow is non-authoritative release input. The final candidate must be freshly built after any tracked release-preparation change and must satisfy the post-tracked-change refresh rule above.
