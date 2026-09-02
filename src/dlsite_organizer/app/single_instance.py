@@ -148,6 +148,15 @@ class LocalCommand:
     command: LocalCommandName
     payload: dict[str, object]
 
+    @property
+    def quick_rename_paths(self) -> tuple[str, ...]:
+        """Return the validated path batch carried by QUICK_RENAME."""
+        if self.command is not LocalCommandName.QUICK_RENAME:
+            return ()
+        if "path" in self.payload:
+            return (cast(str, self.payload["path"]),)
+        return tuple(cast(list[str], self.payload["paths"]))
+
 
 @dataclass(frozen=True, slots=True)
 class LocalReply:
@@ -334,12 +343,7 @@ def encode_request(command: LocalCommand) -> bytes:
         if payload:
             raise ProtocolError("ACTIVATE payload must be empty", code="unexpected_field")
     elif command.command is LocalCommandName.QUICK_RENAME:
-        if set(payload) != {"path"}:
-            raise ProtocolError(
-                "QUICK_RENAME payload must contain only path",
-                code="unexpected_field",
-            )
-        validate_windows_absolute_path(payload["path"])
+        _validate_quick_rename_payload(payload)
     else:
         raise ProtocolError("unknown command", code="unknown_command")
     return _encode_json(
@@ -396,14 +400,29 @@ def decode_request(frame: bytes) -> LocalCommand:
                 request_id=request_id,
             )
     else:
-        if set(payload) != {"path"}:
-            raise ProtocolError(
-                "QUICK_RENAME payload must contain only path",
-                code="unexpected_field",
-                request_id=request_id,
-            )
-        validate_windows_absolute_path(payload["path"])
+        try:
+            _validate_quick_rename_payload(payload)
+        except ProtocolError as exc:
+            raise ProtocolError(str(exc), code=exc.code, request_id=request_id) from exc
     return LocalCommand(PROTOCOL_VERSION, request_id, command, payload)
+
+
+def _validate_quick_rename_payload(payload: dict[str, object]) -> tuple[str, ...]:
+    """Validate the single-path and compatibility batch payload shapes."""
+    fields = set(payload)
+    if fields == {"path"}:
+        return (validate_windows_absolute_path(payload["path"]),)
+    if fields != {"paths"}:
+        raise ProtocolError(
+            "QUICK_RENAME payload must contain path or paths",
+            code="unexpected_field",
+        )
+    values = payload["paths"]
+    if not isinstance(values, list) or not values:
+        raise ProtocolError("QUICK_RENAME paths must be a non-empty array", code="bad_path")
+    if any(not isinstance(value, str) for value in values):
+        raise ProtocolError("QUICK_RENAME paths must contain strings", code="bad_path")
+    return tuple(validate_windows_absolute_path(value) for value in values)
 
 
 def _validate_reply_detail(value: object) -> str:
@@ -928,8 +947,19 @@ class InstanceCoordinator:
     def server(self) -> _ServerLike | None:
         return self._server
 
-    def start(self, handler: LocalCommandHandler | None = None) -> CoordinatorRole:
-        """Elect and, only for the winner, start the local server."""
+    def start(
+        self,
+        handler: LocalCommandHandler | None = None,
+        *,
+        listen: bool = True,
+    ) -> CoordinatorRole:
+        """Elect and prepare the primary local server.
+
+        ``listen=False`` is the application bootstrap seam: the winning
+        process owns the profile lock while components and the command router
+        are built, then calls :meth:`listen`.  The default remains the
+        historical one-call election/listen behavior used by core callers.
+        """
 
         if self._state is not CoordinatorState.NEW:
             raise CoordinatorStateError(f"cannot start from {self._state}")
@@ -951,15 +981,8 @@ class InstanceCoordinator:
             self._state = CoordinatorState.PRIMARY_LOCKED
             server = self._server_factory(self.identity.server_name, command_handler)
             self._server = server
-            if not server.listen():
-                # The lock proves that no live primary can own this endpoint.
-                # Endpoint cleanup is therefore restricted to this branch.
-                self._remove_server(self.identity.server_name)
-                if not server.listen():
-                    server.close()
-                    raise CoordinatorError("primary local IPC server could not listen")
-            self._state = CoordinatorState.PRIMARY_LISTENING
-            logger.debug("primary local IPC server listening")
+            if listen:
+                self.listen()
             return CoordinatorRole.PRIMARY
         except CoordinatorError:
             self._release_resources()
@@ -969,6 +992,31 @@ class InstanceCoordinator:
             self._release_resources()
             self._state = CoordinatorState.ERROR
             raise CoordinatorError("primary instance could not initialize") from exc
+
+    def listen(self) -> bool:
+        """Start the prepared primary server after application routing is ready."""
+        if self._state is CoordinatorState.PRIMARY_LISTENING:
+            return True
+        if self._state is not CoordinatorState.PRIMARY_LOCKED or self._server is None:
+            raise CoordinatorStateError(f"cannot listen from {self._state}")
+        try:
+            if not self._server.listen():
+                # The lock proves that no live primary can own this endpoint.
+                # Endpoint cleanup is therefore restricted to this branch.
+                self._remove_server(self.identity.server_name)
+                if not self._server.listen():
+                    raise CoordinatorError("primary local IPC server could not listen")
+            self._state = CoordinatorState.PRIMARY_LISTENING
+            logger.debug("primary local IPC server listening")
+            return True
+        except CoordinatorError:
+            self._release_resources()
+            self._state = CoordinatorState.ERROR
+            raise
+        except (OSError, RuntimeError) as exc:
+            self._release_resources()
+            self._state = CoordinatorState.ERROR
+            raise CoordinatorError("primary local IPC server could not listen") from exc
 
     def _recover_dead_owner(self, lock: _LockLike) -> bool:
         owner = read_lock_owner(lock)
@@ -987,6 +1035,28 @@ class InstanceCoordinator:
         if self._state is CoordinatorState.CLOSED:
             return
         self._state = CoordinatorState.SHUTTING_DOWN
+        self._release_resources()
+        self._state = CoordinatorState.CLOSED
+
+    def stop_server(self) -> None:
+        """Stop accepting commands while retaining the profile lock."""
+        if self._state in {CoordinatorState.CLOSED, CoordinatorState.ERROR}:
+            return
+        if self._state not in {
+            CoordinatorState.PRIMARY_LOCKED,
+            CoordinatorState.PRIMARY_LISTENING,
+            CoordinatorState.SHUTTING_DOWN,
+        }:
+            return
+        self._state = CoordinatorState.SHUTTING_DOWN
+        if self._server is not None:
+            self._server.close()
+            self._server = None
+
+    def release_lock(self) -> None:
+        """Release the profile lock after application resources are finished."""
+        if self._state is CoordinatorState.CLOSED:
+            return
         self._release_resources()
         self._state = CoordinatorState.CLOSED
 

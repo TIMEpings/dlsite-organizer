@@ -5,6 +5,10 @@ from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QThread, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget
 
+from dlsite_organizer.app.quick_action_controller import (
+    QuickActionController,
+    QuickActionRequest,
+)
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.domain.rename_execution import (
     ExecutionStatus,
@@ -34,6 +38,17 @@ class FakeLookupService:
     def lookup(self, raw_workno: str) -> LookupResult:
         work = Work(workno=raw_workno, title="Target", maker_name="Circle")
         return LookupResult(work=work, formatted_name=f"[{raw_workno}] Target")
+
+
+class FakeQuickActionRunner:
+    def __init__(self, completion) -> None:
+        self._completion = completion
+
+    def start(self) -> None:
+        return
+
+    def finish(self) -> None:
+        self._completion(None, None)
 
 
 @pytest.fixture
@@ -333,6 +348,51 @@ def test_explorer_entry_point_forwards_one_path_batch_to_drop_handler(
 
     assert captured == [paths]
     window.close()
+
+
+def test_controller_wiring_keeps_local_and_follow_up_actions_on_one_queue(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    settings = SettingsService(AppSettings(database_path=tmp_path / "metadata.sqlite3"))
+    service = QuickRenameService(
+        OrganizerService(FakeLookupService()),
+        RenameExecutor(journal),
+    )
+    runners: list[FakeQuickActionRunner] = []
+
+    def factory(_request: QuickActionRequest, completion) -> FakeQuickActionRunner:
+        runner = FakeQuickActionRunner(completion)
+        runners.append(runner)
+        return runner
+
+    controller = QuickActionController(factory)
+    window = LightweightWindow(
+        service,
+        UndoService(journal),
+        settings,
+        quick_action_controller=controller,
+    )
+    first = tmp_path / "RJ00000001"
+    second = tmp_path / "RJ00000002"
+
+    try:
+        window.start_quick_rename(first)
+        queued = controller.submit(second)
+
+        assert queued.accepted
+        assert len(runners) == 1
+        assert controller.queue_depth == 1
+
+        runners[0].finish()
+        assert len(runners) == 2
+        runners[1].finish()
+        assert controller.active_request is None
+    finally:
+        window.close()
+        database.dispose()
 
 
 def test_undo_replaces_previous_recent_operation_without_scrollbar(

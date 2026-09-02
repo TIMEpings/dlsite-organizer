@@ -126,6 +126,19 @@ def test_protocol_accepts_activate_and_quick_rename() -> None:
     )
     assert decode_request(encode_request(quick_rename)) == quick_rename
 
+    batch = LocalCommand(
+        1,
+        "batch1",
+        LocalCommandName.QUICK_RENAME,
+        {"paths": [r"C:\作品\RJ00000001", r"C:\作品\BJ00000002"]},
+    )
+    decoded_batch = decode_request(encode_request(batch))
+    assert decoded_batch == batch
+    assert decoded_batch.quick_rename_paths == (
+        r"C:\作品\RJ00000001",
+        r"C:\作品\BJ00000002",
+    )
+
 
 @pytest.mark.parametrize(
     ("value", "code"),
@@ -346,6 +359,27 @@ def test_primary_election_sets_stale_time_and_listens(tmp_path: Path) -> None:
     coordinator.close()
     coordinator.close()
     assert lock.unlock_calls == 1
+    assert coordinator.state is CoordinatorState.CLOSED
+
+
+def test_primary_election_can_hold_lock_before_server_listen(tmp_path: Path) -> None:
+    lock = _FakeLock(True)
+    server = _FakeServer([True])
+    coordinator = InstanceCoordinator(
+        tmp_path / "profile",
+        lock_factory=lambda _path: lock,
+        server_factory=lambda _name, _handler: server,
+    )
+
+    assert coordinator.start(listen=False) is CoordinatorRole.PRIMARY
+    assert coordinator.state is CoordinatorState.PRIMARY_LOCKED
+    assert server.listen_calls == 0
+    assert coordinator.listen()
+    assert coordinator.state is CoordinatorState.PRIMARY_LISTENING
+    coordinator.stop_server()
+    assert lock.isLocked()
+    coordinator.release_lock()
+    assert not lock.isLocked()
     assert coordinator.state is CoordinatorState.CLOSED
 
 

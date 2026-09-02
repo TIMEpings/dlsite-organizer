@@ -1,10 +1,11 @@
-"""UI-neutral admission and serialization for one-directory Quick Actions."""
+"""UI-neutral admission and serialization for Quick Action batches."""
 
 from __future__ import annotations
 
 import logging
+import os
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -30,11 +31,25 @@ class QuickActionAdmissionStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class QuickActionRequest:
-    """The normalized identity and path belonging to one admitted request."""
+    """The normalized paths and identities belonging to one admitted request.
+
+    ``path`` and ``identity`` remain the first-item compatibility view used by
+    the original one-directory controller contract.  ``paths`` and
+    ``identities`` let one queued item preserve the existing multi-directory
+    Quick Rename batch semantics.
+    """
 
     request_id: int
     path: Path
     identity: str
+    paths: tuple[Path, ...] = ()
+    identities: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.paths:
+            object.__setattr__(self, "paths", (self.path,))
+        if not self.identities:
+            object.__setattr__(self, "identities", (self.identity,))
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +68,19 @@ class QuickActionAdmissionResult:
     def path(self) -> Path | None:
         """Return the admitted path, when this result represents an admission."""
         return self.request.path if self.request is not None else None
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        """Return all paths in the admitted user action."""
+        return self.request.paths if self.request is not None else ()
+
+
+@dataclass(frozen=True, slots=True)
+class QuickActionProgress:
+    """UI-neutral progress emitted for the currently running request."""
+
+    request: QuickActionRequest
+    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,10 +114,11 @@ QuickActionRunnerFactory = Callable[
 
 
 class QuickActionController(QObject):
-    """Admit and serialize one-directory Quick Actions in FIFO order.
+    """Admit and serialize Quick Actions in FIFO order.
 
     The controller owns only admission, identity, queue, and lifecycle state.
-    A runner factory owns worker/thread construction and reports completion via
+    A queued item is one user action and may contain one or more paths.  A
+    runner factory owns worker/thread construction and reports completion via
     the callback passed to it.  Consequently this class has no knowledge of
     QuickRenameService, IPC, or the filesystem.
     """
@@ -97,6 +126,7 @@ class QuickActionController(QObject):
     MAX_PENDING = 8
 
     request_started = Signal(object)
+    request_progress = Signal(object)
     request_finished = Signal(object)
     queue_depth_changed = Signal(int)
     active_changed = Signal(object)
@@ -137,11 +167,19 @@ class QuickActionController(QObject):
         with self._lock:
             return self._shutting_down
 
-    def submit(self, path: Path | str) -> QuickActionAdmissionResult:
-        """Admit one directory, start it immediately, or enqueue it FIFO."""
+    def submit(
+        self,
+        path: Path | str | os.PathLike[str] | Sequence[Path | str | os.PathLike[str]],
+    ) -> QuickActionAdmissionResult:
+        """Admit one user action, start it immediately, or enqueue it FIFO.
+
+        A batch is normalized and checked as a whole.  Duplicate identities
+        inside one batch are rejected before admission; any identity already
+        active or pending returns ``DUPLICATE`` for the whole action.
+        """
         try:
-            normalized_path = Path(path).expanduser().absolute()
-            identity = normalized_path_identity(normalized_path)
+            normalized_paths = _normalize_request_paths(path)
+            identities = tuple(normalized_path_identity(item) for item in normalized_paths)
         except (OSError, TypeError, ValueError):
             with self._lock:
                 queue_depth = len(self._pending)
@@ -160,7 +198,12 @@ class QuickActionController(QObject):
                     QuickActionAdmissionStatus.SHUTTING_DOWN,
                     queue_depth=previous_depth,
                 )
-            if identity in self._identities:
+            if len(set(identities)) != len(identities):
+                return QuickActionAdmissionResult(
+                    QuickActionAdmissionStatus.REJECTED,
+                    queue_depth=previous_depth,
+                )
+            if any(identity in self._identities for identity in identities):
                 return QuickActionAdmissionResult(
                     QuickActionAdmissionStatus.DUPLICATE,
                     queue_depth=previous_depth,
@@ -171,9 +214,15 @@ class QuickActionController(QObject):
                     queue_depth=previous_depth,
                 )
 
-            request = QuickActionRequest(self._next_request_id, normalized_path, identity)
+            request = QuickActionRequest(
+                self._next_request_id,
+                normalized_paths[0],
+                identities[0],
+                normalized_paths,
+                identities,
+            )
             self._next_request_id += 1
-            self._identities.add(identity)
+            self._identities.update(identities)
             if self._active is None:
                 self._active = request
                 start_request = request
@@ -202,7 +251,7 @@ class QuickActionController(QObject):
             self._shutting_down = True
             previous_depth = len(self._pending)
             for request in self._pending:
-                self._identities.discard(request.identity)
+                self._discard_identities(request)
             self._pending.clear()
 
         if previous_depth:
@@ -217,6 +266,17 @@ class QuickActionController(QObject):
         """Complete a request; stale or duplicate completion callbacks are ignored."""
         request_id = request.request_id if isinstance(request, QuickActionRequest) else request
         self._complete(request_id, result, _error_text(error))
+
+    def report_progress(self, request: QuickActionRequest | int, message: str) -> None:
+        """Publish progress only while the supplied request is active."""
+        request_id = request.request_id if isinstance(request, QuickActionRequest) else request
+        if not isinstance(message, str):
+            return
+        with self._lock:
+            active = self._active
+            if active is None or active.request_id != request_id:
+                return
+        self._emit(self.request_progress, QuickActionProgress(active, message))
 
     def _start(self, request: QuickActionRequest) -> None:
         def completion(result: object | None = None, error: object | None = None) -> None:
@@ -236,7 +296,7 @@ class QuickActionController(QObject):
             if self._shutting_down:
                 self._active = None
                 self._active_runner = None
-                self._identities.discard(request.identity)
+                self._discard_identities(request)
                 discard_active = True
             else:
                 self._active_runner = runner
@@ -258,7 +318,7 @@ class QuickActionController(QObject):
                 return
             self._active = None
             self._active_runner = None
-            self._identities.discard(active.identity)
+            self._discard_identities(active)
             previous_depth = len(self._pending)
             if not self._shutting_down and self._pending:
                 next_request = self._pending.popleft()
@@ -281,11 +341,30 @@ class QuickActionController(QObject):
         except Exception:
             logger.exception("Quick Action lifecycle observer failed")
 
+    def _discard_identities(self, request: QuickActionRequest) -> None:
+        """Release every path identity belonging to one queued user action."""
+        self._identities.difference_update(request.identities)
+
 
 def _error_text(error: object | None) -> str | None:
     if error is None:
         return None
     return str(error)
+
+
+def _normalize_request_paths(
+    value: Path | str | os.PathLike[str] | Sequence[Path | str | os.PathLike[str]],
+) -> tuple[Path, ...]:
+    """Normalize one scalar path or one explicit path sequence as a batch."""
+    if isinstance(value, (str, os.PathLike)):
+        values: tuple[Path | str | os.PathLike[str], ...] = (value,)
+    elif isinstance(value, Sequence):
+        values = tuple(value)
+    else:
+        raise TypeError("quick action paths must be a path or sequence")
+    if not values:
+        raise ValueError("quick action paths must not be empty")
+    return tuple(Path(item).expanduser().absolute() for item in values)
 
 
 # Short aliases keep the module convenient for callers without changing the

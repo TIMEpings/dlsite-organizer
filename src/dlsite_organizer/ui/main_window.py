@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 
 from PySide6.QtCore import Signal, Slot
@@ -72,6 +73,7 @@ class MainWindow(QMainWindow):
         self._settings_snapshot = self._settings_service.settings
         self._quick_rename_service = quick_rename_service
         self._runtime_signals = runtime_signals
+        self._close_handler: Callable[[object, object], None] | None = None
         # Kept in the constructor for callers from the research-era shell.
         # Candidate services remain backend capabilities but are intentionally
         # not mounted in the public application navigation.
@@ -200,6 +202,10 @@ class MainWindow(QMainWindow):
             or self.about_page.is_busy()
         )
 
+    def set_close_handler(self, handler: Callable[[object, object], None]) -> None:
+        """Install the application lifecycle's explicit close boundary."""
+        self._close_handler = handler
+
     @Slot(object)
     def _settings_saved(self, settings: object) -> None:
         """Apply validated values to live services and invalidate old plans."""
@@ -217,6 +223,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Avoid destroying a running QThread during a bounded network request."""
+        if self._close_handler is not None:
+            self._close_handler(self, event)
+            return
         if self.is_busy():
             event.ignore()
             QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再退出。")

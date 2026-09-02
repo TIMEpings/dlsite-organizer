@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -18,6 +18,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dlsite_organizer.app.quick_action_controller import (
+    QuickActionAdmissionResult,
+    QuickActionAdmissionStatus,
+    QuickActionController,
+    QuickActionFinished,
+    QuickActionProgress,
+    QuickActionRequest,
+)
 from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import SettingsService
 from dlsite_organizer.domain.organizer import RenamePlanStatus
@@ -48,12 +56,16 @@ class LightweightWindow(QMainWindow):
         settings_service: SettingsService,
         parent: QWidget | None = None,
         runtime_signals: RuntimeSignals | None = None,
+        quick_action_controller: QuickActionController | None = None,
     ) -> None:
         super().__init__(parent)
         self._quick_rename_service = quick_rename_service
         self._undo_service = undo_service
         self._settings_service = settings_service
         self._runtime_signals = runtime_signals
+        self._quick_action_controller = quick_action_controller
+        self._quick_action_active_request_id: int | None = None
+        self._close_handler: Callable[[object, object], None] | None = None
         self._thread: QThread | None = None
         self._worker: QuickRenameWorker | RenameActionWorker | None = None
         self._last_result: QuickRenameResult | None = None
@@ -75,6 +87,10 @@ class LightweightWindow(QMainWindow):
             self._runtime_signals.mutation_history_changed.connect(
                 self.refresh_mutation_state
             )
+        if self._quick_action_controller is not None:
+            self._quick_action_controller.request_started.connect(self._quick_action_started)
+            self._quick_action_controller.request_progress.connect(self._quick_action_progress)
+            self._quick_action_controller.request_finished.connect(self._quick_action_finished)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -119,10 +135,25 @@ class LightweightWindow(QMainWindow):
 
     @Slot(object)
     def _handle_drop(self, value: object) -> None:
-        if self._thread is not None:
-            return
         paths = tuple(cast(Sequence[Path | str], value))
         if not paths:
+            return
+        if self._quick_action_controller is not None:
+            if self._thread is not None:
+                return
+            admission = self._quick_action_controller.submit(paths)
+            if not admission.accepted:
+                self._show_admission_result(admission)
+            elif admission.request is not None and self._quick_action_active_request_id != (
+                admission.request.request_id
+            ):
+                self.status_label.setProperty("state", "loading")
+                self.status_label.setText(
+                    f"已加入队列；前方还有 {admission.queue_depth} 个 Quick Rename 操作。"
+                )
+                self._refresh_status_style()
+            return
+        if self._thread is not None:
             return
         self.operation_list.clear()
         self.status_label.setProperty("state", "loading")
@@ -149,6 +180,50 @@ class LightweightWindow(QMainWindow):
         self.status_label.setProperty("state", "loading")
         self.status_label.setText(message)
         self._refresh_status_style()
+
+    @Slot(object)
+    def _quick_action_started(self, value: object) -> None:
+        request = cast(QuickActionRequest, value)
+        self._quick_action_active_request_id = request.request_id
+        self.operation_list.clear()
+        self.operation_list.add_full_text("正在处理最近的 Quick Rename 操作…")
+        self.status_label.setProperty("state", "loading")
+        self.status_label.setText("正在查询 metadata 并准备安全重命名…")
+        self._refresh_status_style()
+        self._set_busy(True)
+
+    @Slot(object)
+    def _quick_action_progress(self, value: object) -> None:
+        progress = cast(QuickActionProgress, value)
+        if progress.request.request_id != self._quick_action_active_request_id:
+            return
+        self._show_progress(progress.message)
+
+    @Slot(object)
+    def _quick_action_finished(self, value: object) -> None:
+        finished = cast(QuickActionFinished, value)
+        if finished.request.request_id != self._quick_action_active_request_id:
+            return
+        self._quick_action_active_request_id = None
+        if finished.error is not None:
+            self._show_error(finished.error)
+        elif isinstance(finished.result, QuickRenameResult):
+            self._show_result(finished.result)
+        else:
+            self._show_error("轻量模式执行失败，详细信息已写入日志。")
+        self._set_busy(False)
+        self._refresh_recent_transaction()
+
+    def _show_admission_result(self, result: QuickActionAdmissionResult) -> None:
+        messages = {
+            QuickActionAdmissionStatus.DUPLICATE: "该目录已在 Quick Rename 队列中。",
+            QuickActionAdmissionStatus.QUEUE_FULL: "Quick Rename 队列已满，请稍后重试。",
+            QuickActionAdmissionStatus.SHUTTING_DOWN: (
+                "应用正在退出，未接受新的 Quick Rename 操作。"
+            ),
+            QuickActionAdmissionStatus.REJECTED: "本次 Quick Rename 输入无效，未执行任何文件修改。",
+        }
+        self._show_error(messages.get(result.status, "Quick Rename 未被接受。"))
 
     @Slot(object)
     def _show_result(self, value: object) -> None:
@@ -342,13 +417,23 @@ class LightweightWindow(QMainWindow):
         self.undo_button.setEnabled(pending > 0)
 
     def is_busy(self) -> bool:
-        return self._thread is not None
+        return self._thread is not None or (
+            self._quick_action_controller is not None
+            and self._quick_action_controller.active_request is not None
+        )
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
 
+    def set_close_handler(self, handler: Callable[[object, object], None]) -> None:
+        """Install the application lifecycle's explicit close boundary."""
+        self._close_handler = handler
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._close_handler is not None:
+            self._close_handler(self, event)
+            return
         if self.is_busy():
             event.ignore()
             QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再退出。")

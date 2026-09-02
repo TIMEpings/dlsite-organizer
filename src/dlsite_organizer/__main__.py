@@ -11,6 +11,10 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from dlsite_organizer import __version__
+from dlsite_organizer.app.application_lifecycle import (
+    ApplicationLifecycle,
+    QuickActionRunnerHost,
+)
 from dlsite_organizer.app.bootstrap import build_components
 from dlsite_organizer.app.branding import load_application_icon
 from dlsite_organizer.app.invocation import (
@@ -19,11 +23,25 @@ from dlsite_organizer.app.invocation import (
     parse_invocation,
 )
 from dlsite_organizer.app.logging_config import configure_logging
+from dlsite_organizer.app.quick_action_controller import QuickActionController
 from dlsite_organizer.app.settings import (
     SettingsError,
     StartupMode,
     default_data_dir,
     load_settings,
+)
+from dlsite_organizer.app.single_instance import (
+    PROTOCOL_VERSION,
+    CoordinatorError,
+    CoordinatorRole,
+    InstanceCoordinator,
+    LocalClientError,
+    LocalCommand,
+    LocalCommandClient,
+    LocalCommandName,
+    LocalReply,
+    LocalReplyStatus,
+    new_request_id,
 )
 from dlsite_organizer.ui.lightweight_window import LightweightWindow
 from dlsite_organizer.ui.main_window import MainWindow
@@ -38,17 +56,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         invocation = parse_invocation(raw_argv)
     except InvocationParseError as exc:
         application = _create_application(())
-        configure_logging(default_data_dir() / "logs")
-        logger.error("Invalid application invocation: %s", exc)
-        QMessageBox.critical(None, "启动参数错误", str(exc))
+        _show_startup_error("启动参数错误", str(exc), application)
         return 2
 
     application = _create_application(raw_argv)
-    configure_logging(default_data_dir() / "logs")
+    profile_root = default_data_dir()
+    deferred_handler = _DeferredCommandHandler()
+    try:
+        coordinator = InstanceCoordinator(profile_root)
+        role = coordinator.start(deferred_handler, listen=False)
+    except CoordinatorError as exc:
+        _show_startup_error("启动失败", "无法建立应用实例：请检查数据目录权限。", application)
+        _write_bounded_diagnostic(f"primary election failed: {exc}")
+        return 1
+
+    if role is CoordinatorRole.SECONDARY:
+        forwarded = _run_as_secondary(
+            application,
+            coordinator,
+            invocation,
+            profile_root,
+            deferred_handler,
+        )
+        if isinstance(forwarded, int):
+            return forwarded
+        coordinator = forwarded
+
+    configure_logging(profile_root / "logs")
     logger.info(
-        "Starting DLsite Organizer v%s launch_mode=%s",
+        "Starting DLsite Organizer v%s launch_mode=%s profile=%s",
         __version__,
         invocation.mode.value,
+        profile_root,
     )
 
     try:
@@ -57,11 +96,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SettingsError as exc:
         logger.exception("Application settings are invalid")
         QMessageBox.critical(None, "配置错误", str(exc))
+        coordinator.close()
         return 2
     except Exception:
         logger.exception("Application startup failed")
         QMessageBox.critical(None, "启动失败", "应用初始化失败，详细信息已写入日志。")
+        coordinator.close()
         return 1
+
+    runner_host = QuickActionRunnerHost(components.quick_rename_service, parent=application)
+    quick_action_controller = QuickActionController(
+        runner_host.create_runner,
+        parent=application,
+    )
+    runner_host.set_progress_callback(quick_action_controller.report_progress)
 
     window = MainWindow(
         components.lookup_service,
@@ -80,30 +128,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         components.undo_service,
         components.settings_service,
         runtime_signals=components.runtime_signals,
+        quick_action_controller=quick_action_controller,
     )
 
-    def show_full_mode() -> None:
-        if lightweight_window.is_busy():
-            return
-        window.show()
-        lightweight_window.hide()
+    lifecycle = ApplicationLifecycle(
+        application,
+        coordinator,
+        components.database,
+        window,
+        lightweight_window,
+        quick_action_controller,
+    )
+    deferred_handler.set_handler(lifecycle.handle_command)
 
-    def show_lightweight_mode() -> None:
-        if window.is_busy():
-            return
-        lightweight_window.show()
-        window.hide()
+    window.lightweight_requested.connect(lifecycle.show_lightweight_mode)
+    lightweight_window.full_mode_requested.connect(lifecycle.show_full_mode)
+    lightweight_window.settings_requested.connect(lifecycle.show_settings)
 
-    def show_settings() -> None:
-        if lightweight_window.is_busy():
-            return
-        window.show()
-        lightweight_window.hide()
-        window.show_settings_page()
-
-    window.lightweight_requested.connect(show_lightweight_mode)
-    lightweight_window.full_mode_requested.connect(show_full_mode)
-    lightweight_window.settings_requested.connect(show_settings)
+    try:
+        coordinator.listen()
+    except CoordinatorError as exc:
+        logger.exception("Primary local IPC server could not start")
+        lifecycle.request_shutdown()
+        _show_startup_error(
+            "启动失败",
+            "应用无法启动本地单实例服务；未继续运行。",
+            application,
+        )
+        _write_bounded_diagnostic(f"local IPC server failed: {exc}")
+        return 1
 
     if invocation.mode is LaunchMode.QUICK_RENAME:
         quick_rename_directories = invocation.quick_rename_directories
@@ -111,26 +164,133 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info("launch mode = quick-rename paths=%s", quick_rename_directories)
         if os.environ.get("DLSITE_ORGANIZER_QUICK_RENAME_SMOKE") == "1":
             lightweight_window.quick_action_finished.connect(
-                lambda _result: QTimer.singleShot(250, application.quit)
+                lambda _result: QTimer.singleShot(250, lifecycle.request_shutdown)
             )
             lightweight_window.quick_action_failed.connect(
-                lambda _message: QTimer.singleShot(250, application.quit)
+                lambda _message: QTimer.singleShot(250, lifecycle.request_shutdown)
             )
-        lightweight_window.show()
+        lifecycle.show_lightweight_mode()
         QTimer.singleShot(
             0,
             lambda: lightweight_window.start_quick_rename(quick_rename_directories),
         )
     elif settings.startup_mode is StartupMode.LIGHTWEIGHT:
-        lightweight_window.show()
+        lifecycle.show_lightweight_mode()
     else:
-        window.show()
+        lifecycle.show_full_mode()
     if invocation.mode is LaunchMode.NORMAL:
-        _schedule_startup_smoke(application, window, lightweight_window)
+        _schedule_startup_smoke(application, window, lightweight_window, lifecycle)
     exit_code = application.exec()
-    components.database.dispose()
+    lifecycle.request_shutdown()
     logger.info("DLsite Organizer stopped")
     return exit_code
+
+
+class _DeferredCommandHandler:
+    """Mutable handler installed before the primary application is composed."""
+
+    def __init__(self) -> None:
+        self._handler = None
+
+    def set_handler(self, handler) -> None:
+        self._handler = handler
+
+    def __call__(self, command: LocalCommand) -> LocalReply:
+        if self._handler is None:
+            return LocalReply(
+                PROTOCOL_VERSION,
+                command.request_id,
+                LocalReplyStatus.SHUTTING_DOWN,
+            )
+        return self._handler(command)
+
+
+def _run_as_secondary(
+    application: QApplication,
+    coordinator: InstanceCoordinator,
+    invocation,
+    profile_root,
+    deferred_handler: _DeferredCommandHandler,
+) -> int | InstanceCoordinator:
+    """Forward one invocation without constructing the primary runtime."""
+    command = _command_for_invocation(invocation)
+    try:
+        reply = LocalCommandClient(coordinator.identity.server_name).send(command)
+    except LocalClientError as exc:
+        if not exc.is_ambiguous:
+            # The owner may have exited after election but before its server
+            # became reachable.  Re-election is safe because no request was
+            # connected or written in this classification.
+            coordinator.close()
+            retry_coordinator = InstanceCoordinator(profile_root)
+            try:
+                retry_role = retry_coordinator.start(deferred_handler, listen=False)
+            except CoordinatorError:
+                retry_coordinator.close()
+                _secondary_failure(invocation, "无法连接到正在运行的应用。")
+                return 1
+            if retry_role is CoordinatorRole.PRIMARY:
+                return retry_coordinator
+            retry_coordinator.close()
+            _secondary_failure(invocation, "无法连接到正在运行的应用。")
+            return 1
+        coordinator.close()
+        _secondary_failure(invocation, "应用通信未完成；未执行本次 Quick Rename。")
+        return 1
+    finally:
+        if coordinator.role is CoordinatorRole.SECONDARY:
+            coordinator.close()
+
+    if reply.status is LocalReplyStatus.ACCEPTED:
+        return 0
+    if reply.status is LocalReplyStatus.DUPLICATE:
+        return 0
+    if reply.status is LocalReplyStatus.QUEUE_FULL:
+        _secondary_failure(invocation, "Quick Rename 队列已满，请稍后重试。")
+    elif reply.status is LocalReplyStatus.SHUTTING_DOWN:
+        _secondary_failure(invocation, "应用正在退出，未接受本次操作。")
+    else:
+        _secondary_failure(invocation, "应用未接受本次操作；未执行本地文件修改。")
+    return 1
+
+
+def _command_for_invocation(invocation) -> LocalCommand:
+    if invocation.mode is LaunchMode.NORMAL:
+        return LocalCommand(
+            PROTOCOL_VERSION,
+            new_request_id(),
+            LocalCommandName.ACTIVATE,
+            {},
+        )
+    paths = [str(path.expanduser().absolute()) for path in invocation.quick_rename_directories]
+    payload: dict[str, object] = {"path": paths[0]} if len(paths) == 1 else {"paths": paths}
+    return LocalCommand(
+        PROTOCOL_VERSION,
+        new_request_id(),
+        LocalCommandName.QUICK_RENAME,
+        payload,
+    )
+
+
+def _secondary_failure(invocation, message: str) -> None:
+    detail = (
+        "无法将"
+        + (" Quick Rename 请求" if invocation.mode is LaunchMode.QUICK_RENAME else "应用启动请求")
+        + f"转发到活动实例：{message}"
+    )
+    _write_bounded_diagnostic(detail)
+    if os.environ.get("DLSITE_ORGANIZER_TEST_MODE") != "1":
+        QMessageBox.critical(None, "应用通信失败", detail)
+
+
+def _show_startup_error(title: str, message: str, application: QApplication) -> None:
+    _write_bounded_diagnostic(message)
+    if os.environ.get("DLSITE_ORGANIZER_TEST_MODE") != "1":
+        QMessageBox.critical(None, title, message)
+
+
+def _write_bounded_diagnostic(message: str) -> None:
+    sys.stderr.write(f"DLsite Organizer: {message}\n")
 
 
 def _create_application(argv: Sequence[str]) -> QApplication:
@@ -139,6 +299,7 @@ def _create_application(argv: Sequence[str]) -> QApplication:
     application = QApplication([program, *argv])
     application.setApplicationName("DLsite Organizer")
     application.setOrganizationName("dlsite-organizer")
+    application.setQuitOnLastWindowClosed(False)
     application.setWindowIcon(load_application_icon())
     return application
 
@@ -147,6 +308,7 @@ def _schedule_startup_smoke(
     application: QApplication,
     window: MainWindow,
     lightweight_window: LightweightWindow,
+    lifecycle: ApplicationLifecycle,
 ) -> None:
     """Run the bounded packaged-startup probe when explicitly requested.
 
@@ -199,7 +361,7 @@ def _schedule_startup_smoke(
         about_branding_ready,
         lightweight_branding_ready,
     )
-    QTimer.singleShot(250, application.quit)
+    QTimer.singleShot(250, lifecycle.request_shutdown)
 
 
 if __name__ == "__main__":

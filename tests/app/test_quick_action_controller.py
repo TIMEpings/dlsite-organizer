@@ -195,3 +195,45 @@ def test_invalid_path_shape_is_rejected_without_runner(controller_factory) -> No
 
     assert result.status is QuickActionAdmissionStatus.REJECTED
     assert not runners
+
+
+def test_one_batch_stays_one_fifo_request_and_exposes_all_paths(
+    controller_factory, tmp_path: Path
+) -> None:
+    factory, runners, started_paths = controller_factory
+    controller = QuickActionController(factory)
+    first = tmp_path / "X"
+    second = tmp_path / "Y"
+    third = tmp_path / "Z"
+
+    admission = controller.submit((first, second))
+    queued = controller.submit(third)
+
+    assert admission.accepted
+    assert admission.paths == (first.absolute(), second.absolute())
+    assert admission.request is not None
+    assert admission.request.path == first.absolute()
+    assert admission.request.paths == (first.absolute(), second.absolute())
+    assert queued.accepted
+    assert controller.queue_depth == 1
+    assert len(runners) == 1
+    assert started_paths == [first.absolute()]
+
+    runners[0].finish("batch")
+    assert len(runners) == 2
+    assert runners[1].request.paths == (third.absolute(),)
+
+
+def test_duplicate_identity_inside_batch_is_rejected_without_partial_admission(
+    controller_factory, tmp_path: Path
+) -> None:
+    factory, runners, _started_paths = controller_factory
+    controller = QuickActionController(factory)
+    path = tmp_path / "Work"
+
+    result = controller.submit((path, path.parent / "." / path.name))
+
+    assert result.status is QuickActionAdmissionStatus.REJECTED
+    assert controller.active_request is None
+    assert controller.queue_depth == 0
+    assert not runners
