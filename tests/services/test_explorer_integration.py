@@ -286,7 +286,7 @@ def test_shell_notification_uses_safe_windows_api_signature(
     assert isinstance(event, FakeScalar)
     assert event.value == 0x08000000
     assert isinstance(flags, FakeScalar)
-    assert flags.value == 0x2000
+    assert flags.value == 0x1000
     assert item1 is None
     assert item2 is None
 

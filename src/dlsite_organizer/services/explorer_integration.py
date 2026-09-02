@@ -25,12 +25,12 @@ EXPLORER_ICON_VALUE = "Icon"
 
 # SHCNE_ASSOCCHANGED tells the Windows Shell that registration/association
 # data changed. SHCNF_IDLIST is required for this event even though both
-# item arguments are unused and must be NULL. SHCNF_FLUSHNOWAIT starts
-# delivery before returning, so a subsequent Explorer action can observe the
-# new command without an arbitrary sleep or an Explorer restart.
+# item arguments are unused and must be NULL. SHCNF_FLUSH waits for delivery
+# before returning, so a subsequent Explorer action can observe the new
+# command without an arbitrary sleep or an Explorer restart.
 _SHCNE_ASSOCCHANGED = 0x08000000
 _SHCNF_IDLIST = 0x0000
-_SHCNF_FLUSHNOWAIT = 0x2000
+_SHCNF_FLUSH = 0x1000
 
 
 class ExplorerRegistrationState(StrEnum):
@@ -310,7 +310,7 @@ def notify_shell_association_changed() -> None:
     notify.restype = None
     notify(
         ctypes.c_long(_SHCNE_ASSOCCHANGED),
-        ctypes.c_uint(_SHCNF_IDLIST | _SHCNF_FLUSHNOWAIT),
+        ctypes.c_uint(_SHCNF_IDLIST | _SHCNF_FLUSH),
         None,
         None,
     )
