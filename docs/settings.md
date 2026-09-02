@@ -122,7 +122,8 @@ The executable path is quoted by the standard Windows argument formatter, so spa
 paths are preserved; no `cmd.exe`, PowerShell, or shell trampoline is used. The Explorer contract is
 single selected directory only. Multi-select is intentionally unsupported by this static verb;
 batch processing remains available through lightweight drag-and-drop or Full Organizer. The CLI
-still accepts one or more directory arguments for internal tests and future integration. **移除**
+still accepts one or more directory arguments as one Quick Rename batch. If the application is
+already running, the invocation is forwarded to that primary and the secondary process exits. **移除**
 deletes only this verb and its `command` child, is idempotent, and never removes the parent
 `Directory\shell` key or unrelated verbs. Registration is explicit, per-user, and needs no
 administrator rights.
@@ -134,8 +135,10 @@ stale. Start the application from its new location and use **注册 / 更新**. 
 portable application directory, use **移除** first. On Windows 11 and some Explorer configurations,
 the ordinary shell verb may appear under **显示更多选项**.
 
-The Explorer action opens one lightweight Quick Action window and calls the same
-`QuickRenameService` as drag-and-drop. It does not show a second ordinary confirmation dialog,
+The Explorer action opens the existing lightweight Quick Action surface and calls the same
+`QuickRenameService` as drag-and-drop. If Full mode is busy, the request remains queued in the
+primary and the shared Lightweight surface updates when it is next shown. It does not show a second
+ordinary confirmation dialog,
 but it still performs input validation, lookup, naming, planning, final preflight, durable journal
 creation, and executor mutation. A fresh metadata cache is reused, and an unresolved journal
 blocks the action. Independent concurrent invocations remain serialized at journal transaction

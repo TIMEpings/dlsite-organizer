@@ -4,6 +4,8 @@
 
 - Added: manual update check from the About page using the public GitHub Releases API.
 - Changed: Lightweight mode now uses a more compact unified drop/recent-operation surface.
+- Changed: one active application instance per user/profile now owns normal activation and Explorer
+  Quick Rename forwarding; rapid Quick Rename actions are serialized in the primary application.
 - Fixed: the recent-operation presentation stays compact after Undo.
 
 ## v1.0.0 — 2026-08-31

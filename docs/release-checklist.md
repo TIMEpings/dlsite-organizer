@@ -36,11 +36,25 @@ RC #3 is historical evidence of the accepted manual-UAT baseline. Its exact arti
 - [x] Fresh profile 默认 `lightweight`，已有 startup mode 保持不变
 - [x] 现有命名模板 canonical/legacy aliases 和 public navigation contract 保持不变
 
+## Single-instance runtime gates
+
+这些门禁属于每个后续 v1.1.0 packaged candidate 的 durable 验收范围：
+
+- [ ] 同一用户/profile 的正常 secondary launch 只激活现有 primary，随后退出
+- [ ] Explorer secondary Quick Rename 转发到现有 primary，不创建第二个组件图或数据库
+- [ ] Rapid Explorer `X/Y/Z` 请求在 primary 内按 FIFO 串行 admission，不产生并发 Quick worker
+- [ ] Portable copy `A/B` 使用同一 profile 时只有一个 primary
+- [ ] Explorer mutation 完成后可在 primary 中看到 recent operation 并执行 Undo
+- [ ] primary 关闭后 server、数据库和 profile lock 按顺序清理，下一次启动成功
+- [ ] invalid Explorer input 经 primary 验证后不产生 filesystem mutation，secondary 无本地 fallback
+
 ## Source-level verification
 
 - [x] Full automated tests: `QT_QPA_PLATFORM=offscreen python -m pytest`
 - [x] Update checker, About/MainWindow, Lightweight, Mode/Undo and Quick Rename regression tests
 - [x] Project attribution, settings defaults, naming compatibility and public navigation tests
+- [x] Single-instance application lifecycle, isolated primary/secondary subprocess, rapid forwarding,
+  startup race, and shutdown tests
 - [x] Ruff: `ruff check .`
 - [x] Pyright: `pyright`
 - [x] Compile: `python -m compileall src`

@@ -182,7 +182,9 @@ Lightweight mode is a second UI entry point, not a second rename implementation:
 
 ```text
 LightweightWindow
-        ↓ QThread
+        ↓ one local user action
+QuickActionController (one primary-owned FIFO)
+        ↓ QtQuickActionRunner / QThread
 QuickRenameWorker → QuickRenameService
                          ↓
 DropInputService → OrganizerService.preview_paths
@@ -204,8 +206,8 @@ Partial executor results are surfaced as partial and remain undoable where the j
 The full and lightweight windows share SettingsService, LookupService, metadata cache, NamingService,
 OrganizerService, QuickRenameService, RenameExecutor, and UndoService. Settings saves therefore
 apply to the next lightweight drop without restarting. `startup_mode` controls only the next launch;
-runtime switching hides one window and shows the other in the same process. Phase C itself did not
-include a CLI, registry, single-instance IPC, Explorer integration, About page, or navigation cleanup.
+runtime switching hides one window and shows the other in the same process. Phase C's historical UI
+contract did not include single-instance IPC; the application-level integration is described below.
 
 ## Phase D Explorer context-menu invocation
 
@@ -216,11 +218,13 @@ Explorer shell verb (HKCU, Single, one %1 selection)
         ↓ direct packaged exe command
 argparse → ApplicationInvocation(QUICK_RENAME)
         ↓
-ApplicationComponents (same config.toml, cache, SQLite DB, naming and locale)
+profile election → primary ApplicationComponents
+        ↓ secondary: local IPC forwarding and exit
+        ↓ primary: same config.toml, cache, SQLite DB, naming and locale
         ↓
 LightweightWindow.start_quick_rename
         ↓
-QuickRenameWorker → QuickRenameService
+primary QuickActionController → QuickRenameWorker → QuickRenameService
                          ↓
                  LookupService → NamingService → RenamePlanner
                          ↓
@@ -247,8 +251,9 @@ The Explorer contract supports one selected directory only. Multi-select is inte
 unsupported for this static verb because the target Windows environment cannot reliably aggregate
 multiple selections into one application call; limiting the verb to `Single` prevents Explorer from
 launching multiple application processes. Batch Quick Rename remains available through lightweight
-drag-and-drop and the Full Organizer. The CLI continues to accept multiple directory arguments for
-internal tests and future integration.
+drag-and-drop and the CLI, where multiple CLI paths remain one user batch and one journal/Undo
+transaction. When a primary already exists, the CLI request is forwarded to that primary rather
+than constructing another component graph.
 
 `ExplorerIntegrationService` is UI-independent and uses a small registry backend protocol. The
 Settings page renders its inspection result rather than guessing from button text or persisting a
@@ -257,6 +262,68 @@ its command child and is idempotent. Ordinary Windows 11 shell-verb behavior may
 under **显示更多选项**; no modern COM or MSIX shell extension is part of this hardening round.
 The footer About entry is the only About navigation entry and derives its version from the package
 version source; the main navigation remains `整理`, `查询`, `设置`.
+
+## Phase 4D.2C-3 single-instance application lifecycle
+
+The desktop entry point performs only the minimum work needed to identify the invocation before
+business bootstrap:
+
+```text
+argv parse → QApplication/minimal Qt prerequisites → default profile root
+        ↓
+InstanceCoordinator election (profile-scoped QLockFile)
+        ├─ secondary: LocalCommandClient → primary → bounded exit
+        └─ primary: full logging → settings → components → windows/controller/router
+                                      → QLocalServer listen → show mode → app.exec()
+```
+
+`InstanceIdentity` is derived from the canonical default application profile/data root, not from
+the executable path. Portable copies therefore share one primary when they use the same profile.
+`InstanceCoordinator` owns the `QLockFile`, stale-owner recovery, and the `QLocalServer` endpoint;
+the server uses `UserAccessOption` and never exposes TCP or shell transport. The primary acquires
+the lock before constructing the database or windows, but defers `listen()` until the application
+command router is ready. A secondary retries connection only while no request has been connected or
+written; an ambiguous post-write ACK failure is fail-closed and is never replayed locally.
+
+The application router is outside the IPC core. `ACTIVATE` targets the actual current runtime window
+(Full or Lightweight), restores it when minimized/hidden, and calls `raise()`/`activateWindow()`;
+it does not create a window, switch mode, or change `startup_mode`. `QUICK_RENAME` submits to the
+single primary-owned `QuickActionController`. Its queue admits one active action plus eight FIFO
+pending actions, deduplicates every normalized path identity across active and pending requests, and
+maps `ACCEPTED`, `DUPLICATE`, `QUEUE_FULL`, `SHUTTING_DOWN`, and `REJECTED` explicitly to local
+admission replies. A multi-directory local/CLI action remains one controller item and is passed to
+the existing `QuickRenameService` as one batch, preserving one planner/executor transaction and
+one Undo record.
+
+An admitted IPC Quick Rename surfaces the existing Lightweight window when the Full window is not
+busy; this is a runtime presentation choice and never changes the stored `startup_mode`. If the
+Full window is already doing work, the request remains queued in the primary and the shared
+Lightweight surface receives its lifecycle and result signals when it is next shown.
+
+`QuickActionRunnerHost` is the only primary Quick Rename worker factory. Lightweight local drops,
+initial Quick Rename launch, and IPC requests all use that controller and the existing
+`QuickActionController → QuickRenameWorker → QuickRenameService → DropInputService →
+OrganizerService → RenameExecutor` pipeline. IPC admission ACK is returned immediately after queue
+admission; lookup, planning, journaling, and filesystem work remain asynchronous. The Lightweight
+surface subscribes to the controller lifecycle and existing `RuntimeSignals`, so forwarded work
+uses the same progress, result, recent-operation, and Undo presentation as a local action.
+
+Full Organizer execution remains its existing flow. `MutationGate` is shared by `RenameExecutor`
+and `UndoService`, so Full execution, Quick Rename execution, and Undo cannot overlap mutation
+critical sections. Quick input still passes through `DropInputService`; IPC structural validation
+does not bypass work-code, directory, parent, reparse-point, or journal checks.
+
+`ApplicationLifecycle` owns the current window and the explicit application exit path. With
+`setQuitOnLastWindowClosed(False)`, a genuine close marks shutdown, stops the local server,
+begins controller shutdown, drops pending-but-not-started Quick Actions, and lets the active worker
+finish. It then closes windows, disposes the primary database, releases the profile lock last, and
+quits the application. Close is idempotent, and no new queued mutation starts after shutdown begins.
+
+The safety invariant remains prominent:
+
+```text
+NO JOURNAL = NO MUTATION
+```
 
 ## Phase 4A update check and compact presentation
 
