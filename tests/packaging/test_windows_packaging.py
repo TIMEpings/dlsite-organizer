@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import runpy
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,31 @@ def test_audit_distribution_accepts_no_icu_bundle(tmp_path: Path) -> None:
     provenance.write_text(json.dumps({"format": 1, "entries": []}), encoding="utf-8")
 
     assert windows_packaging.audit_distribution(distribution, provenance) == []
+
+
+def test_audit_certifi_bundle_requires_package_relative_internal_path(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    internal = distribution / "_internal"
+    internal.mkdir(parents=True)
+    (internal / "cacert.pem").write_bytes(b"x" * windows_packaging.CERTIFI_BUNDLE_MIN_BYTES)
+
+    with pytest.raises(FileNotFoundError, match="Packaged certifi bundle missing"):
+        windows_packaging.audit_certifi_bundle(distribution)
+
+
+def test_audit_certifi_bundle_checks_size_and_source_bytes(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    bundle = distribution / "_internal" / windows_packaging.CERTIFI_BUNDLE_RELATIVE_PATH
+    bundle.parent.mkdir(parents=True)
+    source = tmp_path / "source-cacert.pem"
+    source.write_bytes(b"certificate bundle" * 10_000)
+    bundle.write_bytes(source.read_bytes())
+
+    assert windows_packaging.audit_certifi_bundle(distribution, source_bundle=source) == bundle
+
+    bundle.write_bytes(b"different bundle" * 10_000)
+    with pytest.raises(RuntimeError, match="does not match"):
+        windows_packaging.audit_certifi_bundle(distribution, source_bundle=source)
 
 
 def test_audit_packaged_resources_requires_application_and_runtime_licenses(
@@ -169,8 +195,24 @@ def test_packaging_spec_excludes_selectolax_development_sources() -> None:
 
     certifi_hook_path = _HELPER_PATH.parents[0] / "hooks" / "hook-certifi.py"
     certifi_hook_text = certifi_hook_path.read_text(encoding="utf-8")
-    assert "from certifi import where" in certifi_hook_text
-    assert 'datas = [(where(), ".")]' in certifi_hook_text
+    assert 'collect_data_files("certifi", includes=["cacert.pem"])' in certifi_hook_text
+    hook_namespace = runpy.run_path(str(certifi_hook_path))
+    certifi_entries = [
+        (Path(source), Path(destination))
+        for source, destination in hook_namespace["datas"]
+        if Path(source).name == "cacert.pem"
+    ]
+    assert certifi_entries
+    assert all(destination == Path("certifi") for _, destination in certifi_entries)
+    assert all(destination != Path(".") for _, destination in certifi_entries)
+
+    smoke_path = _HELPER_PATH.parents[0] / "tls_runtime_smoke.py"
+    smoke_text = smoke_path.read_text(encoding="utf-8")
+    assert "certifi.where()" in smoke_text
+    assert "ssl.create_default_context(cafile=str(bundle))" in smoke_text
+    assert "with httpx.Client()" in smoke_text
+    for forbidden in ("verify=False", "CERT_NONE", "check_hostname=False", "http://"):
+        assert forbidden not in smoke_text
 
 
 def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(

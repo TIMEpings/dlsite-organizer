@@ -30,6 +30,9 @@ TEMPORARY_PATH_COMPONENTS = frozenset({".cache", ".tmp", "tmp", "temp", "tempora
 NATIVE_ARTIFACT_SUFFIXES = frozenset({".dll", ".exe", ".pyd"})
 FORBIDDEN_ARTIFACT_COMPONENTS = frozenset({"codex", "codex-runtimes", "poppler"})
 REQUIRED_APPLICATION_RESOURCES = (Path("assets") / "branding" / "app_icon.png",)
+CERTIFI_BUNDLE_RELATIVE_PATH = Path("certifi") / "cacert.pem"
+CERTIFI_BUNDLE_MIN_BYTES = 100_000
+CERTIFI_BUNDLE_MAX_BYTES = 1_000_000
 
 # These are the runtime distributions named in THIRD_PARTY_NOTICES.md.  The
 # version part is intentionally matched separately because the canonical
@@ -219,6 +222,36 @@ def audit_distribution(distribution: Path, provenance_path: Path) -> list[Path]:
                 )
 
     return bundled_icu
+
+
+def audit_certifi_bundle(
+    distribution: Path,
+    *,
+    source_bundle: Path | None = None,
+) -> Path:
+    """Verify the standard certifi bundle at the frozen package-relative path."""
+    bundle = distribution / "_internal" / CERTIFI_BUNDLE_RELATIVE_PATH
+    if not bundle.is_file():
+        raise FileNotFoundError(f"Packaged certifi bundle missing: {bundle}")
+
+    size = bundle.stat().st_size
+    if not CERTIFI_BUNDLE_MIN_BYTES <= size <= CERTIFI_BUNDLE_MAX_BYTES:
+        raise RuntimeError(
+            "Packaged certifi bundle has an unreasonable size: "
+            f"{bundle} ({size} bytes; expected "
+            f"{CERTIFI_BUNDLE_MIN_BYTES}..{CERTIFI_BUNDLE_MAX_BYTES})"
+        )
+
+    if source_bundle is not None:
+        source = Path(source_bundle)
+        if not source.is_file():
+            raise FileNotFoundError(f"Source certifi bundle missing: {source}")
+        if bundle.read_bytes() != source.read_bytes():
+            raise RuntimeError(
+                "Packaged certifi bundle does not match the current source bundle: "
+                f"{bundle} != {source}"
+            )
+    return bundle
 
 
 def audit_packaged_resources(distribution: Path) -> tuple[Path, ...]:
@@ -471,6 +504,19 @@ def _command_audit_dist(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_audit_certifi(args: argparse.Namespace) -> int:
+    try:
+        bundle = audit_certifi_bundle(
+            Path(args.dist),
+            source_bundle=Path(args.source) if args.source else None,
+        )
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Certifi bundle audit: PASS ({bundle}, {bundle.stat().st_size} bytes)")
+    return 0
+
+
 def _command_audit_resources(args: argparse.Namespace) -> int:
     try:
         resources = audit_packaged_resources(Path(args.dist))
@@ -515,6 +561,11 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_dist.add_argument("--dist", required=True)
     audit_dist.add_argument("--provenance", required=True)
     audit_dist.set_defaults(handler=_command_audit_dist)
+
+    audit_certifi = subparsers.add_parser("audit-certifi")
+    audit_certifi.add_argument("--dist", required=True)
+    audit_certifi.add_argument("--source")
+    audit_certifi.set_defaults(handler=_command_audit_certifi)
 
     audit_resources = subparsers.add_parser("audit-resources")
     audit_resources.add_argument("--dist", required=True)

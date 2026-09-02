@@ -116,6 +116,16 @@ try {
         "--dist", $distribution,
         "--provenance", $provenance
     )
+    $certifiBundle = (& $pythonPath -c "import certifi; print(certifi.where())").Trim()
+    if (-not $certifiBundle) {
+        throw "Canonical certifi bundle path is empty."
+    }
+    Invoke-IsolatedPython @(
+        $packagingHelper,
+        "audit-certifi",
+        "--dist", $distribution,
+        "--source", $certifiBundle
+    )
     Invoke-IsolatedPython @(
         $packagingHelper,
         "audit-native",
@@ -126,6 +136,40 @@ try {
         "audit-icon",
         "--dist", $distribution
     )
+
+    # Run the TLS checks in a separate frozen runtime using the same custom
+    # certifi hook.  This is a packaging gate only and is not shipped to users.
+    $tlsSmokeRoot = Join-Path $projectRoot "build\tls-runtime-smoke"
+    $tlsSmokeDist = Join-Path $tlsSmokeRoot "dist"
+    $tlsSmokeWork = Join-Path $tlsSmokeRoot "work"
+    $tlsSmokeSpec = Join-Path $tlsSmokeRoot "spec"
+    New-Item -ItemType Directory -Force -Path $tlsSmokeSpec | Out-Null
+    Invoke-IsolatedPython @(
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--onedir",
+        "--console",
+        "--name", "dlsite-tls-runtime-smoke",
+        "--distpath", $tlsSmokeDist,
+        "--workpath", $tlsSmokeWork,
+        "--specpath", $tlsSmokeSpec,
+        "--additional-hooks-dir", (Join-Path $projectRoot "packaging\hooks"),
+        (Join-Path $projectRoot "packaging\tls_runtime_smoke.py")
+    )
+    $tlsSmokeExecutable = Join-Path $tlsSmokeDist "dlsite-tls-runtime-smoke\dlsite-tls-runtime-smoke.exe"
+    if (-not (Test-Path -LiteralPath $tlsSmokeExecutable -PathType Leaf)) {
+        throw "Frozen TLS smoke executable not found: $tlsSmokeExecutable"
+    }
+    $tlsSmokeOutput = & $tlsSmokeExecutable 2>&1
+    $tlsSmokeExitCode = $LASTEXITCODE
+    if ($tlsSmokeOutput) {
+        $tlsSmokeOutput | ForEach-Object { Write-Output $_ }
+    }
+    if ($tlsSmokeExitCode -ne 0) {
+        throw "Frozen TLS smoke failed with exit code $tlsSmokeExitCode."
+    }
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath $archive -Force
     }
