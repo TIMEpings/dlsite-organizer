@@ -17,6 +17,7 @@ from dlsite_organizer.domain.rename_execution import (
     UndoStatus,
 )
 from dlsite_organizer.persistence.rename_journal import RenameJournal
+from dlsite_organizer.services.mutation_gate import MutationGate, shared_mutation_gate
 from dlsite_organizer.services.mutation_history import (
     MutationHistoryChanged,
     notify_mutation_history_changed,
@@ -44,11 +45,18 @@ class UndoService:
         filesystem: RenameFilesystem | None = None,
         case_insensitive: bool = True,
         mutation_history_changed: MutationHistoryChanged | None = None,
+        mutation_gate: MutationGate | None = None,
     ) -> None:
         self._journal = journal
         self._filesystem = filesystem
         self._case_insensitive = case_insensitive
         self._mutation_history_changed = mutation_history_changed
+        self._mutation_gate = mutation_gate or shared_mutation_gate()
+
+    @property
+    def mutation_gate(self) -> MutationGate:
+        """Return the gate protecting this service's complete undo transaction."""
+        return self._mutation_gate
 
     def latest_transaction(self) -> RenameTransaction | None:
         """Return the most recent transaction with at least one undoable op."""
@@ -63,6 +71,21 @@ class UndoService:
         return self._journal.find_unresolved_transaction()
 
     def undo(
+        self,
+        transaction_id: str | None = None,
+        *,
+        confirmed: bool = False,
+        progress_callback: ExecutionProgressCallback | None = None,
+    ) -> UndoResult:
+        """Serialize and undo one complete journal transaction."""
+        with self._mutation_gate.acquire():
+            return self._undo(
+                transaction_id,
+                confirmed=confirmed,
+                progress_callback=progress_callback,
+            )
+
+    def _undo(
         self,
         transaction_id: str | None = None,
         *,

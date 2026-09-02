@@ -23,6 +23,7 @@ from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.manual_reviews import ManualReviewService
 from dlsite_organizer.services.historical_relations import HistoricalRelationService
+from dlsite_organizer.services.mutation_gate import MutationGate
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.quick_rename import QuickRenameService
@@ -44,6 +45,7 @@ class ApplicationComponents:
     organizer_service: OrganizerService
     cover_service: CoverService
     database: Database
+    mutation_gate: MutationGate
     rename_executor: RenameExecutor
     undo_service: UndoService
     rename_journal: RenameJournal
@@ -113,13 +115,16 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         journal: RenameJournal = UnavailableRenameJournal()
     else:
         journal = TransactionJournal(database)
+    mutation_gate = MutationGate()
     rename_executor = RenameExecutor(
         journal,
         mutation_history_changed=runtime_signals.notify_mutation_history_changed,
+        mutation_gate=mutation_gate,
     )
     undo_service = UndoService(
         journal,
         mutation_history_changed=runtime_signals.notify_mutation_history_changed,
+        mutation_gate=mutation_gate,
     )
     quick_rename_service = QuickRenameService(organizer_service, rename_executor)
     return ApplicationComponents(
@@ -128,6 +133,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         organizer_service=organizer_service,
         cover_service=CoverService(),
         database=database,
+        mutation_gate=mutation_gate,
         rename_executor=rename_executor,
         undo_service=undo_service,
         rename_journal=journal,

@@ -19,6 +19,7 @@ from dlsite_organizer.domain.rename_execution import (
     TransactionStatus,
 )
 from dlsite_organizer.persistence.rename_journal import RenameJournal
+from dlsite_organizer.services.mutation_gate import MutationGate, shared_mutation_gate
 from dlsite_organizer.services.mutation_history import (
     MutationHistoryChanged,
     notify_mutation_history_changed,
@@ -59,11 +60,18 @@ class RenameExecutor:
         filesystem: RenameFilesystem | None = None,
         case_insensitive: bool = True,
         mutation_history_changed: MutationHistoryChanged | None = None,
+        mutation_gate: MutationGate | None = None,
     ) -> None:
         self._journal = journal
         self._filesystem = filesystem or LocalRenameFilesystem()
         self._case_insensitive = case_insensitive
         self._mutation_history_changed = mutation_history_changed
+        self._mutation_gate = mutation_gate or shared_mutation_gate()
+
+    @property
+    def mutation_gate(self) -> MutationGate:
+        """Return the gate protecting this executor's complete transactions."""
+        return self._mutation_gate
 
     @property
     def available(self) -> bool:
@@ -80,6 +88,23 @@ class RenameExecutor:
         return self._journal.find_unresolved_transaction()
 
     def execute(
+        self,
+        root_path: Path | str,
+        plans: Sequence[RenamePlan],
+        *,
+        confirmed: bool = False,
+        progress_callback: ExecutionProgressCallback | None = None,
+    ) -> RenameExecutionResult:
+        """Serialize and execute one complete rename transaction."""
+        with self._mutation_gate.acquire():
+            return self._execute(
+                root_path,
+                plans,
+                confirmed=confirmed,
+                progress_callback=progress_callback,
+            )
+
+    def _execute(
         self,
         root_path: Path | str,
         plans: Sequence[RenamePlan],

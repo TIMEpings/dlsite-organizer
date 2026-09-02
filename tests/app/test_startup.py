@@ -4,6 +4,7 @@ from sqlalchemy import inspect
 
 from dlsite_organizer.app.bootstrap import build_components
 from dlsite_organizer.app.settings import AppSettings
+from dlsite_organizer.services.mutation_gate import MutationGate
 
 
 def test_fresh_profile_build_initializes_schema_without_provider_access(tmp_path: Path) -> None:
@@ -22,5 +23,17 @@ def test_fresh_profile_build_initializes_schema_without_provider_access(tmp_path
             "manual_relation_reviews",
         } <= tables
         assert components.rename_executor.available
+    finally:
+        components.database.dispose()
+
+
+def test_build_components_injects_one_shared_mutation_gate(tmp_path: Path) -> None:
+    settings = AppSettings(database_path=tmp_path / "profile" / "metadata.sqlite3")
+    components = build_components(settings)
+
+    try:
+        assert isinstance(components.mutation_gate, MutationGate)
+        assert components.rename_executor.mutation_gate is components.mutation_gate
+        assert components.undo_service.mutation_gate is components.mutation_gate
     finally:
         components.database.dispose()
