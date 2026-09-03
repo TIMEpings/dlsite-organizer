@@ -205,7 +205,7 @@ def test_request_contract_and_environment_tokens_are_ignored(monkeypatch) -> Non
     monkeypatch.setenv("GH_TOKEN", "SHOULD_NOT_BE_USED")
     monkeypatch.setenv("GITHUB_TOKEN", "SHOULD_NOT_BE_USED")
 
-    result, requests = run_check(valid_payload("v1.2.0"))
+    result, requests = run_check(valid_payload("v1.3.0"))
 
     assert result.status is UpdateCheckStatus.UPDATE_AVAILABLE
     assert len(requests) == 1
@@ -221,7 +221,7 @@ def test_request_contract_and_environment_tokens_are_ignored(monkeypatch) -> Non
 def test_injected_client_is_not_closed_by_service() -> None:
     client = httpx.Client(
         transport=httpx.MockTransport(
-            lambda _request: httpx.Response(200, json=valid_payload("v1.2.0"))
+            lambda _request: httpx.Response(200, json=valid_payload("v1.3.0"))
         )
     )
     try:
