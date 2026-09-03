@@ -29,6 +29,39 @@ FOREIGN_PATH_COMPONENTS = frozenset(
 TEMPORARY_PATH_COMPONENTS = frozenset({".cache", ".tmp", "tmp", "temp", "temporary"})
 NATIVE_ARTIFACT_SUFFIXES = frozenset({".dll", ".exe", ".pyd"})
 FORBIDDEN_ARTIFACT_COMPONENTS = frozenset({"codex", "codex-runtimes", "poppler"})
+PRODUCTION_HELPER_FILENAME = "dlsite-shell-helper.exe"
+FORBIDDEN_PACKAGE_SUFFIXES = frozenset({
+    ".obj",
+    ".pdb",
+    ".ilk",
+    ".lib",
+    ".exp",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cmake",
+    ".ninja",
+})
+FORBIDDEN_PACKAGE_COMPONENTS = frozenset({
+    "cmakefiles",
+    "ctesttestfile.cmake",
+    "native-build",
+    "pyinstaller-work",
+})
+FORBIDDEN_PACKAGE_FILENAMES = frozenset({
+    "cmakelists.txt",
+    "readme",
+    "readme.md",
+    "cmake.exe",
+    "ctest.exe",
+    "ninja.exe",
+    "shell_helper_com_probe.exe",
+    "shell_helper_interop_client.exe",
+    "shell_helper_tests.exe",
+    "test_launch_stub.exe",
+})
 REQUIRED_APPLICATION_RESOURCES = (Path("assets") / "branding" / "app_icon.png",)
 CERTIFI_BUNDLE_RELATIVE_PATH = Path("certifi") / "cacert.pem"
 CERTIFI_BUNDLE_MIN_BYTES = 100_000
@@ -475,6 +508,81 @@ def audit_native_binaries(distribution: Path) -> tuple[Path, ...]:
     return binaries
 
 
+def audit_packaged_helper(distribution: Path) -> Path:
+    """Verify the production helper is one root-level x64 PE without foreign runtimes."""
+    helpers = tuple(
+        sorted(
+            (
+                path
+                for path in distribution.rglob(PRODUCTION_HELPER_FILENAME)
+                if path.is_file()
+            ),
+            key=lambda path: path.as_posix().casefold(),
+        )
+    )
+    if len(helpers) != 1 or helpers[0].parent != distribution:
+        locations = ", ".join(str(path.relative_to(distribution)) for path in helpers)
+        raise RuntimeError(
+            "Packaged helper audit failed: expected exactly one root-level "
+            f"{PRODUCTION_HELPER_FILENAME}; found {locations or 'none'}"
+        )
+
+    helper = helpers[0]
+    data = helper.read_bytes()
+    if len(data) < 64 or data[:2] != b"MZ":
+        raise RuntimeError(f"Packaged helper audit failed: invalid PE {helper}")
+    pe_offset = int.from_bytes(data[0x3C:0x40], "little")
+    if pe_offset + 6 > len(data) or data[pe_offset : pe_offset + 4] != b"PE\0\0":
+        raise RuntimeError(f"Packaged helper audit failed: invalid PE header {helper}")
+    machine = int.from_bytes(data[pe_offset + 4 : pe_offset + 6], "little")
+    if machine != 0x8664:
+        raise RuntimeError(
+            f"Packaged helper audit failed: {helper.name} is not x64 (machine=0x{machine:04x})"
+        )
+    lowered = data.lower()
+    forbidden_markers = (
+        b"python",
+        b"qt6",
+        b"qt5",
+        b"winhttp.dll",
+        b"wininet.dll",
+        b"ws2_32.dll",
+        b"powershell",
+        b"cmd.exe",
+    )
+    for marker in forbidden_markers:
+        if marker in lowered:
+            raise RuntimeError(
+                f"Packaged helper audit failed: forbidden dependency marker {marker!r} in {helper}"
+            )
+    return helper
+
+
+def audit_package_hygiene(distribution: Path) -> tuple[Path, ...]:
+    """Reject native build/debug/test artifacts that must stay outside the payload."""
+    if not distribution.is_dir():
+        raise FileNotFoundError(f"Packaged distribution missing: {distribution}")
+    forbidden = tuple(
+        sorted(
+            (
+                path
+                for path in distribution.rglob("*")
+                if path.is_file()
+                and (
+                    path.suffix.casefold() in FORBIDDEN_PACKAGE_SUFFIXES
+                    or path.name.casefold() in FORBIDDEN_PACKAGE_FILENAMES
+                    or any(part.casefold() in FORBIDDEN_PACKAGE_COMPONENTS for part in path.parts)
+                )
+            ),
+            key=lambda path: path.as_posix().casefold(),
+        )
+    )
+    if forbidden:
+        rendered = ", ".join(str(path.relative_to(distribution)) for path in forbidden)
+        raise RuntimeError(f"Packaged hygiene audit failed: forbidden files {rendered}")
+    return forbidden
+
+
 def _command_clean_path(args: argparse.Namespace) -> int:
     path, kept, removed = isolated_build_path(
         args.path,
@@ -547,6 +655,26 @@ def _command_audit_icon(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_audit_helper(args: argparse.Namespace) -> int:
+    try:
+        helper = audit_packaged_helper(Path(args.dist))
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Packaged helper audit: PASS ({helper.name})")
+    return 0
+
+
+def _command_audit_hygiene(args: argparse.Namespace) -> int:
+    try:
+        audit_package_hygiene(Path(args.dist))
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print("Packaged hygiene audit: PASS")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -578,6 +706,14 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_icon = subparsers.add_parser("audit-icon")
     audit_icon.add_argument("--dist", required=True)
     audit_icon.set_defaults(handler=_command_audit_icon)
+
+    audit_helper = subparsers.add_parser("audit-helper")
+    audit_helper.add_argument("--dist", required=True)
+    audit_helper.set_defaults(handler=_command_audit_helper)
+
+    audit_hygiene = subparsers.add_parser("audit-hygiene")
+    audit_hygiene.add_argument("--dist", required=True)
+    audit_hygiene.set_defaults(handler=_command_audit_hygiene)
     return parser
 
 

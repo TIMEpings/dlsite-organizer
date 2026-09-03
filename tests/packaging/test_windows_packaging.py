@@ -235,3 +235,80 @@ def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(
     (distribution / "wrong.pyd").write_bytes(x86)
     with pytest.raises(RuntimeError, match="not x64"):
         windows_packaging.audit_native_binaries(distribution)
+
+
+def _minimal_x64_pe() -> bytearray:
+    data = bytearray(256)
+    data[:2] = b"MZ"
+    data[0x3C:0x40] = (128).to_bytes(4, "little")
+    data[128:132] = b"PE\0\0"
+    data[132:134] = (0x8664).to_bytes(2, "little")
+    return data
+
+
+def test_audit_packaged_helper_requires_one_root_level_x64_helper(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    helper = distribution / windows_packaging.PRODUCTION_HELPER_FILENAME
+    helper.write_bytes(_minimal_x64_pe())
+
+    assert windows_packaging.audit_packaged_helper(distribution) == helper
+
+    nested = distribution / "_internal" / windows_packaging.PRODUCTION_HELPER_FILENAME
+    nested.parent.mkdir()
+    nested.write_bytes(_minimal_x64_pe())
+    with pytest.raises(RuntimeError, match="exactly one root-level"):
+        windows_packaging.audit_packaged_helper(distribution)
+
+
+def test_audit_packaged_helper_rejects_forbidden_runtime_markers(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    helper = distribution / windows_packaging.PRODUCTION_HELPER_FILENAME
+    helper.write_bytes(_minimal_x64_pe() + b"Qt6Core.dll")
+
+    with pytest.raises(RuntimeError, match="forbidden dependency marker"):
+        windows_packaging.audit_packaged_helper(distribution)
+
+
+def test_audit_package_hygiene_rejects_native_build_outputs(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    (distribution / "_internal").mkdir(parents=True)
+    (distribution / "_internal" / "debug.pdb").write_bytes(b"x")
+
+    with pytest.raises(RuntimeError, match="forbidden files"):
+        windows_packaging.audit_package_hygiene(distribution)
+
+
+def test_audit_package_hygiene_rejects_native_test_and_build_tools(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    (distribution / "shell_helper_tests.exe").write_bytes(b"test")
+    (distribution / "ninja.exe").write_bytes(b"ninja")
+
+    with pytest.raises(RuntimeError, match="forbidden files"):
+        windows_packaging.audit_package_hygiene(distribution)
+
+
+def test_windows_build_script_has_staging_guard_and_native_helper_step() -> None:
+    script = (_HELPER_PATH.parents[0] / "build-windows.ps1").read_text(encoding="utf-8")
+
+    assert "OutputRoot" in script
+    assert "StagingOnly" in script
+    assert "officialArchiveExpectedSha256" in script
+    assert "dlsite-shell-helper.exe" in script
+    assert "Resolve-NativeToolchain" in script
+    assert "Native CTest" in script
+    assert "DLSITE_PACKAGING_OUTPUT_ROOT" in script
+    assert "Compress-Archive" in script
+
+
+def test_native_build_uses_static_msvc_runtime_and_production_only_package_target() -> None:
+    cmake = (_HELPER_PATH.parents[1] / "native" / "shell_helper" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CMAKE_MSVC_RUNTIME_LIBRARY" in cmake
+    assert "dlsite-shell-helper" in cmake
+    assert "shell_helper_tests" in cmake
+    assert "shell_helper_com_probe" in cmake

@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
@@ -17,6 +18,9 @@ _packaging_helper_spec.loader.exec_module(_packaging_helper)
 
 _branding_png = project_root / "assets" / "branding" / "app_icon.png"
 _branding_ico = project_root / "assets" / "branding" / "app_icon.ico"
+_packaging_output_root = Path(
+    os.environ.get("DLSITE_PACKAGING_OUTPUT_ROOT", str(project_root / "build"))
+)
 _selectolax_data_excludes = [
     "**/*.c",
     "**/*.pxd",
@@ -66,7 +70,7 @@ for _entry in analysis.binaries:
         )
 
 _packaging_helper.write_provenance_manifest(
-    project_root / "build" / "dlsite-organizer-binary-provenance.json",
+    _packaging_output_root / "dlsite-organizer-binary-provenance.json",
     _icu_provenance,
 )
 

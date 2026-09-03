@@ -12,6 +12,10 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# The portable package must not depend on a developer-machine MSVC
+# redistributable.  Keep the production helper (and test binaries) on the
+# supported static MSVC runtime; the Windows system DLLs remain dynamic.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_compile_options(/W4 /WX /permissive- /EHsc /utf-8)
 add_compile_definitions(UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -54,6 +58,16 @@ set_target_properties(shell_helper_tests PROPERTIES
 add_executable(shell_helper_interop_client tests/interop_client.cpp)
 target_link_libraries(shell_helper_interop_client PRIVATE dlsite_shell_helper_core)
 set_target_properties(shell_helper_interop_client PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# Test-only COM client used by the packaging gate.  It activates the packaged
+# LocalServer32 class and supplies a real IShellItemArray; it is never copied
+# into a production payload.
+add_executable(shell_helper_com_probe tests/com_activation_probe.cpp)
+target_include_directories(shell_helper_com_probe PRIVATE "${SHELL_HELPER_INCLUDE_DIR}")
+target_link_libraries(shell_helper_com_probe PRIVATE ole32 shell32)
+set_target_properties(shell_helper_com_probe PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 

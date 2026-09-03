@@ -1,14 +1,15 @@
 # Native Explorer selection adapter and helper integration
 
-This directory contains the v1.2.0 Phase 1 x64-only native foundation and the
-Phase 2 application-integration contract.  The source is part of the project
+This directory contains the v1.2.0 x64-only native Explorer COM helper and the
+application-integration contract. The source is part of the project
 MIT-licensed work:
 
 `Copyright (c) 2026 TIMEpings`
 
-It is intentionally not part of the v1.1.0 Explorer registration or the
-PyInstaller/ZIP packaging yet.  Build output belongs under the ignored
-repository `build/` directory.
+The helper is a separately built production executable. Build output belongs
+under the ignored `build/` directory; only `bin/dlsite-shell-helper.exe` is
+copied into a package root. Test executables and static libraries never enter
+the portable payload.
 
 ## Build
 
@@ -24,10 +25,27 @@ The development helper is:
 
 `build/native/shell_helper/bin/dlsite-shell-helper.exe`
 
+The staging packaging gate is isolated from the released v1.1.0 ZIP:
+
+```text
+powershell -File packaging/build-windows.ps1 `
+  -OutputRoot build/audit-v12-phase3-package -StagingOnly
+```
+
+The script requires a Visual Studio C++ x64 workload, Windows SDK, CMake,
+Ninja, and CTest. It initializes the x64 developer environment, builds and
+runs native tests before PyInstaller, audits `dumpbin /dependents`, and fails
+if the helper imports Python, Qt, networking, shell interpreters, or the
+dynamic MSVC runtime. The helper uses the static MSVC runtime (`/MT`) so a
+portable user machine does not need a separately installed VC++ runtime.
+
 `shell_helper_interop_client.exe` is test-only and is not a production
 entrypoint.  It accepts a test profile root so Python can select an isolated
 server; the production helper accepts only COM's optional `-Embedding` switch
 and derives its profile from the current user's `%LOCALAPPDATA%`.
+`shell_helper_com_probe.exe` is also test-only; the packaging gate uses it to
+activate the registered LocalServer32 class and pass a real `IShellItemArray`
+without claiming Explorer GUI acceptance.
 
 ## Fixed COM identity
 
@@ -36,7 +54,27 @@ The Phase 1 class identity is:
 `{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}`
 
 The same object implements `IExecuteCommand` and `IObjectWithSelection`.
-There is no permanent registry entry in this phase.
+Production registration is per-user and is written by the Python service only
+for the fixed CLSID. The Explorer verb uses:
+
+```text
+HKCU\Software\Classes\Directory\shell\dlsite-organizer
+  MultiSelectModel = Player
+  command\DelegateExecute = {031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}
+
+HKCU\Software\Classes\CLSID\{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}\LocalServer32
+  (Default) = "<package root>\dlsite-shell-helper.exe"
+```
+
+The old static `%1` command is removed on migration. `DelegateExecute` is the
+value under the verb's `command` subkey, as specified by Microsoft's
+[`ASSOCSTR_DELEGATEEXECUTE`](https://learn.microsoft.com/en-us/windows/win32/api/shlwapi/ne-shlwapi-assocstr)
+documentation. Explorer supplies the selection through
+[`IObjectWithSelection`](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iobjectwithselection)
+for the [`IExecuteCommand`](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexecutecommand)
+implementation; the Shell selection-model guidance documents the `Player`
+mode used here. Real Explorer selection acceptance is intentionally deferred
+to Phase 4.
 
 ## Selection contract
 
@@ -132,7 +170,7 @@ consequently deferred to human UAT on the normal interactive desktop.
 
 ## Human Explorer UAT probe (temporary HKCU registration only)
 
-This is a manual probe plan, not a Phase 1 automated registration step.  Use
+This is a manual probe plan, not a Phase 3 automated Explorer acceptance step. Use
 an isolated development checkout and the x64 Release helper.  In `regedit`,
 create only these temporary per-user values:
 
