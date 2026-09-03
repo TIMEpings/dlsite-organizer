@@ -131,7 +131,8 @@ class SettingsPage(QWidget):
 
         explorer_help = QLabel(
             "注册仅对当前 Windows 用户生效，不需要管理员权限。"
-            "右键菜单支持单个文件夹。需要批量处理多个作品时，请使用轻量模式拖放或完整模式。"
+            "右键菜单支持同时选择多个文件夹并作为一次 Quick Rename 请求处理。"
+            "需要预览或更细致控制时，请使用轻量模式拖放或完整模式。"
             "根据 Windows 版本和 Explorer 行为，该命令可能出现在“显示更多选项”菜单中。"
         )
         explorer_help.setObjectName("pageDescription")
@@ -386,9 +387,9 @@ class SettingsPage(QWidget):
             self.refresh_explorer_registration()
             return
         self._render_explorer_registration(registration)
-        if registration.state is ExplorerRegistrationState.REGISTERED_CURRENT:
+        if registration.state is ExplorerRegistrationState.CURRENT:
             self.explorer_feedback_label.setProperty("state", "success")
-            self.explorer_feedback_label.setText("资源管理器右键菜单已注册到当前程序路径。")
+            self.explorer_feedback_label.setText("资源管理器右键菜单已注册到当前应用及其 helper。")
         elif registration.state is ExplorerRegistrationState.UNSUPPORTED:
             self.explorer_feedback_label.setProperty("state", "error")
             self.explorer_feedback_label.setText("资源管理器右键菜单只能在打包版本中注册。")
@@ -405,7 +406,7 @@ class SettingsPage(QWidget):
             self.refresh_explorer_registration()
             return
         self._render_explorer_registration(registration)
-        if registration.state is ExplorerRegistrationState.NOT_REGISTERED:
+        if registration.state is ExplorerRegistrationState.ABSENT:
             self.explorer_feedback_label.setProperty("state", "success")
             self.explorer_feedback_label.setText("资源管理器右键菜单已移除。")
         elif registration.state is ExplorerRegistrationState.UNSUPPORTED:
@@ -415,9 +416,10 @@ class SettingsPage(QWidget):
 
     def _render_explorer_registration(self, registration: ExplorerRegistration) -> None:
         labels = {
-            ExplorerRegistrationState.NOT_REGISTERED: "未注册",
-            ExplorerRegistrationState.REGISTERED_CURRENT: "已注册",
-            ExplorerRegistrationState.REGISTERED_STALE: "路径已失效 / 需要更新",
+            ExplorerRegistrationState.ABSENT: "未注册",
+            ExplorerRegistrationState.CURRENT: "已注册",
+            ExplorerRegistrationState.LEGACY: "需要更新",
+            ExplorerRegistrationState.STALE: "需要更新",
             ExplorerRegistrationState.UNSUPPORTED: "不支持",
             ExplorerRegistrationState.ERROR: "读取失败",
         }
@@ -425,19 +427,22 @@ class SettingsPage(QWidget):
             "state",
             "error"
             if registration.state in {
-                ExplorerRegistrationState.REGISTERED_STALE,
+                ExplorerRegistrationState.LEGACY,
+                ExplorerRegistrationState.STALE,
                 ExplorerRegistrationState.UNSUPPORTED,
                 ExplorerRegistrationState.ERROR,
             }
             else "success"
-            if registration.state is ExplorerRegistrationState.REGISTERED_CURRENT
+            if registration.state is ExplorerRegistrationState.CURRENT
             else "",
         )
         self.explorer_status_label.setText(f"状态：{labels[registration.state]}")
 
         path_lines: list[str] = []
         if registration.registered_executable is not None:
-            path_lines.append(f"已注册路径：{registration.registered_executable}")
+            path_lines.append(f"已注册应用：{registration.registered_executable}")
+        if registration.registered_helper is not None:
+            path_lines.append(f"已注册 helper：{registration.registered_helper}")
         if registration.current_executable is not None:
             path_lines.append(f"当前程序：{registration.current_executable}")
         if registration.state is ExplorerRegistrationState.UNSUPPORTED:

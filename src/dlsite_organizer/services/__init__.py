@@ -17,7 +17,9 @@ from dlsite_organizer.services.explorer_integration import (
     ExplorerIntegrationService,
     ExplorerRegistration,
     ExplorerRegistrationState,
+    build_local_server_command,
     build_quick_rename_command,
+    sibling_helper_path,
 )
 from dlsite_organizer.services.folder_scanner import (
     FolderScanFailure,
@@ -82,7 +84,9 @@ __all__ = [
     "UpdateCheckStatus",
     "WorkLookup",
     "WorkLookupStatus",
+    "build_local_server_command",
     "build_quick_rename_command",
     "normalize_maker_name",
     "rj_numeric_distance",
+    "sibling_helper_path",
 ]

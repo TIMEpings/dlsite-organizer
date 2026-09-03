@@ -214,9 +214,9 @@ contract did not include single-instance IPC; the application-level integration 
 Phase D adds one typed application boundary around the existing lightweight flow:
 
 ```text
-Explorer shell verb (HKCU, Single, one %1 selection)
-        ↓ direct packaged exe command
-argparse → ApplicationInvocation(QUICK_RENAME)
+Explorer shell verb (HKCU, Player, DelegateExecute)
+        ↓ IExecuteCommand / IObjectWithSelection
+native x64 helper → one bounded QUICK_RENAME request
         ↓
 profile election → primary ApplicationComponents
         ↓ secondary: local IPC forwarding and exit
@@ -238,28 +238,40 @@ launch with no arguments continues to select the configured full/lightweight sta
 Unknown arguments and missing values are rejected by `argparse`; a packaged GUI reports the error
 in a dialog and logs it rather than leaving an invisible process.
 
-The Explorer verb is created only under the current user's
-`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key. It explicitly sets
-`MultiSelectModel=Single`; its command is generated from `sys.executable` in a frozen build and
-contains a quoted executable path plus the literal quoted Explorer `%1` placeholder. No source
-path, Python interpreter, `cmd /c`, PowerShell, or shell interpolation is registered. Windows path
-comparison is case-insensitive and expands 8.3 spelling when Windows can provide the long form,
-so portable relocation is reported as a typed stale state.
+The production Explorer verb is created only under the current user's
+`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key. Its `command` child contains a
+`DelegateExecute` `REG_SZ` value with the fixed native CLSID
+`{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}`, and the verb explicitly sets `MultiSelectModel=Player`.
+The matching `HKCU\Software\Classes\CLSID\{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}\LocalServer32`
+default value is the quoted sibling `dlsite-shell-helper.exe` path. The static v1.1 command
+`"<exe>" --quick-rename "%1"` is removed during migration and is never retained as a fallback.
+No source path, Python interpreter, `cmd /c`, PowerShell, shell interpolation, HKLM entry, or
+elevation is registered. Windows path comparison is case-insensitive and expands 8.3 spelling when
+Windows can provide the long form, so portable relocation is reported as a typed stale state.
 Non-Windows and source/development contexts report `UNSUPPORTED` and cannot register.
 
-The Explorer contract supports one selected directory only. Multi-select is intentionally
-unsupported for this static verb because the target Windows environment cannot reliably aggregate
-multiple selections into one application call; limiting the verb to `Single` prevents Explorer from
-launching multiple application processes. Batch Quick Rename remains available through lightweight
-drag-and-drop and the CLI, where multiple CLI paths remain one user batch and one journal/Undo
-transaction. When a primary already exists, the CLI request is forwarded to that primary rather
-than constructing another component graph.
+The native helper implements `IExecuteCommand` and `IObjectWithSelection` in a pure Win32 x64
+`CLSCTX_LOCAL_SERVER` process. Explorer supplies one `IShellItemArray`; the helper validates and
+snapshots it, then sends one bounded `QUICK_RENAME` request to the profile-scoped primary. If no
+primary is running, it validates and launches the packaged sibling application with only the fixed
+`--quick-rename-host` signal before sending that same request. The application remains authoritative
+for the 32-item business limit, queue admission, validation, one journal transaction, and one Undo.
+The CLI `--quick-rename <paths...>` path remains supported independently.
 
 `ExplorerIntegrationService` is UI-independent and uses a small registry backend protocol. The
 Settings page renders its inspection result rather than guessing from button text or persisting a
-registry state in TOML. Register/update and remove are explicit; remove deletes only this verb and
-its command child and is idempotent. Ordinary Windows 11 shell-verb behavior may place the command
-under **显示更多选项**; no modern COM or MSIX shell extension is part of this hardening round.
+registry state in TOML. It distinguishes `CURRENT`, `LEGACY`, `STALE`, and `ABSENT`; the UI renders
+the first as **已注册**, legacy/stale as **需要更新**, and absent as **未注册**. Registration
+validates the sibling helper before any write, writes the LocalServer32 entry before switching the
+verb, writes `MultiSelectModel` last, and rolls back captured owned values on failure where possible.
+Remove deletes only this verb tree and fixed CLSID tree and is idempotent. Ordinary Windows 11
+shell-verb behavior may place the command under **显示更多选项**; real Explorer selection UAT is
+owned by the next phase.
+
+The native helper is built separately with the Release x64 MSVC/CMake toolchain and static MSVC
+runtime (`/MT`), then copied as exactly one sibling of the PyInstaller onedir executable. Native
+interoperability must be re-run whenever the PySide6/Qt line changes; the current gate is PySide6
+6.11.2 / Qt 6.11.2 against the Win32 named-pipe client.
 The footer About entry is the only About navigation entry and derives its version from the package
 version source; the main navigation remains `整理`, `查询`, `设置`.
 

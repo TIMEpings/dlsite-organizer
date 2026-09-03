@@ -7,6 +7,10 @@ from tests.services.test_lookup import FakeProvider
 from dlsite_organizer.app.settings import AppSettings, SettingsService, load_settings
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.services.cover import CoverService
+from dlsite_organizer.services.explorer_integration import (
+    ExplorerRegistration,
+    ExplorerRegistrationState,
+)
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
@@ -46,7 +50,7 @@ def test_settings_page_has_live_preview_and_rejects_invalid_template(
     assert page.open_logs_button is not None
     assert "资源管理器集成" in [box.title() for box in page.findChildren(QGroupBox)]
     assert any(
-        "右键菜单支持单个文件夹。需要批量处理多个作品时，请使用轻量模式拖放或完整模式。"
+        "右键菜单支持同时选择多个文件夹并作为一次 Quick Rename 请求处理。"
         in label.text()
         for label in page.findChildren(QLabel)
     )
@@ -56,6 +60,38 @@ def test_settings_page_has_live_preview_and_rejects_invalid_template(
     assert page.explorer_status_label.text() == "状态：不支持"
     assert not page.register_explorer_button.isEnabled()
     assert not page.remove_explorer_button.isEnabled()
+    page.close()
+
+
+@pytest.mark.parametrize(
+    ("state", "label"),
+    (
+        (ExplorerRegistrationState.ABSENT, "状态：未注册"),
+        (ExplorerRegistrationState.LEGACY, "状态：需要更新"),
+        (ExplorerRegistrationState.STALE, "状态：需要更新"),
+        (ExplorerRegistrationState.CURRENT, "状态：已注册"),
+    ),
+)
+def test_settings_page_renders_explorer_registration_states(
+    qapp: QApplication,
+    tmp_path: Path,
+    state: ExplorerRegistrationState,
+    label: str,
+) -> None:
+    service = SettingsService(
+        AppSettings(database_path=tmp_path / "metadata.sqlite3"),
+        config_path=tmp_path / "config.toml",
+    )
+    page = SettingsPage(service)
+
+    page._render_explorer_registration(
+        ExplorerRegistration(
+            state=state,
+            current_executable=tmp_path / "dlsite-organizer.exe",
+        )
+    )
+
+    assert page.explorer_status_label.text() == label
     page.close()
 
 

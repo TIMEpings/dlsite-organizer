@@ -104,36 +104,46 @@ its state is not stored in `config.toml`. It shows one of:
 ```text
 未注册
 已注册
-路径已失效 / 需要更新
+需要更新
 不支持
 读取失败
 ```
 
 On a packaged Windows build, **注册 / 更新** writes only the current user's
-`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key and its `command` child. It also
-sets the verb's `MultiSelectModel` value to `Single`, and the command is generated as a direct
-executable invocation:
+`HKCU\Software\Classes\Directory\shell\dlsite-organizer` key, its `command` child, and the
+application-owned `HKCU\Software\Classes\CLSID\{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}\LocalServer32`
+key. The verb uses `MultiSelectModel=Player`; `command` contains only the `DelegateExecute`
+value:
 
 ```text
-"<current packaged exe>" --quick-rename "%1"
+DelegateExecute = {031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}
+LocalServer32  = "<package root>\dlsite-shell-helper.exe"
 ```
 
-The executable path is quoted by the standard Windows argument formatter, so spaces and non-ASCII
-paths are preserved; no `cmd.exe`, PowerShell, or shell trampoline is used. The Explorer contract is
-single selected directory only. Multi-select is intentionally unsupported by this static verb;
-batch processing remains available through lightweight drag-and-drop or Full Organizer. The CLI
-still accepts one or more directory arguments as one Quick Rename batch. If the application is
-already running, the invocation is forwarded to that primary and the secondary process exits. **移除**
-deletes only this verb and its `command` child, is idempotent, and never removes the parent
-`Directory\shell` key or unrelated verbs. Registration is explicit, per-user, and needs no
-administrator rights.
+The helper path is derived only as the sibling of the frozen application and must already be a
+regular file before registration writes anything. Paths are quoted by the standard Windows argument
+formatter, so spaces and non-ASCII paths are preserved; no `cmd.exe`, PowerShell, shell trampoline,
+PATH lookup, or dynamic extraction is used. The native helper receives the complete Shell selection
+through `IObjectWithSelection`, sends one bounded batch to the primary application, and keeps the
+existing one-controller-item / one-journal-transaction / one-Undo contract. The CLI still accepts
+one or more directory arguments as one Quick Rename batch. If the application is already running,
+the helper forwards to that primary; otherwise it launches the sibling application with the internal
+`--quick-rename-host` signal and sends the paths after the server is ready.
+
+`CURRENT` is rendered as **已注册**. A v1.1 static `%1` registration is `LEGACY`; a missing,
+wrong, moved, or incomplete COM registration is `STALE`; both are rendered as **需要更新**. The
+service captures the owned values and rolls them back on a registry write or Shell notification
+failure where possible, and never reports an incomplete schema as current. **移除** deletes only
+this verb tree and this fixed CLSID tree, is idempotent for current/legacy/stale/partial states, and
+never removes the parent `Directory\shell` key, unrelated verbs, or unrelated CLSIDs. Registration
+is explicit, per-user, and needs no administrator rights.
 
 The source/development run does not register a Python interpreter or source entry point; its buttons
 are disabled with a message that Explorer integration is available only in the packaged version.
-Because the distribution is a portable ZIP, moving the application makes an existing absolute path
-stale. Start the application from its new location and use **注册 / 更新**. Before deleting the
-portable application directory, use **移除** first. On Windows 11 and some Explorer configurations,
-the ordinary shell verb may appear under **显示更多选项**.
+Because the distribution is a portable ZIP, moving the application makes the absolute Icon and
+`LocalServer32` paths stale. Start the application from its new location and use **注册 / 更新**.
+Before deleting the portable application directory, use **移除** first. On Windows 11 and some
+Explorer configurations, the ordinary shell verb may appear under **显示更多选项**.
 
 The Explorer action opens the existing lightweight Quick Action surface and calls the same
 `QuickRenameService` as drag-and-drop. If Full mode is busy, the request remains queued in the
@@ -142,10 +152,9 @@ ordinary confirmation dialog,
 but it still performs input validation, lookup, naming, planning, final preflight, durable journal
 creation, and executor mutation. A fresh metadata cache is reused, and an unresolved journal
 blocks the action. Independent concurrent invocations remain serialized at journal transaction
-creation as defense-in-depth. This single-selection Explorer restriction is intentional: Windows
-Explorer's static right-click verb cannot reliably aggregate multi-select into one application
-call in the target environment, so v1.0 avoids the unsafe multiple-process behavior; future
-versions may revisit it.
+creation as defense-in-depth. The Explorer COM handler receives one Shell selection and sends it
+as one bounded request; the application remains authoritative for the 32-item limit and all domain
+validation.
 
 ## Persistence and paths
 
