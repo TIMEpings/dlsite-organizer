@@ -238,11 +238,13 @@ def test_audit_native_binaries_accepts_x64_pe_and_rejects_other_architecture(
 
 
 def _minimal_x64_pe() -> bytearray:
-    data = bytearray(256)
+    data = bytearray(320)
     data[:2] = b"MZ"
     data[0x3C:0x40] = (128).to_bytes(4, "little")
     data[128:132] = b"PE\0\0"
     data[132:134] = (0x8664).to_bytes(2, "little")
+    data[148:150] = (240).to_bytes(2, "little")
+    data[220:222] = (2).to_bytes(2, "little")
     return data
 
 
@@ -268,6 +270,18 @@ def test_audit_packaged_helper_rejects_forbidden_runtime_markers(tmp_path: Path)
     helper.write_bytes(_minimal_x64_pe() + b"Qt6Core.dll")
 
     with pytest.raises(RuntimeError, match="forbidden dependency marker"):
+        windows_packaging.audit_packaged_helper(distribution)
+
+
+def test_audit_packaged_helper_rejects_console_subsystem(tmp_path: Path) -> None:
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    helper = distribution / windows_packaging.PRODUCTION_HELPER_FILENAME
+    console_pe = _minimal_x64_pe()
+    console_pe[220:222] = (3).to_bytes(2, "little")
+    helper.write_bytes(console_pe)
+
+    with pytest.raises(RuntimeError, match="not Windows GUI"):
         windows_packaging.audit_packaged_helper(distribution)
 
 
@@ -309,6 +323,21 @@ def test_native_build_uses_static_msvc_runtime_and_production_only_package_targe
     )
 
     assert "CMAKE_MSVC_RUNTIME_LIBRARY" in cmake
-    assert "dlsite-shell-helper" in cmake
+    assert "add_executable(dlsite-shell-helper WIN32" in cmake
+    assert "src/helper_runtime.cpp" in cmake
     assert "shell_helper_tests" in cmake
     assert "shell_helper_com_probe" in cmake
+
+
+def test_production_helper_uses_windows_entry_point() -> None:
+    main = (_HELPER_PATH.parents[1] / "native" / "shell_helper" / "src" / "main.cpp").read_text(
+        encoding="utf-8"
+    )
+    runtime = (
+        _HELPER_PATH.parents[1] / "native" / "shell_helper" / "src" / "helper_runtime.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "wWinMain" in main
+    assert "wmain" not in main
+    assert "RunShellHelper" in main
+    assert "CoInitializeSecurity" in runtime

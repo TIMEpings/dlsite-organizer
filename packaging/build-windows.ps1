@@ -315,6 +315,12 @@ try {
     }
 
     Invoke-IsolatedPython @(
+        $packagingHelper,
+        "audit-helper",
+        "--helper", $nativeHelper
+    )
+
+    Invoke-IsolatedPython @(
         "-m",
         "PyInstaller",
         "--noconfirm",

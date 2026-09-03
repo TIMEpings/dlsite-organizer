@@ -25,6 +25,7 @@ set(SHELL_HELPER_SOURCES
     src/com_class_factory.cpp
     src/com_command.cpp
     src/com_server.cpp
+    src/helper_runtime.cpp
     src/identity.cpp
     src/ipc_client.cpp
     src/launch_coordinator.cpp
@@ -42,7 +43,7 @@ target_link_libraries(dlsite_shell_helper_core PUBLIC
     shell32
 )
 
-add_executable(dlsite-shell-helper src/main.cpp)
+add_executable(dlsite-shell-helper WIN32 src/main.cpp)
 target_link_libraries(dlsite-shell-helper PRIVATE dlsite_shell_helper_core)
 set_target_properties(dlsite-shell-helper PROPERTIES
     OUTPUT_NAME "dlsite-shell-helper"

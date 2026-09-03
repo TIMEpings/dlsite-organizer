@@ -509,7 +509,7 @@ def audit_native_binaries(distribution: Path) -> tuple[Path, ...]:
 
 
 def audit_packaged_helper(distribution: Path) -> Path:
-    """Verify the production helper is one root-level x64 PE without foreign runtimes."""
+    """Verify the production helper is one root-level x64 GUI PE without foreign runtimes."""
     helpers = tuple(
         sorted(
             (
@@ -528,16 +528,32 @@ def audit_packaged_helper(distribution: Path) -> Path:
         )
 
     helper = helpers[0]
+    _audit_helper_binary(helper)
+    return helper
+
+
+def _audit_helper_binary(helper: Path) -> None:
+    """Verify one production helper binary's architecture and PE subsystem."""
     data = helper.read_bytes()
     if len(data) < 64 or data[:2] != b"MZ":
         raise RuntimeError(f"Packaged helper audit failed: invalid PE {helper}")
     pe_offset = int.from_bytes(data[0x3C:0x40], "little")
-    if pe_offset + 6 > len(data) or data[pe_offset : pe_offset + 4] != b"PE\0\0":
+    if pe_offset + 24 > len(data) or data[pe_offset : pe_offset + 4] != b"PE\0\0":
         raise RuntimeError(f"Packaged helper audit failed: invalid PE header {helper}")
     machine = int.from_bytes(data[pe_offset + 4 : pe_offset + 6], "little")
     if machine != 0x8664:
         raise RuntimeError(
             f"Packaged helper audit failed: {helper.name} is not x64 (machine=0x{machine:04x})"
+        )
+    optional_header_size = int.from_bytes(data[pe_offset + 20 : pe_offset + 22], "little")
+    optional_header = pe_offset + 24
+    if optional_header_size < 70 or optional_header + 70 > len(data):
+        raise RuntimeError(f"Packaged helper audit failed: invalid optional PE header {helper}")
+    subsystem = int.from_bytes(data[optional_header + 68 : optional_header + 70], "little")
+    if subsystem != 2:
+        raise RuntimeError(
+            f"Packaged helper audit failed: {helper.name} is not Windows GUI "
+            f"(subsystem=0x{subsystem:04x})"
         )
     lowered = data.lower()
     forbidden_markers = (
@@ -555,7 +571,6 @@ def audit_packaged_helper(distribution: Path) -> Path:
             raise RuntimeError(
                 f"Packaged helper audit failed: forbidden dependency marker {marker!r} in {helper}"
             )
-    return helper
 
 
 def audit_package_hygiene(distribution: Path) -> tuple[Path, ...]:
@@ -657,7 +672,14 @@ def _command_audit_icon(args: argparse.Namespace) -> int:
 
 def _command_audit_helper(args: argparse.Namespace) -> int:
     try:
-        helper = audit_packaged_helper(Path(args.dist))
+        if args.helper:
+            helper_path = Path(args.helper)
+            _audit_helper_binary(helper_path)
+            helper = helper_path
+        elif args.dist:
+            helper = audit_packaged_helper(Path(args.dist))
+        else:
+            raise RuntimeError("Helper audit requires --dist or --helper")
     except (FileNotFoundError, OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -708,7 +730,8 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_icon.set_defaults(handler=_command_audit_icon)
 
     audit_helper = subparsers.add_parser("audit-helper")
-    audit_helper.add_argument("--dist", required=True)
+    audit_helper.add_argument("--dist")
+    audit_helper.add_argument("--helper")
     audit_helper.set_defaults(handler=_command_audit_helper)
 
     audit_hygiene = subparsers.add_parser("audit-hygiene")
