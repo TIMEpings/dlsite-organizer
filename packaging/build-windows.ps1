@@ -240,7 +240,7 @@ try {
 
     $version = (& $pythonPath -c "from dlsite_organizer import __version__; print(__version__)").Trim()
     if (-not $stagingBuild -and $version -eq "1.1.0") {
-        throw "Refusing to emit a v1.1.0 release artifact during Phase 3. Use -OutputRoot <staging-path> -StagingOnly."
+        throw "Refusing to emit a v1.1.0 release artifact during a release build. Use -OutputRoot <staging-path> -StagingOnly."
     }
 
     $nativeToolchain = Resolve-NativeToolchain
