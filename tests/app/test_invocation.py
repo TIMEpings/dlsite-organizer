@@ -7,6 +7,7 @@ from dlsite_organizer.app.invocation import (
     LaunchMode,
     parse_invocation,
 )
+from dlsite_organizer.domain.quick_rename import MAX_QUICK_RENAME_ITEMS
 
 
 def test_empty_invocation_keeps_normal_startup_mode() -> None:
@@ -37,6 +38,25 @@ def test_quick_rename_accepts_one_or_more_directory_arguments(
     assert invocation.quick_rename_directory == (
         Path(work_paths[0]) if len(work_paths) == 1 else None
     )
+
+
+def test_quick_rename_accepts_limit_and_rejects_oversized_batch() -> None:
+    paths = tuple(rf"D:\DLsite\RJ{index:08d} old" for index in range(MAX_QUICK_RENAME_ITEMS))
+
+    invocation = parse_invocation(("--quick-rename", *paths))
+
+    assert len(invocation.quick_rename_directories) == MAX_QUICK_RENAME_ITEMS
+    with pytest.raises(InvocationParseError, match="一次最多处理 32 个文件夹"):
+        parse_invocation(("--quick-rename", *paths, r"D:\DLsite\RJ99999999 old"))
+
+
+def test_internal_quick_rename_host_signal_has_no_paths() -> None:
+    invocation = parse_invocation(("--quick-rename-host",))
+
+    assert invocation.mode is LaunchMode.NORMAL
+    assert invocation.quick_rename_host
+    with pytest.raises(InvocationParseError):
+        parse_invocation(("--quick-rename-host", "unexpected"))
 
 
 @pytest.mark.parametrize(

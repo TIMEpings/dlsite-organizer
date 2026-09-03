@@ -9,6 +9,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NoReturn
 
+from dlsite_organizer.domain.quick_rename import (
+    MAX_QUICK_RENAME_ITEMS,
+    quick_rename_batch_limit_message,
+)
+
 
 class LaunchMode(StrEnum):
     """The user-facing application entry points."""
@@ -27,6 +32,7 @@ class ApplicationInvocation:
 
     mode: LaunchMode
     quick_rename_directories: tuple[Path, ...] = ()
+    quick_rename_host: bool = False
 
     @property
     def quick_rename_directory(self) -> Path | None:
@@ -74,10 +80,23 @@ def parse_invocation(argv: Sequence[str]) -> ApplicationInvocation:
         nargs="+",
         help="立即对一个或多个已存在的同一父目录下 DLsite 作品文件夹执行 Quick Rename。",
     )
+    parser.add_argument(
+        "--quick-rename-host",
+        dest="quick_rename_host",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parsed = parser.parse_args(tuple(argv))
     directories = parsed.quick_rename_directories
+    if parsed.quick_rename_host and directories is not None:
+        parser.error("--quick-rename-host 不能与 --quick-rename 一起使用。")
     if directories is None:
-        return ApplicationInvocation(mode=LaunchMode.NORMAL)
+        return ApplicationInvocation(
+            mode=LaunchMode.NORMAL,
+            quick_rename_host=parsed.quick_rename_host,
+        )
+    if len(directories) > MAX_QUICK_RENAME_ITEMS:
+        parser.error(quick_rename_batch_limit_message())
     return ApplicationInvocation(
         mode=LaunchMode.QUICK_RENAME,
         quick_rename_directories=tuple(Path(directory).expanduser() for directory in directories),

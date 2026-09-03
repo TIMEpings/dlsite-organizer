@@ -11,6 +11,7 @@ from dlsite_organizer.app.quick_action_controller import (
     QuickActionFinished,
     QuickActionRequest,
 )
+from dlsite_organizer.domain.quick_rename import MAX_QUICK_RENAME_ITEMS
 
 
 @dataclass
@@ -234,6 +235,24 @@ def test_duplicate_identity_inside_batch_is_rejected_without_partial_admission(
     result = controller.submit((path, path.parent / "." / path.name))
 
     assert result.status is QuickActionAdmissionStatus.REJECTED
+    assert controller.active_request is None
+    assert controller.queue_depth == 0
+    assert not runners
+
+
+def test_oversized_batch_is_rejected_before_queue_admission(
+    controller_factory, tmp_path: Path
+) -> None:
+    factory, runners, _started_paths = controller_factory
+    controller = QuickActionController(factory)
+    paths = tuple(
+        tmp_path / f"RJ{index:08d} old" for index in range(MAX_QUICK_RENAME_ITEMS + 1)
+    )
+
+    result = controller.submit(paths)
+
+    assert result.status is QuickActionAdmissionStatus.REJECTED
+    assert result.detail == "一次最多处理 32 个文件夹。"
     assert controller.active_request is None
     assert controller.queue_depth == 0
     assert not runners

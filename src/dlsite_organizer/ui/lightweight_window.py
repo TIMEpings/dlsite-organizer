@@ -223,7 +223,7 @@ class LightweightWindow(QMainWindow):
             ),
             QuickActionAdmissionStatus.REJECTED: "本次 Quick Rename 输入无效，未执行任何文件修改。",
         }
-        self._show_error(messages.get(result.status, "Quick Rename 未被接受。"))
+        self._show_error(result.detail or messages.get(result.status, "Quick Rename 未被接受。"))
 
     @Slot(object)
     def _show_result(self, value: object) -> None:

@@ -28,6 +28,10 @@ from PySide6.QtCore import QCoreApplication, QEventLoop, QLockFile, QObject, QTh
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from dlsite_organizer.app.settings import default_data_dir
+from dlsite_organizer.domain.quick_rename import (
+    MAX_QUICK_RENAME_ITEMS,
+    quick_rename_batch_limit_message,
+)
 
 logger = logging.getLogger(__name__)
 _USER_ACCESS_OPTION = QLocalServer.SocketOption.UserAccessOption
@@ -420,6 +424,8 @@ def _validate_quick_rename_payload(payload: dict[str, object]) -> tuple[str, ...
     values = payload["paths"]
     if not isinstance(values, list) or not values:
         raise ProtocolError("QUICK_RENAME paths must be a non-empty array", code="bad_path")
+    if len(values) > MAX_QUICK_RENAME_ITEMS:
+        raise ProtocolError("QUICK_RENAME paths exceed the batch limit", code="batch_limit")
     if any(not isinstance(value, str) for value in values):
         raise ProtocolError("QUICK_RENAME paths must contain strings", code="bad_path")
     return tuple(validate_windows_absolute_path(value) for value in values)
@@ -640,7 +646,12 @@ class LocalCommandServer(QObject):
             if error.request_id and _REQUEST_ID_RE.fullmatch(error.request_id)
             else _UNKNOWN_REQUEST_ID
         )
-        self._send_reply(socket, LocalReply(PROTOCOL_VERSION, request_id, status, error.code))
+        detail = (
+            quick_rename_batch_limit_message()
+            if error.code == "batch_limit"
+            else error.code
+        )
+        self._send_reply(socket, LocalReply(PROTOCOL_VERSION, request_id, status, detail))
 
     def _on_frame_timeout(self, socket: QLocalSocket) -> None:
         self._reject(socket, ProtocolError("incomplete frame timed out", code="truncated_frame"))

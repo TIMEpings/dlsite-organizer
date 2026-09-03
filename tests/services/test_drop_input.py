@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from dlsite_organizer.domain.quick_rename import MAX_QUICK_RENAME_ITEMS
 from dlsite_organizer.services.drop_input import DropInputError, DropInputService
 
 
@@ -67,3 +68,12 @@ def test_quick_rejects_files_and_nonexistent_directories(tmp_path: Path) -> None
         DropInputService().validate_work_folders((file_path,))
     with pytest.raises(DropInputError):
         DropInputService().validate_work_folders((missing,))
+
+
+def test_quick_rejects_oversized_batch_before_filesystem_validation(tmp_path: Path) -> None:
+    paths = tuple(
+        tmp_path / f"RJ{index:08d} old" for index in range(MAX_QUICK_RENAME_ITEMS + 1)
+    )
+
+    with pytest.raises(DropInputError, match="一次最多处理 32 个文件夹"):
+        DropInputService().validate_work_folders(paths)

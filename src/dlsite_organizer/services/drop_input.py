@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from dlsite_organizer.domain.quick_rename import (
+    MAX_QUICK_RENAME_ITEMS,
+    quick_rename_batch_limit_message,
+)
 from dlsite_organizer.domain.work_code import extract_work_codes
 
 
@@ -72,6 +76,8 @@ class DropInputService:
         normalized = _normalize_unique_paths(paths)
         if not normalized:
             raise DropInputError("请至少拖入一个作品文件夹。")
+        if len(normalized) > MAX_QUICK_RENAME_ITEMS:
+            raise DropInputError(quick_rename_batch_limit_message())
         for path in normalized:
             _validate_directory(path, role="轻量模式")
             _validate_parent(path)

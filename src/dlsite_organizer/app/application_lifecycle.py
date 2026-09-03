@@ -297,6 +297,7 @@ class ApplicationLifecycle(QObject):
                 PROTOCOL_VERSION,
                 command.request_id,
                 _reply_status_for_admission(admission.status),
+                admission.detail,
             )
         return LocalReply(
             PROTOCOL_VERSION,
@@ -305,12 +306,14 @@ class ApplicationLifecycle(QObject):
         )
 
     def _present_quick_action(self) -> None:
-        """Surface the existing lightweight surface for an admitted IPC action."""
+        """Surface an admitted IPC action without changing the current mode."""
         if self._shutdown_started or self._main_window.is_busy():
             return
-        self._lightweight_window.show()
-        self._main_window.hide()
-        self._current_window = self._lightweight_window
+        if self._current_window is None:
+            if not self.activate_current_window():
+                self.show_lightweight_mode()
+                self.activate_current_window()
+            return
         self.activate_current_window()
 
     def handle_window_close(self, window: object, event: object) -> None:

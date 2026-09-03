@@ -14,6 +14,10 @@ from typing import Protocol
 
 from PySide6.QtCore import QObject, Signal
 
+from dlsite_organizer.domain.quick_rename import (
+    MAX_QUICK_RENAME_ITEMS,
+    quick_rename_batch_limit_message,
+)
 from dlsite_organizer.services.drop_input import normalized_path_identity
 
 logger = logging.getLogger(__name__)
@@ -59,6 +63,7 @@ class QuickActionAdmissionResult:
     status: QuickActionAdmissionStatus
     request: QuickActionRequest | None = None
     queue_depth: int = 0
+    detail: str | None = None
 
     @property
     def accepted(self) -> bool:
@@ -179,7 +184,6 @@ class QuickActionController(QObject):
         """
         try:
             normalized_paths = _normalize_request_paths(path)
-            identities = tuple(normalized_path_identity(item) for item in normalized_paths)
         except (OSError, TypeError, ValueError):
             with self._lock:
                 queue_depth = len(self._pending)
@@ -198,6 +202,13 @@ class QuickActionController(QObject):
                     QuickActionAdmissionStatus.SHUTTING_DOWN,
                     queue_depth=previous_depth,
                 )
+            if len(normalized_paths) > MAX_QUICK_RENAME_ITEMS:
+                return QuickActionAdmissionResult(
+                    QuickActionAdmissionStatus.REJECTED,
+                    queue_depth=previous_depth,
+                    detail=quick_rename_batch_limit_message(),
+                )
+            identities = tuple(normalized_path_identity(item) for item in normalized_paths)
             if len(set(identities)) != len(identities):
                 return QuickActionAdmissionResult(
                     QuickActionAdmissionStatus.REJECTED,

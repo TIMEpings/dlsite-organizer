@@ -9,6 +9,10 @@ from enum import StrEnum
 from pathlib import Path
 
 from dlsite_organizer.domain.organizer import RenamePlan, RenamePlanStatus
+from dlsite_organizer.domain.quick_rename import (
+    MAX_QUICK_RENAME_ITEMS,
+    quick_rename_batch_limit_message,
+)
 from dlsite_organizer.domain.rename_execution import RenameExecutionResult, TransactionStatus
 from dlsite_organizer.services.drop_input import DropInputError, DropInputService
 from dlsite_organizer.services.folder_scanner import FolderScanFailure
@@ -97,6 +101,12 @@ class QuickRenameService:
         """Run one validated batch; no mutation occurs before executor preflight/journal."""
         input_paths = tuple(Path(path).expanduser().absolute() for path in paths)
         logger.info("Quick Rename start work_count=%d", len(input_paths))
+        if len(input_paths) > MAX_QUICK_RENAME_ITEMS:
+            return QuickRenameResult(
+                status=QuickRenameStatus.INVALID_INPUT,
+                input_paths=input_paths,
+                error=quick_rename_batch_limit_message(),
+            )
         try:
             selection = self._input_service.validate_work_folders(input_paths)
         except DropInputError as exc:

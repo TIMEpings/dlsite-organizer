@@ -336,6 +336,17 @@ bool TestIdentityAndProtocol() {
             "maximum legal path vector")) {
         return false;
     }
+    std::vector<std::wstring> near_payload_paths;
+    for (int index = 0; index != 6; ++index) {
+        near_payload_paths.push_back(
+            L"C:\\payload-" + std::to_wstring(index) + L"\\" + std::wstring(31500, L'x'));
+    }
+    if (!Check(
+            EncodeBatchRequest(BatchRequest{"near-cap", near_payload_paths}, frame) &&
+                frame.size() - kFrameHeaderSize <= kMaxQuickRenameRequestPayloadSize,
+            "request near 192 KiB helper cap is encodable")) {
+        return false;
+    }
     std::vector<std::wstring> oversized_paths(kMaxQuickRenameItems, maximum_path);
     if (!Check(
             !EncodeBatchRequest(BatchRequest{"oversized", oversized_paths}, frame),
@@ -589,10 +600,11 @@ bool TestRealSiblingLauncher() {
             FILE_ATTRIBUTE_NORMAL,
             nullptr);
         if (file != INVALID_HANDLE_VALUE) {
-            char content[32]{};
+            char content[64]{};
             DWORD read = 0;
             if (ReadFile(file, content, sizeof(content) - 1, &read, nullptr)) {
-                marker_matches = std::string(content, read) == "argc=1\n";
+                marker_matches = std::string(content, read) ==
+                                  "argc=2\nhost=--quick-rename-host\n";
             }
             CloseHandle(file);
             if (marker_matches) {
@@ -603,7 +615,7 @@ bool TestRealSiblingLauncher() {
     }
     SetEnvironmentVariableW(L"DLSITE_NATIVE_LAUNCH_MARKER", nullptr);
     DeleteFileW(marker.c_str());
-    return Check(marker_matches, "sibling launch has no selection argv");
+    return Check(marker_matches, "sibling launch has only the safe host argv");
 }
 
 bool TestRealNoPrimaryFlow() {
@@ -647,7 +659,8 @@ bool TestRealNoPrimaryFlow() {
             char content[64]{};
             DWORD read = 0;
             if (ReadFile(file, content, sizeof(content) - 1, &read, nullptr)) {
-                marker_matches = std::string(content, read) == "argc=1\nrequests=1\n";
+                marker_matches = std::string(content, read) ==
+                                  "argc=2\nhost=--quick-rename-host\nrequests=1\n";
             }
             CloseHandle(file);
             if (marker_matches) {

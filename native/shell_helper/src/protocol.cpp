@@ -98,9 +98,12 @@ bool BuildRequestJson(const BatchRequest& request, std::string& json) {
             json.push_back(',');
         }
         AppendJsonString(path_utf8, json);
+        if (json.size() > kMaxQuickRenameRequestPayloadSize) {
+            return false;
+        }
     }
     json += "]}}";
-    return true;
+    return json.size() <= kMaxQuickRenameRequestPayloadSize;
 }
 
 bool AddFrameHeader(std::string_view payload, std::vector<std::uint8_t>& frame) {

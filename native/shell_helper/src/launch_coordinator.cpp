@@ -64,11 +64,14 @@ LaunchResult Win32ProcessLauncher::LaunchSiblingApplication() {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
-    // lpApplicationName is the validated sibling path and lpCommandLine is
-    // null: no selection path is placed on argv or interpreted by a shell.
+    // lpApplicationName is the validated sibling path.  The command line is a
+    // fixed internal signal only: no selection path is placed on argv and no
+    // shell is involved.
+    std::wstring command_line = L"dlsite-organizer.exe ";
+    command_line += kQuickRenameHostArgument;
     const BOOL created = CreateProcessW(
         executable.c_str(),
-        nullptr,
+        command_line.data(),
         nullptr,
         nullptr,
         FALSE,

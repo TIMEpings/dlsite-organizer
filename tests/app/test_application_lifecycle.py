@@ -188,7 +188,7 @@ def test_ipc_status_mapping_keeps_business_outcomes_distinct(
     assert shutting_down.status is LocalReplyStatus.SHUTTING_DOWN
 
 
-def test_admitted_ipc_quick_action_uses_existing_lightweight_surface(
+def test_admitted_ipc_quick_action_preserves_existing_full_surface(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
@@ -206,9 +206,26 @@ def test_admitted_ipc_quick_action_uses_existing_lightweight_surface(
     )
 
     assert reply.status is LocalReplyStatus.ACCEPTED
-    assert lightweight.visible
-    assert not full.visible
-    assert lifecycle.current_window is lightweight
+    assert full.visible
+    assert not lightweight.visible
+    assert lifecycle.current_window is full
+
+
+def test_oversized_ipc_quick_action_is_rejected_with_batch_limit_feedback(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    controller = QuickActionController(lambda _request, _completion: FakeRunner(None, None))  # type: ignore[arg-type]
+    lifecycle, _full, _lightweight, _events = _lifecycle(qapp, controller)
+    paths = [str((tmp_path / f"RJ{index:08d} old").absolute()) for index in range(33)]
+
+    reply = lifecycle.handle_command(
+        LocalCommand(1, "oversized", LocalCommandName.QUICK_RENAME, {"paths": paths})
+    )
+
+    assert reply.status is LocalReplyStatus.REJECTED
+    assert reply.detail == "一次最多处理 32 个文件夹。"
+    assert controller.active_request is None
 
 
 def test_local_and_ipc_quick_actions_share_one_controller_and_one_batch_queue(

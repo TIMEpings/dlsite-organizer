@@ -1,7 +1,8 @@
-# Native Explorer selection adapter spike
+# Native Explorer selection adapter and helper integration
 
-This directory contains the v1.2.0 Phase 1 x64-only native foundation.  The
-source is part of the project MIT-licensed work:
+This directory contains the v1.2.0 Phase 1 x64-only native foundation and the
+Phase 2 application-integration contract.  The source is part of the project
+MIT-licensed work:
 
 `Copyright (c) 2026 TIMEpings`
 
@@ -47,6 +48,12 @@ selection.  The provisional hard limit is 32 items.  The original Shell array
 order is retained; the primary application remains authoritative for domain
 ordering.
 
+Phase 2 keeps the corresponding Python product limit at
+`MAX_QUICK_RENAME_ITEMS = 32`.  Native request construction also caps the
+serialized UTF-8 request payload at 192 KiB.  This is deliberately separate
+from the application's generic 256 KiB IPC frame bound; the Python primary
+enforces both its frame bound and the authoritative 32-item business rule.
+
 `ShellCommand::Execute` snapshots the validated paths and can dispatch at most
 one batch for that command object.  A missing or invalid selection performs no
 IPC, process launch, or filesystem action.
@@ -64,6 +71,9 @@ The native client mirrors `src/dlsite_organizer/app/single_instance.py`:
   UTF-8 JSON;
 * outgoing native requests use protocol v1 and the existing
   `QUICK_RENAME`/`payload.paths` shape, with no protocol-version bump;
+* the helper rejects empty or over-32 selections before IPC and rejects a
+  serialized request larger than 192 KiB before writing; the Python primary
+  remains the final authority for item and path validation;
 * the client waits only for the admission ACK and recognizes
   `ACCEPTED`, `DUPLICATE`, `QUEUE_FULL`, `SHUTTING_DOWN`, `REJECTED`, and
   `UNSUPPORTED_VERSION`;
@@ -111,9 +121,14 @@ objects, active executions, or `LockServer` locks exist.  Once all are idle,
 the helper revokes the class object and exits after a bounded 10-second idle
 window; it is not a daemon, tray process, or autostart task.
 
-No COM registration, production Explorer verb, application bootstrap change,
-or packaging change is made here.  A real Explorer probe is consequently
-deferred to human UAT on the normal interactive desktop.
+No COM registration, production Explorer verb, or packaging change is made
+here.  When no primary application is reachable, the helper launches the
+validated sibling `dlsite-organizer.exe` with the fixed internal
+`--quick-rename-host` signal, without selected paths or other user-controlled
+arguments, then sends the same request once.  The signal only selects the
+initial Lightweight presentation; it does not change the stored startup
+preference or create a Quick Action by itself.  A real Explorer probe is
+consequently deferred to human UAT on the normal interactive desktop.
 
 ## Human Explorer UAT probe (temporary HKCU registration only)
 

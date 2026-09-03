@@ -174,11 +174,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             0,
             lambda: lightweight_window.start_quick_rename(quick_rename_directories),
         )
-    elif settings.startup_mode is StartupMode.LIGHTWEIGHT:
+    elif invocation.quick_rename_host or settings.startup_mode is StartupMode.LIGHTWEIGHT:
         lifecycle.show_lightweight_mode()
     else:
         lifecycle.show_full_mode()
-    if invocation.mode is LaunchMode.NORMAL:
+    if invocation.mode is LaunchMode.NORMAL and not invocation.quick_rename_host:
         _schedule_startup_smoke(application, window, lightweight_window, lifecycle)
     exit_code = application.exec()
     lifecycle.request_shutdown()

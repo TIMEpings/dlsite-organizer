@@ -37,6 +37,34 @@ def _start_primary(profile_parent: Path, marker: Path) -> subprocess.Popen[str]:
     return process
 
 
+def _native_client_path() -> Path:
+    repository = Path(__file__).resolve().parents[2]
+    return (
+        repository
+        / "build"
+        / "native"
+        / "shell_helper"
+        / "bin"
+        / "shell_helper_interop_client.exe"
+    )
+
+
+def _run_native_client(profile: Path, paths: tuple[Path, ...]) -> subprocess.CompletedProcess[str]:
+    client = _native_client_path()
+    if os.name != "nt" or not client.is_file():
+        pytest.skip("native x64 shell helper interop client is not built")
+    arguments = [str(client), "--profile-root", str(profile)]
+    for path in paths:
+        arguments.extend(("--path", str(path)))
+    return subprocess.run(
+        arguments,
+        cwd=client.parents[4],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
 def _run_secondary(
     profile_parent: Path,
     marker: Path,
@@ -193,6 +221,63 @@ def test_no_primary_quick_launch_becomes_persistent_primary_without_changing_sta
         assert config.read_text(encoding="utf-8") == before
     finally:
         _stop_process(process)
+
+
+def test_no_primary_helper_host_starts_lightweight_without_creating_a_quick_action(
+    tmp_path: Path,
+) -> None:
+    application_data = tmp_path / "dlsite-organizer"
+    application_data.mkdir()
+    config = application_data / "config.toml"
+    config.write_text('startup_mode = "full"\n', encoding="utf-8")
+    before = config.read_text(encoding="utf-8")
+    marker = tmp_path / "host"
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "tests.app.subprocess_helper", "--quick-rename-host"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=_child_environment(tmp_path, marker),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for_marker(process, marker, "ready")
+        _wait_for_marker(process, marker, "lightweight")
+        assert process.poll() is None
+        assert not marker.with_name("host.quick").exists()
+        assert config.read_text(encoding="utf-8") == before
+    finally:
+        _stop_process(process)
+
+
+def test_native_helper_reaches_production_primary_once_as_one_three_path_batch(
+    tmp_path: Path,
+) -> None:
+    application_data = tmp_path / "dlsite-organizer"
+    application_data.mkdir()
+    (application_data / "config.toml").write_text('startup_mode = "full"\n', encoding="utf-8")
+    marker = tmp_path / "native-primary"
+    primary = _start_primary(tmp_path, marker)
+    paths = tuple(tmp_path / f"RJ{index:08d} invalid" for index in range(3))
+    for path in paths:
+        path.mkdir()
+
+    try:
+        result = _run_native_client(application_data, paths)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "ACCEPTED"
+        _wait_for_marker(primary, marker, "full")
+        _wait_for_marker(primary, marker, "quick")
+        assert (
+            marker.with_name("native-primary.controller-submit-count")
+            .read_text(encoding="ascii")
+            == "1"
+        )
+        assert marker.with_name("native-primary.quick-count").read_text(encoding="utf-8") == "3"
+        assert primary.poll() is None
+    finally:
+        _stop_process(primary)
 
 
 @pytest.mark.parametrize("launch_arguments", [(), ("--quick-rename",)])

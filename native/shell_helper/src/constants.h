@@ -11,6 +11,9 @@ inline constexpr wchar_t kClassIdString[] = L"{031255AF-20D8-4EE9-AC4C-D8CE7D3E1
 
 inline constexpr std::size_t kMaxQuickRenameItems = 32;
 inline constexpr std::size_t kMaxQuickRenamePathLength = 32767;
+// This is the native request-construction cap.  It is intentionally below the
+// generic 256 KiB IPC frame bound enforced by the application.
+inline constexpr std::size_t kMaxQuickRenameRequestPayloadSize = 192 * 1024;
 inline constexpr std::size_t kMaxRequestFrameSize = 256 * 1024;
 inline constexpr std::size_t kMaxResponseFrameSize = 4 * 1024;
 inline constexpr std::size_t kMaxRequestIdLength = 64;
@@ -23,5 +26,6 @@ inline constexpr unsigned long kStartupConnectDeadlineMs = 5000;
 inline constexpr unsigned long kAckDeadlineMs = 2000;
 inline constexpr unsigned long kConnectRetryIntervalMs = 25;
 inline constexpr unsigned long kHelperIdleLifetimeMs = 10'000;
+inline constexpr wchar_t kQuickRenameHostArgument[] = L"--quick-rename-host";
 
 }  // namespace dlsite::shell

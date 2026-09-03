@@ -5,6 +5,7 @@ from threading import Barrier
 
 import pytest
 
+from dlsite_organizer.domain.quick_rename import MAX_QUICK_RENAME_ITEMS
 from dlsite_organizer.domain.rename_execution import TransactionStatus
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
@@ -276,3 +277,18 @@ def test_quick_rename_uses_the_shared_naming_service_settings(tmp_path: Path) ->
         assert provider.calls == 1
     finally:
         database.dispose()
+
+
+def test_quick_oversized_batch_rejects_before_lookup_or_journal(tmp_path: Path) -> None:
+    paths = tuple(
+        tmp_path / f"RJ{index:08d} old" for index in range(MAX_QUICK_RENAME_ITEMS + 1)
+    )
+    lookup = FakeLookup({})
+    service, journal = _quick(tmp_path, lookup)
+
+    result = service.rename(paths)
+
+    assert result.status is QuickRenameStatus.INVALID_INPUT
+    assert result.error == "一次最多处理 32 个文件夹。"
+    assert lookup.requested == []
+    assert journal.latest_undoable() is None

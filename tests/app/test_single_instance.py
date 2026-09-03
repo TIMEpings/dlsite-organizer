@@ -43,6 +43,7 @@ from dlsite_organizer.app.single_instance import (
     new_request_id,
     read_lock_owner,
 )
+from dlsite_organizer.domain.quick_rename import MAX_QUICK_RENAME_ITEMS
 
 
 def _activate(request_id: str | None = None) -> LocalCommand:
@@ -254,6 +255,21 @@ def test_protocol_rejects_missing_fields_and_oversized_request_id() -> None:
                 }
             )
         )
+
+
+def test_protocol_rejects_oversized_quick_rename_batch_before_path_validation() -> None:
+    paths = [rf"C:\Works\RJ{index:08d}" for index in range(MAX_QUICK_RENAME_ITEMS + 1)]
+    value = {
+        "version": 1,
+        "request_id": "batch-limit",
+        "command": "QUICK_RENAME",
+        "payload": {"paths": paths},
+    }
+
+    with pytest.raises(ProtocolError) as error:
+        decode_request(_raw_request(value))
+
+    assert error.value.code == "batch_limit"
 
 
 class _FakeLock:
