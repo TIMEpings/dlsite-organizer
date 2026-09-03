@@ -154,13 +154,20 @@ function Import-VsDevEnvironment {
     if ($LASTEXITCODE -ne 0) {
         throw "Could not initialize the Visual Studio x64 developer environment."
     }
+    $environmentValues = @{}
     foreach ($line in $environmentLines) {
         $separator = $line.IndexOf('=')
         if ($separator -gt 0) {
             $name = $line.Substring(0, $separator)
             $value = $line.Substring($separator + 1)
-            [Environment]::SetEnvironmentVariable($name, $value, "Process")
+            $canonicalName = $name.ToUpperInvariant()
+            if (-not $environmentValues.ContainsKey($canonicalName) -or $name -ceq $canonicalName) {
+                $environmentValues[$canonicalName] = $value
+            }
         }
+    }
+    foreach ($entry in $environmentValues.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
     }
 }
 
