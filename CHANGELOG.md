@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.2.0 — 2026-09-03
+
+### 新增
+
+- Explorer 右键快捷重命名支持多文件夹选择。
+
+### 改进
+
+- 一次 Explorer 多选作为一个批处理事务处理，并沿用同一套 Quick Rename、journal 和 Undo 流程。
+- portable package 包含独立原生 x64 Shell helper；helper 不在 `explorer.exe` 内加载 Python/PySide，且没有可见控制台窗口。
+
+### 安全与可靠性
+
+- 一次撤销可以恢复整个多文件夹批次；批次最多处理 32 个文件夹，超过上限时整批拒绝。
+- Explorer 独立请求不会被时间窗口合并；helper 仅负责选择传递和本地 IPC，不是 daemon 或后台服务。
+
 ## v1.1.0 — 2026-09-01
 
 - Added: manual update check from the About page using the public GitHub Releases API.

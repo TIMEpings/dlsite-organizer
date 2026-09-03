@@ -22,7 +22,7 @@ DLsite Organizer 是一个面向 Windows 的桌面工具，用于查询 DLsite �
 
 应用以 PyInstaller onedir ZIP 形式分发，不需要安装器。解压后启动 `dlsite-organizer.exe`；首次启动会自动创建本机数据目录和 SQLite schema。
 
-当前源码版本为 `1.1.0`；仍需完成候选构建和用户验收后再进行正式发布。
+当前源码版本为 `1.2.0`；本分支用于 v1.2.0 release candidate 的构建和最终 Windows UAT 准备。
 
 ### 从源码运行
 
@@ -86,12 +86,11 @@ GitHub Release 页面；应用不会自动下载或安装，也不需要 GitHub 
 
 ## Explorer 右键菜单
 
-在“设置 → 资源管理器集成”中可以为当前 Windows 用户注册、更新或移除右键菜单。该功能只写入应用自己的 HKCU 注册表项，不需要管理员权限，也不会自动注册。Windows 11 中菜单可能位于“显示更多选项”。
+在“设置 → 资源管理器集成”中可以为当前 Windows 用户注册、更新或移除右键菜单。该功能只写入应用自己的 HKCU 注册表项，不需要管理员权限，也不会自动注册。Windows 11 经典菜单中的入口可能位于“显示更多选项”；不保证出现在 Windows 11 的第一层菜单。
 
-右键菜单仅支持单个文件夹，调用与轻量模式相同的安全重命名流程；已有应用运行时，该请求
-会转发给已有应用。需要批量处理多个作品时，请使用轻量模式拖放或命令行的多目录参数。
-Explorer 多选不提供此 verb，避免静态 shell verb 启动多个应用实例并发修改。若程序目录移动，
-设置页会显示路径已失效，需要重新“注册 / 更新”。
+Explorer 右键 Quick Rename 支持同时选择多个文件夹。一次 Explorer 选择作为一个批处理请求处理，最多 32 个文件夹；它使用一次 journal transaction，成功后可用一次 Undo 恢复整个批次。无效的混合选择会整体拒绝，不会只处理其中一部分。独立的 Explorer 点击保持独立事务，不会按时间窗口合并。
+
+portable package 已包含原生 x64 Shell helper。helper 只负责接收 Explorer 选择并通过本地 IPC 转发给已有应用；它是短生命周期的 transient helper，不是 daemon 或后台服务。若程序目录移动，设置页会显示路径已失效，需要重新“注册 / 更新”。
 
 ## 命名设置
 
@@ -129,9 +128,10 @@ Explorer 多选不提供此 verb，避免静态 shell verb 启动多个应用实
 | 日志 | `logs\dlsite-organizer.log` | 有界诊断信息 |
 | 封面 cache | 不落盘 | 仅保留在当前进程内存 |
 
-应用没有 telemetry、analytics 或 remote error reporting。作品查询和可选封面下载会访问
-DLsite；只有用户主动点击“检查更新”时才会以匿名 HTTPS 访问 GitHub 公开 Releases。本地
-整理、预览、重命名和撤销不需要联网。
+应用没有 telemetry、analytics 或 remote error reporting。用户主动请求 metadata 或封面操作时
+才会访问 DLsite；只有用户主动点击“检查更新”时才会以匿名 HTTPS 访问 GitHub 公开 Releases。
+Explorer helper 仅使用本机 COM / IPC，不进行 metadata lookup。应用没有启动时检查、后台轮询、
+自动更新下载或后台 daemon；本地整理、预览、重命名和撤销不需要联网。
 
 ## 安全重命名 / Undo
 
@@ -167,7 +167,7 @@ python -m pip check
 git diff --check
 ```
 
-数据契约、历史关系、bonus observation、研究型关系候选和人工审阅实现细节位于 `docs/`，不属于普通用户主导航。正式发布前还需要完成真实 Explorer 拖放和右键菜单点击验收。
+数据契约、历史关系、bonus observation、研究型关系候选和人工审阅实现细节位于 `docs/`，不属于普通用户主导航。v1.2.0 release candidate 仍须由最终 Windows UAT 验证 exact packaged artifact。
 
 ## 项目署名
 

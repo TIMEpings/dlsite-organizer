@@ -1,134 +1,154 @@
-# v1.1.0 Release Readiness Checklist
+# v1.2.0 Release Readiness Checklist
 
-这是 `dlsite-organizer` 的发布前核验清单。它定义 v1.1.0 release line 的验收证据、刷新规则和最终发布门禁，不代替真实 Windows 桌面验收。发布动作只能在最终审计通过后执行。
+这是 `dlsite-organizer` v1.2.0 release candidate 的 durable 发布前核验清单。它记录必须持续成立的
+source、package、native、安全和运行时门禁；它不代替最终 exact-RC Windows UAT，也不授权 tag、
+push、merge、GitHub Release 或 artifact upload。
 
-## Release identity and policy
+## Release identity and immutability
 
-- Last published release: `v1.0.0` (`v1.0.0` tag)
-- Current release line: `v1.1.0`
-- Authoritative version source: `1.1.0`; packaging continues to use dynamic version wiring
-- Release preparation branch/policy: `feature/v1.1.0`; release HEAD must be identified by the final audit
-- Release tag and GitHub Release are created only after the final release-readiness audit
-- Exact artifact filename, size, SHA256, and build-HEAD identity are established during the final audit
+- Release line: `v1.2.0`
+- Authoritative version source: `src/dlsite_organizer/version.py`; `pyproject.toml` continues to consume it dynamically
+- Release preparation branch: `feature/v1.2.0`
+- Expected release preparation source starts from `0745ecd9b60ae677b36cfa4e4353f2366a00622b`
+- Exact RC filename, absolute path, size, SHA256, mtime, and build HEAD are recorded in untracked audit evidence
+- `v1.1.0` remains released and immutable; its official ZIP must remain `59,437,033` bytes with SHA256
+  `6E060328A87F363DFBB2128EAA6D7C371C0E31FD0578DC0E172BF59EB2331684`
+- The official v1.1.0 ZIP is rehashed before and after every v1.2.0 release-preparation/build audit
+- No tag, push, merge, GitHub Release, or release upload is part of this checklist
 
-## Completed v1.1.0 packaged acceptance baseline
+## Public v1.2.0 contract
 
-Packaged Windows acceptance for the v1.1.0 release line was completed and accepted as RC #3 manual-UAT evidence. The accepted baseline covers:
+- [ ] Explorer right-click Quick Rename supports multiple selected folders
+- [ ] One Explorer selection is one batch, one controller item, one journal transaction, and one Undo
+- [ ] A Quick Rename batch accepts at most 32 folders and rejects 33 as a whole batch
+- [ ] Unicode and spaces are preserved through selection, IPC, and path handling
+- [ ] Explorer integration is current-user HKCU only and requires no administrator rights
+- [ ] Windows 11 classic **显示更多选项** remains a supported contract
+- [ ] A first-level Windows 11 menu placement is not promised
+- [ ] The portable package contains the native x64 Shell helper
+- [ ] The helper is transient and local-only, not a daemon or background service
 
-- [x] Packaged startup and clean exit
-- [x] DLsite live behavior and manual Update Check
-- [x] Explorer same-user integration, including real drag/drop and classic-menu click
-- [x] Quick Rename, Undo, and cross-mode Undo
-- [x] Lightweight visual behavior
-- [x] Real Windows 100% DPI
-- [x] Real Windows 125% DPI
-- [x] Native, resource, license, and security audits
-- [x] Frozen TLS/certifi smoke
+## Documentation and release messaging
 
-RC #3 is historical evidence of the accepted manual-UAT baseline. Its exact artifact identity is recorded in the Phase 4D.1 audit evidence; it is not itself the release HEAD after any later tracked change.
+- [ ] README documents the public multi-select, one-batch/one-Undo, 32-item, current-user, Windows 11,
+  portable-helper, and transient-helper contract without unnecessary COM internals
+- [ ] CHANGELOG contains v1.2.0 Added / Changed / Safety / Reliability notes and does not mention failed candidates
+- [ ] Architecture documents Explorer → DelegateExecute → native x64 COM LocalServer →
+  `IExecuteCommand`/`IObjectWithSelection`/`IShellItemArray` → `QUICK_RENAME paths[]` → QLocalServer →
+  QuickActionController → QuickRenameService → RenameExecutor/journal
+- [ ] Architecture records CLSID `{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}`, `MAX_QUICK_RENAME_ITEMS=32`,
+  192 KiB helper payload cap, 256 KiB IPC frame cap, one-selection/one-batch, independent-click separation,
+  and `NO JOURNAL = NO MUTATION`
+- [ ] Architecture records verified PySide6 / Qt 6.11.2 native IPC interoperability and requires the
+  interop tests after any future Qt/PySide6 upgrade; no arbitrary future Qt version is guaranteed
+- [ ] Settings documentation covers 未注册 / 需要更新 / 已注册, legacy v1.1 migration, portable move,
+  注册 / 更新, 移除, owned verb/CLSID cleanup, and no-admin behavior
+- [ ] Privacy documentation states DLsite is contacted only during user-requested metadata operations,
+  GitHub only for manual Update Check, and the Explorer helper is local-only
+- [ ] Privacy documentation states there is no telemetry, analytics, startup polling, automatic updater,
+  background network polling, or daemon
+- [ ] If no tracked release-note convention exists, a Chinese v1.2.0 release-note draft is retained as
+  untracked release-execution evidence rather than invented as tracked RC metadata
 
-## v1.1.0 scope
+## Version and source verification
 
-- [x] About 页面手动检查 GitHub public Releases 更新；无认证、token、启动检查、后台轮询、自动下载或安装
-- [x] Lightweight 使用统一的 drag/drop 与 recent-operation visual surface
-- [x] Lightweight 默认尺寸 `540×280`，最小尺寸 `460×280`
-- [x] Undo 后只展示最新 presentation record；SQLite/journal 仍是 authoritative transaction history
-- [x] Fresh profile 默认 `lightweight`，已有 startup mode 保持不变
-- [x] 现有命名模板 canonical/legacy aliases 和 public navigation contract 保持不变
+- [ ] `__version__ == "1.2.0"`
+- [ ] `application_user_agent()` returns `dlsite-organizer/1.2.0`
+- [ ] About/footer displays `v1.2.0`
+- [ ] The authoritative package output is `dlsite-organizer-1.2.0-windows-x64.zip`
+- [ ] No second authoritative version source or stale runtime `1.1.0` exists outside legitimate historical
+  release/changelog/test fixtures
+- [ ] Release-preparation changes are logically committed without amending historical Phase 1/2/3/3R commits
+- [ ] After the final tracked release-preparation commit, source freeze records `FINAL_V1_2_SOURCE_HEAD`
+  and `git status --short` is empty
 
-## Single-instance runtime gates
+## Durable native and registration gates
 
-这些门禁属于每个后续 v1.1.0 packaged candidate 的 durable 验收范围：
+- [ ] Production helper is packaged exactly once at the distribution root beside `dlsite-organizer.exe`
+- [ ] Helper is x64 PE (`0x8664`), Windows GUI subsystem (`2`), and has no console window during Explorer activation
+- [ ] Helper uses the intended static runtime (`/MT`) and introduces no third-party dependency/license
+- [ ] Explorer schema uses `MultiSelectModel=Player` and `command\DelegateExecute`
+  `{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}`
+- [ ] `CLSID\{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}\LocalServer32` points to the exact packaged sibling helper
+- [ ] Legacy v1.1 static command is inactive/absent after 注册 / 更新
+- [ ] Registration state transitions and stale/move semantics are verified for portable copies A/B
+- [ ] Helper dependency audit contains only intentional dependencies; Python, PySide/Qt, WinHTTP, WinINet,
+  Winsock, PowerShell, cmd, and dynamic MSVC runtime are absent
+- [ ] Helper orphan count is zero after controlled runs
+- [ ] Native Release x64 build uses `/W4 /WX`; native tests and CTest pass
+- [ ] Native helper ↔ PySide6/Qt 6.11.2 interop passes against the real QLocalServer
 
-- [ ] 同一用户/profile 的正常 secondary launch 只激活现有 primary，随后退出
-- [ ] Explorer secondary Quick Rename 转发到现有 primary，不创建第二个组件图或数据库
-- [ ] Rapid Explorer `X/Y/Z` 请求在 primary 内按 FIFO 串行 admission，不产生并发 Quick worker
-- [ ] Portable copy `A/B` 使用同一 profile 时只有一个 primary
-- [ ] Explorer mutation 完成后可在 primary 中看到 recent operation 并执行 Undo
-- [ ] primary 关闭后 server、数据库和 profile lock 按顺序清理，下一次启动成功
-- [ ] invalid Explorer input 经 primary 验证后不产生 filesystem mutation，secondary 无本地 fallback
+## Behavioral and packaged smoke gates
 
-## Source-level verification
+- [ ] Packaged single-select Explorer path passes
+- [ ] Packaged multi-select Explorer path passes
+- [ ] One selection produces one IPC request, one Quick Action, one service invocation, one transaction,
+  N filesystem operations, and one Undo
+- [ ] Mixed invalid selection is rejected as a whole; no subset processing or mutation occurs
+- [ ] No-primary helper route launches the sibling `dlsite-organizer.exe` with only `--quick-rename-host`,
+  sends one batch, and exits
+- [ ] Existing-primary helper route forwards one request to the primary without a second component graph
+- [ ] 32-item path is eligible; 33-item path is rejected by local, IPC, native, and application gates
+- [ ] Independent `[A,B]` then `[C]` and `X/Y/Z` actions remain separate transactions and are never time-merged
+- [ ] Existing-primary Full and Lightweight modes, no-primary, Unicode/spaces, journal failure, and conflict
+  paths preserve fail-closed behavior
+- [ ] `NO JOURNAL = NO MUTATION` passes for all controlled batch paths
+- [ ] Packaged normal secondary launch activates the primary, exits, and leaves one long-lived primary
+- [ ] Isolated offline startup, profile/database creation, single-instance election, and clean shutdown pass
+- [ ] Controlled packaged COM activation passes CoCreateInstance, SetSelection, Execute, and cleanup
+- [ ] Controlled registration schema produces Player, DelegateExecute, exact LocalServer32, and no legacy command
+- [ ] Packaged exact-RC extraction is used for audit; build tree is not treated as the release payload
 
-- [x] Full automated tests: `QT_QPA_PLATFORM=offscreen python -m pytest`
-- [x] Update checker, About/MainWindow, Lightweight, Mode/Undo and Quick Rename regression tests
-- [x] Project attribution, settings defaults, naming compatibility and public navigation tests
-- [x] Single-instance application lifecycle, isolated primary/secondary subprocess, rapid forwarding,
-  startup race, and shutdown tests
-- [x] Ruff: `ruff check .`
-- [x] Pyright: `pyright`
-- [x] Compile: `python -m compileall src`
-- [x] Dependency health: `python -m pip check`
-- [x] selectolax parser smoke
-- [x] Qt offscreen MainWindow/About/navigation/Lightweight/clean-exit smoke
-- [x] `git diff --check`
-- [x] One live update-check smoke was attempted; the environment returned no release response
+## Package, security, TLS, license, and resource gates
 
-## Post-tracked-change refresh rule
+- [ ] Extracted audit inventory is deterministic: relative path, size, SHA256, sorted for every regular file
+- [ ] Package has no source, tests, `.git`, CMake/Ninja files, PDB/OBJ/LIB/EXP, caches, audit/UAT folders,
+  logs, user DB/config, tokens, `.env`, crash dumps, Codex files, or native test executables
+- [ ] All packaged PE files are x64; x86, ARM, and unknown architecture counts are zero
+- [ ] Foreign ICU, Codex, Poppler, compiler/linker binaries, CMake/Ninja, and unintended runtime contamination
+  counts are zero
+- [ ] `_internal\certifi\cacert.pem` exists, `_internal\cacert.pem` is absent, and the bundle byte-matches
+  the source certifi bundle
+- [ ] Frozen `certifi.where()`, `ssl.create_default_context()`, and `httpx.Client` smoke passes
+- [ ] Source/package contain no `verify=False`, `CERT_NONE`, or `check_hostname=False`
+- [ ] Project MIT license, TIMEpings identity, and `THIRD_PARTY_NOTICES` are present
+- [ ] Dependency license files byte-match the authoritative build environment; counts are recorded
+- [ ] Resource/branding audit passes with the actual RC count and no branding loss
+- [ ] Build logs contain no blocking QtNetwork, certifi, missing-helper, wrong-subsystem, native-build,
+  foreign-DLL, ICU, Poppler, or missing-module warning; benign warnings are classified
 
-If any tracked release-preparation change occurs after an accepted packaged-UAT baseline, a fresh artifact must be built from the new release HEAD. Manual UAT may be inherited by the refreshed artifact only when the final audit explicitly proves all of the following:
+## Automated source gates
 
-- same application version
-- runtime and package inputs unchanged
-- identical extracted regular-file path set and file count
-- every extracted file has identical bytes, size, and SHA256
-- native/resource/license/security audits still pass
-- final release audit approves the payload equivalence
+- [ ] `QT_QPA_PLATFORM=offscreen python -m pytest` passes with at least 618 tests and zero failures
+- [ ] `ruff check .` passes
+- [ ] `pyright` passes
+- [ ] `python -m compileall src` passes
+- [ ] `python -m pip check` passes
+- [ ] selectolax parser smoke passes
+- [ ] Qt offscreen startup and Quick Rename smoke pass
+- [ ] native Release x64 build, CTest, native tests, and native/PySide interop pass
+- [ ] `git diff --check` passes
+- [ ] Manual Update Check remains manual-only, has no startup polling or auto install, and a 1.2.0-versus-v1.1.0
+  check is classified according to the implemented release-comparison semantics
+- [ ] One safe live DLsite metadata/cover smoke passes; the final report omits the work title
 
-ZIP container metadata, archive timestamps, and extraction timestamps do not determine payload equivalence. Differences inside the EXE, DLLs, PYZ, Qt resources, certifi, licenses, icons, or `_internal` payload are content differences. If equivalence is not proven, affected or full packaged UAT must be repeated.
+## Build, freeze, and exact RC audit policy
 
-## Final release gates
+- [ ] Build environment records Python, PyInstaller, PySide6, Qt, httpx, certifi, Visual Studio, MSVC,
+  Windows SDK, CMake, and Ninja; material unexpected changes are investigated
+- [ ] Authoritative `packaging\build-windows.ps1` is used with PATH isolation; Codex runtime, Poppler,
+  foreign ICU, unrelated Python, and developer-only native binaries do not participate
+- [ ] Exact RC #1 is built from `FINAL_V1_2_SOURCE_HEAD` as `dist\dlsite-organizer-1.2.0-windows-x64.zip`
+- [ ] The original RC ZIP is rehashed after all audits; size and SHA256 are unchanged from immediate post-build
+  designation
+- [ ] No tracked files change during build or audit; if any do, RC #1 is invalid and the source freeze must be
+  explicitly rejected before tracked repair
+- [ ] Final status is reported as `PASS — RC #1 READY FOR FINAL WINDOWS UAT` only when every applicable gate
+  above passes
+- [ ] Final Windows UAT is the next phase; this checklist does not claim human Explorer acceptance for RC #1
 
-Before release, the final audit must confirm:
+## Release actions explicitly out of scope
 
-- exact release HEAD and clean working tree
-- exact artifact filename, size, and SHA256
-- artifact built from the exact release HEAD
-- payload correspondence to the accepted packaged-UAT baseline, or completion of required new UAT
-- remote tag absence/presence as appropriate to the release step
-- native, resource, license, TLS, and security state
-- release execution readiness
-
-The final audit must also preserve the evidence needed to explain any refreshed-candidate decision. No tag, push, merge, GitHub Release, or artifact upload is implied until those gates pass and the release action is explicitly authorized.
-
-## Accepted packaged UAT evidence (RC #3)
-
-The accepted RC #3 walkthrough covered the real same-user Windows desktop session:
-
-```text
-REAL HKCU REGISTER/UPDATE/REMOVE IN THE USER DESKTOP SESSION:
-PASS — accepted in RC #3 baseline
-
-REAL EXPLORER SINGLE-SELECTION MENU VISIBILITY:
-PASS — accepted in RC #3 baseline
-
-REAL EXPLORER SINGLE INVOCATION + ONE WINDOW/TRANSACTION/UNDO:
-PASS — accepted in RC #3 baseline
-
-REAL EXPLORER MULTI-SELECT VERB UNAVAILABLE:
-PASS — accepted in RC #3 baseline
-
-REAL EXPLORER DRAG/DROP:
-PASS — accepted in RC #3 baseline
-
-REAL EXPLORER MENU CLICK:
-PASS — accepted in RC #3 baseline
-```
-
-The visible GUI walkthrough was:
-
-```text
-启动 → 整理 → 查询 → 设置 → 关于 footer
-→ 完整模式 / 轻量模式 → clean exit → restart
-```
-
-It included real `RJ`, `BJ`, and `VJ` lookup examples, the placeholder
-`输入完整RJ|BJ|VJ号`, fresh lightweight startup, `[{workno}][{maker_name}]{title}`,
-preview-before-mutation in full mode, immediate safe rename in lightweight mode, Undo, About
-resources, manual Update Check, and the Explorer single-selection contract.
-
-The Explorer forensic conclusion for the observed environment was `ENVIRONMENT / USER-CONTEXT REGISTRY-HIVE MISMATCH`; the real same-user `TIMEpings` context passed.
-
-## Artifact and release safety
-
-Any artifact not produced from the exact release HEAD by the authoritative packaging workflow is non-authoritative release input. The final candidate must be freshly built after any tracked release-preparation change and must satisfy the post-tracked-change refresh rule above.
+Do not run Phase 4C in this phase. Do not tag, push, merge, publish, upload, overwrite the official v1.1.0
+ZIP, or rebuild the exact RC #1 after the final audit. Stop after reporting whether RC #1 is ready for final
+Windows UAT or is blocked/rejected.

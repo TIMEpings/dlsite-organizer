@@ -258,6 +258,17 @@ primary is running, it validates and launches the packaged sibling application w
 for the 32-item business limit, queue admission, validation, one journal transaction, and one Undo.
 The CLI `--quick-rename <paths...>` path remains supported independently.
 
+One Explorer selection is one application batch: one `SetSelection` snapshot produces one
+`Execute`, one IPC request, one `QuickActionController` item, one `QuickRenameService` call, and
+one journal transaction. The batch-wide rules are fail-closed, including the `MAX_QUICK_RENAME_ITEMS`
+limit of 32 folders. The native helper limits its serialized request payload to 192 KiB; the
+application's framed local IPC transport is capped at 256 KiB. Independent Explorer clicks are
+independent requests and are never time-merged. The safety invariant remains:
+
+```text
+NO JOURNAL = NO MUTATION
+```
+
 `ExplorerIntegrationService` is UI-independent and uses a small registry backend protocol. The
 Settings page renders its inspection result rather than guessing from button text or persisting a
 registry state in TOML. It distinguishes `CURRENT`, `LEGACY`, `STALE`, and `ABSENT`; the UI renders
@@ -270,8 +281,9 @@ owned by the next phase.
 
 The native helper is built separately with the Release x64 MSVC/CMake toolchain and static MSVC
 runtime (`/MT`), then copied as exactly one sibling of the PyInstaller onedir executable. Native
-interoperability must be re-run whenever the PySide6/Qt line changes; the current gate is PySide6
-6.11.2 / Qt 6.11.2 against the Win32 named-pipe client.
+interoperability has been verified with PySide6 6.11.2 / Qt 6.11.2 against the Win32 named-pipe
+client. Any future PySide6/Qt upgrade must re-run the native/PySide interoperability tests; no
+arbitrary future Qt version is guaranteed.
 The footer About entry is the only About navigation entry and derives its version from the package
 version source; the main navigation remains `整理`, `查询`, `设置`.
 

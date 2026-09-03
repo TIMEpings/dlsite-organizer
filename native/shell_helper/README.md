@@ -25,11 +25,11 @@ The development helper is:
 
 `build/native/shell_helper/bin/dlsite-shell-helper.exe`
 
-The staging packaging gate is isolated from the released v1.1.0 ZIP:
+Optional staging packaging is isolated from the released v1.1.0 ZIP:
 
 ```text
 powershell -File packaging/build-windows.ps1 `
-  -OutputRoot build/audit-v12-phase3-package -StagingOnly
+  -OutputRoot build/audit-v12-phase4b-package -StagingOnly
 ```
 
 The script requires a Visual Studio C++ x64 workload, Windows SDK, CMake,
@@ -73,8 +73,8 @@ documentation. Explorer supplies the selection through
 [`IObjectWithSelection`](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iobjectwithselection)
 for the [`IExecuteCommand`](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexecutecommand)
 implementation; the Shell selection-model guidance documents the `Player`
-mode used here. Real Explorer selection acceptance is intentionally deferred
-to Phase 4.
+mode used here. Exact packaged Explorer acceptance is intentionally deferred
+to the final Windows UAT phase.
 
 ## Selection contract
 
@@ -170,7 +170,7 @@ consequently deferred to human UAT on the normal interactive desktop.
 
 ## Human Explorer UAT probe (temporary HKCU registration only)
 
-This is a manual probe plan, not a Phase 3 automated Explorer acceptance step. Use
+This is a manual probe plan, not an automated Explorer acceptance step. Use
 an isolated development checkout and the x64 Release helper.  In `regedit`,
 create only these temporary per-user values:
 

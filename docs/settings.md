@@ -109,6 +109,12 @@ its state is not stored in `config.toml`. It shows one of:
 读取失败
 ```
 
+The normal registration states are **未注册**, **需要更新**, and **已注册**. A legacy v1.1 static
+registration, or a moved/incomplete registration, is shown as **需要更新**; **注册 / 更新** then
+replaces it with the current multi-select-capable COM registration. **移除** cleans only the
+application-owned verb and fixed COM CLSID trees. All of these operations are current-user HKCU
+operations and require no administrator rights.
+
 On a packaged Windows build, **注册 / 更新** writes only the current user's
 `HKCU\Software\Classes\Directory\shell\dlsite-organizer` key, its `command` child, and the
 application-owned `HKCU\Software\Classes\CLSID\{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}\LocalServer32`
@@ -155,6 +161,10 @@ blocks the action. Independent concurrent invocations remain serialized at journ
 creation as defense-in-depth. The Explorer COM handler receives one Shell selection and sends it
 as one bounded request; the application remains authoritative for the 32-item limit and all domain
 validation.
+
+The native helper is local-only: it receives the Shell selection and forwards one bounded IPC
+request. It does not perform a DLsite metadata lookup, update check, telemetry, analytics, or any
+other network operation.
 
 ## Persistence and paths
 
