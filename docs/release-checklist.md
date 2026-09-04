@@ -1,16 +1,19 @@
 # v1.2.0 Release Readiness Checklist
 
-这是 `dlsite-organizer` v1.2.0 release candidate 的 durable 发布前核验清单。它记录必须持续成立的
-source、package、native、安全和运行时门禁；它不代替最终 exact-RC Windows UAT，也不授权 tag、
-push、merge、GitHub Release 或 artifact upload。
+这是 `dlsite-organizer` v1.2.0 的 durable 发布核验清单。它记录必须持续成立的 source、package、
+native、安全和运行时门禁；它不代替针对所选 exact release candidate 的 Windows UAT，也不授权
+tag、push、merge、GitHub Release 或 artifact upload。
+
+当前 v1.2.0 状态：已接受的 Windows portable 包已完成最终 Windows UAT；本清单中的复选项仍用于
+后续候选版本的逐项记录。
 
 ## Release identity and immutability
 
 - Release line: `v1.2.0`
 - Authoritative version source: `src/dlsite_organizer/version.py`; `pyproject.toml` continues to consume it dynamically
 - Release preparation branch: `feature/v1.2.0`
-- Expected release preparation source starts from `0745ecd9b60ae677b36cfa4e4353f2366a00622b`
-- Exact RC filename, absolute path, size, SHA256, mtime, and build HEAD are recorded in untracked audit evidence
+- The selected exact release candidate's filename, absolute path, size, SHA256, mtime, and build HEAD are
+  recorded in release evidence
 - `v1.1.0` remains released and immutable; its official ZIP must remain `59,437,033` bytes with SHA256
   `6E060328A87F363DFBB2128EAA6D7C371C0E31FD0578DC0E172BF59EB2331684`
 - The official v1.1.0 ZIP is rehashed before and after every v1.2.0 release-preparation/build audit
@@ -23,8 +26,8 @@ push、merge、GitHub Release 或 artifact upload。
 - [ ] A Quick Rename batch accepts at most 32 folders and rejects 33 as a whole batch
 - [ ] Unicode and spaces are preserved through selection, IPC, and path handling
 - [ ] Explorer integration is current-user HKCU only and requires no administrator rights
-- [ ] Windows 11 classic **显示更多选项** remains a supported contract
-- [ ] A first-level Windows 11 menu placement is not promised
+- [ ] Windows 11 users may find the classic shell verb under **显示更多选项**
+- [ ] A first-level Windows 11 modern-menu placement is not promised
 - [ ] The portable package contains the native x64 Shell helper
 - [ ] The helper is transient and local-only, not a daemon or background service
 
@@ -47,8 +50,8 @@ push、merge、GitHub Release 或 artifact upload。
   GitHub only for manual Update Check, and the Explorer helper is local-only
 - [ ] Privacy documentation states there is no telemetry, analytics, startup polling, automatic updater,
   background network polling, or daemon
-- [ ] If no tracked release-note convention exists, a Chinese v1.2.0 release-note draft is retained as
-  untracked release-execution evidence rather than invented as tracked RC metadata
+- [ ] If no tracked release-note convention exists, final Chinese v1.2.0 release notes are retained as
+  release-execution metadata rather than invented as tracked release metadata
 
 ## Version and source verification
 
@@ -132,23 +135,25 @@ push、merge、GitHub Release 或 artifact upload。
   check is classified according to the implemented release-comparison semantics
 - [ ] One safe live DLsite metadata/cover smoke passes; the final report omits the work title
 
-## Build, freeze, and exact RC audit policy
+## Build, freeze, and exact release-candidate audit policy
 
 - [ ] Build environment records Python, PyInstaller, PySide6, Qt, httpx, certifi, Visual Studio, MSVC,
   Windows SDK, CMake, and Ninja; material unexpected changes are investigated
 - [ ] Authoritative `packaging\build-windows.ps1` is used with PATH isolation; Codex runtime, Poppler,
   foreign ICU, unrelated Python, and developer-only native binaries do not participate
-- [ ] Exact RC #1 is built from `FINAL_V1_2_SOURCE_HEAD` as `dist\dlsite-organizer-1.2.0-windows-x64.zip`
-- [ ] The original RC ZIP is rehashed after all audits; size and SHA256 are unchanged from immediate post-build
-  designation
-- [ ] No tracked files change during build or audit; if any do, RC #1 is invalid and the source freeze must be
-  explicitly rejected before tracked repair
-- [ ] Final status is reported as `PASS — RC #1 READY FOR FINAL WINDOWS UAT` only when every applicable gate
-  above passes
-- [ ] Final Windows UAT is the next phase; this checklist does not claim human Explorer acceptance for RC #1
+- [ ] The exact release candidate is built from a recorded source HEAD as
+  `dist\dlsite-organizer-1.2.0-windows-x64.zip`
+- [ ] The selected release candidate is rehashed after all audits; size and SHA256 are unchanged from its
+  recorded designation
+- [ ] No tracked files change during build or audit; if any do, invalidate the candidate and explicitly
+  reject the source freeze before tracked repair
+- [ ] Final Windows UAT is performed against the exact release candidate, and the final status is recorded
+  only when every applicable gate above passes
+- [ ] Documentation-only changes made after an accepted candidate are checked against the actual build and
+  package dependency graph; if binary impact is uncertain, a new candidate build is required
 
 ## Release actions explicitly out of scope
 
-Do not run Phase 4C in this phase. Do not tag, push, merge, publish, upload, overwrite the official v1.1.0
-ZIP, or rebuild the exact RC #1 after the final audit. Stop after reporting whether RC #1 is ready for final
-Windows UAT or is blocked/rejected.
+Do not tag, push, merge, publish, upload, overwrite an accepted artifact, or rebuild an exact release
+candidate after its final audit. If a tracked change affects package bytes, stop and perform a controlled
+new candidate build; otherwise record the docs-only provenance and binary-impact result.

@@ -73,8 +73,9 @@ documentation. Explorer supplies the selection through
 [`IObjectWithSelection`](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iobjectwithselection)
 for the [`IExecuteCommand`](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iexecutecommand)
 implementation; the Shell selection-model guidance documents the `Player`
-mode used here. Exact packaged Explorer acceptance is intentionally deferred
-to the final Windows UAT phase.
+mode used here. The packaged Explorer selection integration has been validated
+against this contract. Windows 11 shell-verb placement may still be under
+**显示更多选项**; first-level modern-menu placement is not guaranteed.
 
 ## Selection contract
 
@@ -165,14 +166,15 @@ validated sibling `dlsite-organizer.exe` with the fixed internal
 `--quick-rename-host` signal, without selected paths or other user-controlled
 arguments, then sends the same request once.  The signal only selects the
 initial Lightweight presentation; it does not change the stored startup
-preference or create a Quick Action by itself.  A real Explorer probe is
-consequently deferred to human UAT on the normal interactive desktop.
+preference or create a Quick Action by itself.  The helper does not modify
+registration or package state at runtime.
 
-## Human Explorer UAT probe (temporary HKCU registration only)
+## Optional manual Explorer probe (temporary HKCU registration only)
 
-This is a manual probe plan, not an automated Explorer acceptance step. Use
-an isolated development checkout and the x64 Release helper.  In `regedit`,
-create only these temporary per-user values:
+This optional manual probe is for development diagnosis and does not change
+the production registration or package contract. Use an isolated development
+checkout and the x64 Release helper. In `regedit`, create only these temporary
+per-user values:
 
 1. `HKCU\Software\Classes\CLSID\{031255AF-20D8-4EE9-AC4C-D8CE7D3E154B}\LocalServer32`
    with the default value set to the absolute path of

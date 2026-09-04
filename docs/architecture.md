@@ -206,8 +206,8 @@ Partial executor results are surfaced as partial and remain undoable where the j
 The full and lightweight windows share SettingsService, LookupService, metadata cache, NamingService,
 OrganizerService, QuickRenameService, RenameExecutor, and UndoService. Settings saves therefore
 apply to the next lightweight drop without restarting. `startup_mode` controls only the next launch;
-runtime switching hides one window and shows the other in the same process. Phase C's historical UI
-contract did not include single-instance IPC; the application-level integration is described below.
+runtime switching hides one window and shows the other in the same process. The UI contract does not
+include single-instance IPC; the application-level integration is described below.
 
 ## Phase D Explorer context-menu invocation
 
@@ -275,9 +275,9 @@ registry state in TOML. It distinguishes `CURRENT`, `LEGACY`, `STALE`, and `ABSE
 the first as **已注册**, legacy/stale as **需要更新**, and absent as **未注册**. Registration
 validates the sibling helper before any write, writes the LocalServer32 entry before switching the
 verb, writes `MultiSelectModel` last, and rolls back captured owned values on failure where possible.
-Remove deletes only this verb tree and fixed CLSID tree and is idempotent. Ordinary Windows 11
-shell-verb behavior may place the command under **显示更多选项**; real Explorer selection UAT is
-owned by the next phase.
+Remove deletes only this verb tree and fixed CLSID tree and is idempotent. The packaged Explorer
+selection path has been validated against this contract. Ordinary Windows 11 shell-verb behavior
+may place the command under **显示更多选项**; first-level modern-menu placement is not guaranteed.
 
 The native helper is built separately with the Release x64 MSVC/CMake toolchain and static MSVC
 runtime (`/MT`), then copied as exactly one sibling of the PyInstaller onedir executable. Native
@@ -287,7 +287,7 @@ arbitrary future Qt version is guaranteed.
 The footer About entry is the only About navigation entry and derives its version from the package
 version source; the main navigation remains `整理`, `查询`, `设置`.
 
-## Phase 4D.2C-3 single-instance application lifecycle
+## Single-instance application lifecycle
 
 The desktop entry point performs only the minimum work needed to identify the invocation before
 business bootstrap:
