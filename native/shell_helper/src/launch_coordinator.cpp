@@ -55,7 +55,7 @@ bool SiblingExecutablePath(std::wstring& path) {
 
 }  // namespace
 
-LaunchResult Win32ProcessLauncher::LaunchSiblingApplication() {
+LaunchResult Win32ProcessLauncher::LaunchSiblingApplication(const std::string& handoff_id) {
     std::wstring executable;
     if (!SiblingExecutablePath(executable)) {
         return {false, L"sibling application is not a regular executable"};
@@ -69,6 +69,8 @@ LaunchResult Win32ProcessLauncher::LaunchSiblingApplication() {
     // shell is involved.
     std::wstring command_line = L"dlsite-organizer.exe ";
     command_line += kQuickRenameHostArgument;
+    command_line += L" --handoff-id ";
+    command_line.append(handoff_id.begin(), handoff_id.end());
     const BOOL created = CreateProcessW(
         executable.c_str(),
         command_line.data(),
@@ -96,18 +98,39 @@ DispatchResult LaunchCoordinator::Send(const std::vector<std::wstring>& paths) {
     }
 
     const DispatchResult initial = ipc_client_.SendToPipe(request, kInitialConnectDeadlineMs);
-    if (initial != DispatchResult::ConnectionFailed) {
+    if (initial != DispatchResult::ConnectionFailed && initial != DispatchResult::AmbiguousFailure &&
+        initial != DispatchResult::ShuttingDown) {
+        if (initial == DispatchResult::Accepted || initial == DispatchResult::Duplicate) {
+            OutputDebugStringW(L"DLsite Quick Rename: WARM IPC ADMITTED\n");
+        }
         return initial;
     }
 
-    const LaunchResult launched = process_launcher_.LaunchSiblingApplication();
+    const PublishResult publication = publisher_.Publish(request);
+    if (publication == PublishResult::Conflict) return DispatchResult::Rejected;
+    if (publication == PublishResult::Failed) return DispatchResult::PublicationFailed;
+    OutputDebugStringW(L"DLsite Quick Rename: DURABLY PREPARED FOR LAUNCH\n");
+    const LaunchResult launched = process_launcher_.LaunchSiblingApplication(request.request_id);
     if (!launched.launched) {
-        return DispatchResult::ConnectionFailed;
+        if (!publisher_.MarkLaunchFailed(request.request_id)) {
+            // Publish leaves the payload in prepared/, which the primary inbox
+            // never scans. A failed recovery move therefore remains fail-closed.
+            OutputDebugStringW(
+                L"DLsite Quick Rename: launch failed; recovery transition failed; id=");
+            OutputDebugStringA(request.request_id.c_str());
+            OutputDebugStringW(L" remains non-executable in prepared\\\n");
+        }
+        return DispatchResult::LaunchFailed;
     }
-
-    // This is the only post-launch request attempt.  A connected/write
-    // failure is ambiguous and is deliberately never retried.
-    return ipc_client_.SendToPipe(request, kStartupConnectDeadlineMs);
+    if (!publisher_.MarkLaunchSucceeded(request.request_id)) {
+        OutputDebugStringW(
+            L"DLsite Quick Rename: process launched but handoff promotion failed; id=");
+        OutputDebugStringA(request.request_id.c_str());
+        OutputDebugStringW(L" remains non-executable in prepared\\\n");
+        return DispatchResult::PublicationFailed;
+    }
+    OutputDebugStringW(L"DLsite Quick Rename: HANDOFF PROMOTED TO PENDING\n");
+    return DispatchResult::Deferred;
 }
 
 }  // namespace dlsite::shell

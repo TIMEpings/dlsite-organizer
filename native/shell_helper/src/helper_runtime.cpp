@@ -42,7 +42,8 @@ int RunShellHelper(int argc, wchar_t** argv) {
     if (BuildDefaultInstanceIdentity(identity)) {
         Win32IpcClient ipc_client(identity.pipe_name);
         Win32ProcessLauncher process_launcher;
-        LaunchCoordinator dispatcher(ipc_client, process_launcher);
+        Win32HandoffPublisher publisher(identity.profile_root);
+        LaunchCoordinator dispatcher(ipc_client, process_launcher, publisher);
         ShellSelectionAdapter selection_adapter;
         const HRESULT result = RunComLocalServer(selection_adapter, dispatcher);
         exit_code = SUCCEEDED(result) ? 0 : 1;

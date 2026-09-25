@@ -162,6 +162,26 @@ def test_shutdown_rejects_new_clears_pending_and_does_not_start_next(
     assert len(runners) == 1
 
 
+def test_durable_shutdown_finishes_admitted_pending_work(
+    controller_factory, tmp_path: Path
+) -> None:
+    factory, runners, started_paths = controller_factory
+    controller = QuickActionController(factory)
+    first = tmp_path / "X"
+    second = tmp_path / "Y"
+    controller.submit(first)
+    controller.submit(second)
+    controller.begin_shutdown(finish_pending=True)
+
+    assert controller.queue_depth == 1
+    assert controller.submit(tmp_path / "new").status is QuickActionAdmissionStatus.SHUTTING_DOWN
+    runners[0].finish()
+    assert started_paths == [first.absolute(), second.absolute()]
+    runners[1].finish()
+    assert controller.active_request is None
+    assert controller.queue_depth == 0
+
+
 def test_signals_report_state_and_duplicate_completion_is_ignored(
     controller_factory, tmp_path: Path
 ) -> None:

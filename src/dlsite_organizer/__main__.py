@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 from collections.abc import Sequence
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QThread, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from dlsite_organizer import __version__
@@ -17,6 +18,7 @@ from dlsite_organizer.app.application_lifecycle import (
 )
 from dlsite_organizer.app.bootstrap import build_components
 from dlsite_organizer.app.branding import load_application_icon
+from dlsite_organizer.app.durable_handoff import DurableHandoff, publish
 from dlsite_organizer.app.invocation import (
     InvocationParseError,
     LaunchMode,
@@ -61,6 +63,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     application = _create_application(raw_argv)
     profile_root = default_data_dir()
+    legacy_command = (
+        _command_for_invocation(invocation) if invocation.mode is LaunchMode.QUICK_RENAME else None
+    )
+    if legacy_command is not None:
+        try:
+            publish(profile_root, legacy_command)
+        except (OSError, ValueError) as exc:
+            _write_bounded_diagnostic(f"Quick Rename durable publication failed: {exc}")
+            return 1
     deferred_handler = _DeferredCommandHandler()
     try:
         coordinator = InstanceCoordinator(profile_root)
@@ -77,6 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             invocation,
             profile_root,
             deferred_handler,
+            legacy_command,
         )
         if isinstance(forwarded, int):
             return forwarded
@@ -139,6 +151,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         lightweight_window,
         quick_action_controller,
     )
+    try:
+        durable = DurableHandoff(
+            profile_root,
+            lifecycle.submit_quick_rename,
+            parent=application,
+            controller=quick_action_controller,
+        )
+    except (OSError, ValueError):
+        logger.exception("Quick Rename durable handoff could not initialize")
+        lifecycle.request_shutdown()
+        _show_startup_error("启动失败", "Quick Rename 持久化目录不可用。", application)
+        return 1
+    lifecycle.durable_handoff = durable
     deferred_handler.set_handler(lifecycle.handle_command)
 
     window.lightweight_requested.connect(lifecycle.show_lightweight_mode)
@@ -170,14 +195,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lambda _message: QTimer.singleShot(250, lifecycle.request_shutdown)
             )
         lifecycle.show_lightweight_mode()
-        QTimer.singleShot(
-            0,
-            lambda: lightweight_window.start_quick_rename(quick_rename_directories),
-        )
     elif invocation.quick_rename_host or settings.startup_mode is StartupMode.LIGHTWEIGHT:
         lifecycle.show_lightweight_mode()
     else:
         lifecycle.show_full_mode()
+    QTimer.singleShot(0, durable.start)
     if invocation.mode is LaunchMode.NORMAL and not invocation.quick_rename_host:
         _schedule_startup_smoke(application, window, lightweight_window, lifecycle)
     exit_code = application.exec()
@@ -211,12 +233,27 @@ def _run_as_secondary(
     invocation,
     profile_root,
     deferred_handler: _DeferredCommandHandler,
+    legacy_command: LocalCommand | None,
 ) -> int | InstanceCoordinator:
     """Forward one invocation without constructing the primary runtime."""
-    command = _command_for_invocation(invocation)
+    if invocation.handoff_id is not None:
+        return _wait_for_handoff_primary(
+            application, coordinator, profile_root, deferred_handler, invocation.handoff_id
+        )
+    command = legacy_command or _command_for_invocation(invocation)
     try:
         reply = LocalCommandClient(coordinator.identity.server_name).send(command)
     except LocalClientError as exc:
+        if invocation.mode is LaunchMode.QUICK_RENAME:
+            try:
+                publish(profile_root, command)
+            except (OSError, ValueError) as publication_error:
+                coordinator.close()
+                _secondary_failure(invocation, f"持久化请求失败：{publication_error}")
+                return 1
+            return _wait_for_handoff_primary(
+                application, coordinator, profile_root, deferred_handler, command.request_id
+            )
         if not exc.is_ambiguous:
             # The owner may have exited after election but before its server
             # became reachable.  Re-election is safe because no request was
@@ -241,6 +278,18 @@ def _run_as_secondary(
         if coordinator.role is CoordinatorRole.SECONDARY:
             coordinator.close()
 
+    if (
+        reply.status in {LocalReplyStatus.SHUTTING_DOWN, LocalReplyStatus.QUEUE_FULL}
+        and invocation.mode is LaunchMode.QUICK_RENAME
+    ):
+        try:
+            publish(profile_root, command)
+        except (OSError, ValueError) as publication_error:
+            _secondary_failure(invocation, f"持久化请求失败：{publication_error}")
+            return 1
+        return _wait_for_handoff_primary(
+            application, coordinator, profile_root, deferred_handler, command.request_id
+        )
     if reply.status is LocalReplyStatus.ACCEPTED:
         return 0
     if reply.status is LocalReplyStatus.DUPLICATE:
@@ -252,6 +301,35 @@ def _run_as_secondary(
     else:
         _secondary_failure(invocation, "应用未接受本次操作；未执行本地文件修改。")
     return 1
+
+
+def _wait_for_handoff_primary(application, coordinator, profile_root, deferred_handler, handoff_id):
+    """Secondary host waits outside COM until admission or lock takeover."""
+    journal = profile_root / "handoff" / "v1" / "journal" / f"{handoff_id}.json"
+    coordinator.close()
+    while True:
+        if journal.exists():
+            try:
+                outcome = json.loads(journal.read_text(encoding="utf-8"))
+                state = outcome.get("state")
+                if state == "terminal":
+                    return 0 if outcome.get("status") in {"ACCEPTED", "DUPLICATE"} else 1
+                if state == "indeterminate":
+                    _write_bounded_diagnostic(f"Quick Rename admission indeterminate: {handoff_id}")
+                    return 1
+            except (OSError, ValueError):
+                pass
+        contender = InstanceCoordinator(profile_root)
+        try:
+            role = contender.start(deferred_handler, listen=False)
+        except CoordinatorError:
+            contender.close()
+            return 1
+        if role is CoordinatorRole.PRIMARY:
+            return contender
+        contender.close()
+        application.processEvents()
+        QThread.msleep(250)
 
 
 def _command_for_invocation(invocation) -> LocalCommand:

@@ -9,6 +9,7 @@ from typing import Protocol
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
+from dlsite_organizer.app.durable_handoff import DurableHandoff
 from dlsite_organizer.app.quick_action_controller import (
     QuickActionAdmissionStatus,
     QuickActionController,
@@ -201,6 +202,7 @@ class ApplicationLifecycle(QObject):
         self._main_window = main_window
         self._lightweight_window = lightweight_window
         self.quick_action_controller = quick_action_controller
+        self.durable_handoff: DurableHandoff | None = None
         self._current_window: _WindowLike | None = None
         self._shutdown_started = False
         self._finalized = False
@@ -282,6 +284,20 @@ class ApplicationLifecycle(QObject):
                 LocalReplyStatus.ACCEPTED,
             )
         if command.command is LocalCommandName.QUICK_RENAME:
+            if self.durable_handoff is not None:
+                return self.durable_handoff.admit(command)
+            return self.submit_quick_rename(command)
+        return LocalReply(
+            PROTOCOL_VERSION,
+            command.request_id,
+            LocalReplyStatus.REJECTED,
+        )
+
+    def submit_quick_rename(self, command: LocalCommand) -> LocalReply:
+        """Controller boundary shared by IPC and durable inbox admission."""
+        if self._shutdown_started:
+            return LocalReply(PROTOCOL_VERSION, command.request_id, LocalReplyStatus.SHUTTING_DOWN)
+        if command.command is LocalCommandName.QUICK_RENAME:
             try:
                 admission = self.quick_action_controller.submit(command.quick_rename_paths)
             except Exception:
@@ -291,6 +307,15 @@ class ApplicationLifecycle(QObject):
                     command.request_id,
                     LocalReplyStatus.REJECTED,
                 )
+            if (
+                admission.status is QuickActionAdmissionStatus.ACCEPTED
+                and admission.request is not None
+                and self.durable_handoff is not None
+            ):
+                # A marker failure after controller submission is ambiguous.
+                # Let the admission journal retain its claim instead of
+                # falsely recording a terminal rejection.
+                self.durable_handoff.note_controller_request(command.request_id, admission.request)
             if admission.status is QuickActionAdmissionStatus.ACCEPTED:
                 self._present_quick_action()
             return LocalReply(
@@ -337,8 +362,10 @@ class ApplicationLifecycle(QObject):
         if self._finalized or self._shutdown_started:
             return
         self._shutdown_started = True
+        if self.durable_handoff is not None:
+            self.durable_handoff.stop()
         self._coordinator.stop_server()
-        self.quick_action_controller.begin_shutdown()
+        self.quick_action_controller.begin_shutdown(finish_pending=self.durable_handoff is not None)
         if self._can_finalize():
             self._finalize_shutdown()
         else:
@@ -357,6 +384,7 @@ class ApplicationLifecycle(QObject):
     def _can_finalize(self) -> bool:
         return (
             self.quick_action_controller.active_request is None
+            and not self.quick_action_controller.pending_requests
             and not self._main_window.is_busy()
             and not self._lightweight_window.is_busy()
         )

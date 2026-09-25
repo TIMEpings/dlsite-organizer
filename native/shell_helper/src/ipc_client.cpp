@@ -84,7 +84,11 @@ bool WaitForOverlapped(HANDLE handle, OVERLAPPED& overlapped, const Deadline& de
     return true;
 }
 
-bool WriteAll(HANDLE handle, const std::vector<std::uint8_t>& bytes, const Deadline& deadline) {
+bool WriteAll(
+    HANDLE handle,
+    const std::vector<std::uint8_t>& bytes,
+    const Deadline& deadline,
+    const IpcWriteFile& write_file) {
     std::size_t offset = 0;
     while (offset < bytes.size()) {
         UniqueHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -99,12 +103,9 @@ bool WriteAll(HANDLE handle, const std::vector<std::uint8_t>& bytes, const Deadl
         if (remaining == 0) {
             return false;
         }
-        const BOOL started = WriteFile(
-            handle,
-            bytes.data() + offset,
-            remaining,
-            nullptr,
-            &overlapped);
+        const BOOL started = write_file
+            ? write_file(handle, bytes.data() + offset, remaining, nullptr, &overlapped)
+            : WriteFile(handle, bytes.data() + offset, remaining, nullptr, &overlapped);
         if (!started && GetLastError() != ERROR_IO_PENDING) {
             return false;
         }
@@ -256,9 +257,18 @@ Win32IpcClient::Win32IpcClient(
     std::wstring pipe_name,
     unsigned long initial_connect_deadline_ms,
     unsigned long ack_deadline_ms)
+    : Win32IpcClient(
+          std::move(pipe_name), initial_connect_deadline_ms, ack_deadline_ms, IpcWriteFile{}) {}
+
+Win32IpcClient::Win32IpcClient(
+    std::wstring pipe_name,
+    unsigned long initial_connect_deadline_ms,
+    unsigned long ack_deadline_ms,
+    IpcWriteFile write_file)
     : pipe_name_(std::move(pipe_name)),
       initial_connect_deadline_ms_(initial_connect_deadline_ms),
-      ack_deadline_ms_(ack_deadline_ms) {}
+      ack_deadline_ms_(ack_deadline_ms),
+      write_file_(std::move(write_file)) {}
 
 DispatchResult Win32IpcClient::Send(const std::vector<std::wstring>& paths) {
     BatchRequest request;
@@ -295,7 +305,9 @@ DispatchResult Win32IpcClient::SendToPipe(
     }
 
     const Deadline ack_deadline(ack_deadline_ms_);
-    if (!WriteAll(pipe.get(), frame, ack_deadline)) {
+    // A failed write does not tell us whether zero bytes or a partial frame
+    // reached the peer. Keep both cases conservatively ambiguous.
+    if (!WriteAll(pipe.get(), frame, ack_deadline, write_file_)) {
         return DispatchResult::AmbiguousFailure;
     }
 

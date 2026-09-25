@@ -163,6 +163,7 @@ HRESULT ShellCommand::DispatchResultToHresult(DispatchResult result) const {
     switch (result) {
     case DispatchResult::Accepted:
     case DispatchResult::Duplicate:
+    case DispatchResult::Deferred:
         return S_OK;
     case DispatchResult::QueueFull:
         return HRESULT_FROM_WIN32(ERROR_BUSY);
@@ -177,6 +178,10 @@ HRESULT ShellCommand::DispatchResultToHresult(DispatchResult result) const {
         return E_FAIL;
     case DispatchResult::AmbiguousFailure:
         return HRESULT_FROM_WIN32(ERROR_IO_INCOMPLETE);
+    case DispatchResult::PublicationFailed:
+        return HRESULT_FROM_WIN32(ERROR_WRITE_FAULT);
+    case DispatchResult::LaunchFailed:
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
     }
     return E_FAIL;
 }

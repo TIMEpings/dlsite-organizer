@@ -22,7 +22,6 @@ inline constexpr std::uint32_t kProtocolVersion = 1;
 inline constexpr std::uint32_t kFrameHeaderSize = 4;
 
 inline constexpr unsigned long kInitialConnectDeadlineMs = 500;
-inline constexpr unsigned long kStartupConnectDeadlineMs = 5000;
 inline constexpr unsigned long kAckDeadlineMs = 2000;
 inline constexpr unsigned long kConnectRetryIntervalMs = 25;
 inline constexpr unsigned long kHelperIdleLifetimeMs = 10'000;

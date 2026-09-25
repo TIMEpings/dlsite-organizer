@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from dlsite_organizer.app.durable_handoff import publish
+from dlsite_organizer.app.single_instance import PROTOCOL_VERSION, LocalCommand, LocalCommandName
+
 
 def _child_environment(profile_parent: Path, marker: Path) -> dict[str, str]:
     repository = Path(__file__).resolve().parents[2]
@@ -278,6 +281,104 @@ def test_native_helper_reaches_production_primary_once_as_one_three_path_batch(
         assert primary.poll() is None
     finally:
         _stop_process(primary)
+
+
+def test_durable_request_survives_startup_beyond_old_deadline(tmp_path: Path) -> None:
+    marker = tmp_path / "delayed-primary"
+    barrier = tmp_path / "release-build"
+    profile = tmp_path / "dlsite-organizer"
+    paths = [tmp_path / "RJ00000001 invalid", tmp_path / "RJ00000002 invalid"]
+    for path in paths:
+        path.mkdir()
+    request = LocalCommand(
+        PROTOCOL_VERSION,
+        "delayed-original-id",
+        LocalCommandName.QUICK_RENAME,
+        {"paths": [str(path) for path in paths]},
+    )
+    publish(profile, request)
+    environment = _child_environment(tmp_path, marker)
+    environment["DLSITE_ORGANIZER_TEST_BUILD_BARRIER"] = str(barrier)
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "tests.app.subprocess_helper",
+            "--quick-rename-host",
+            "--handoff-id",
+            request.request_id,
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for_marker(process, marker, "startup-paused")
+        time.sleep(5.2)
+        assert not marker.with_name("delayed-primary.ready").exists()
+        barrier.write_text("release", encoding="ascii")
+        _wait_for_marker(process, marker, "quick")
+        assert marker.with_name("delayed-primary.controller-submit-count").read_text() == "1"
+        assert marker.with_name("delayed-primary.quick-count").read_text() == "2"
+        journal = profile / "handoff" / "v1" / "journal" / f"{request.request_id}.json"
+        assert '"state":"terminal"' in journal.read_text(encoding="utf-8")
+    finally:
+        barrier.touch()
+        _stop_process(process)
+
+
+def test_shutdown_gap_secondary_takes_lock_and_drains_request(tmp_path: Path) -> None:
+    barrier = tmp_path / "release-lock"
+    old_marker = tmp_path / "old-primary"
+    new_marker = tmp_path / "new-primary"
+    environment = _child_environment(tmp_path, old_marker)
+    environment["DLSITE_ORGANIZER_TEST_SHUTDOWN_GAP_BARRIER"] = str(barrier)
+    old = subprocess.Popen(
+        [sys.executable, "-m", "tests.app.subprocess_helper"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    new: subprocess.Popen[str] | None = None
+    try:
+        _wait_for_marker(old, old_marker, "shutdown-gap")
+        path = tmp_path / "RJ00000003 invalid"
+        path.mkdir()
+        request = LocalCommand(
+            PROTOCOL_VERSION,
+            "shutdown-gap-id",
+            LocalCommandName.QUICK_RENAME,
+            {"paths": [str(path)]},
+        )
+        publish(tmp_path / "dlsite-organizer", request)
+        new = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "tests.app.subprocess_helper",
+                "--quick-rename-host",
+                "--handoff-id",
+                request.request_id,
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            env=_child_environment(tmp_path, new_marker),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert not new_marker.with_name("new-primary.components").exists()
+        barrier.write_text("release", encoding="ascii")
+        _wait_for_marker(new, new_marker, "quick")
+        assert new_marker.with_name("new-primary.controller-submit-count").read_text() == "1"
+    finally:
+        barrier.touch()
+        if new is not None:
+            _stop_process(new)
+        _stop_process(old)
 
 
 @pytest.mark.parametrize("launch_arguments", [(), ("--quick-rename",)])

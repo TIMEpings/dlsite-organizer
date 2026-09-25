@@ -25,6 +25,7 @@ set(SHELL_HELPER_SOURCES
     src/com_class_factory.cpp
     src/com_command.cpp
     src/com_server.cpp
+    src/durable_handoff.cpp
     src/helper_runtime.cpp
     src/identity.cpp
     src/ipc_client.cpp

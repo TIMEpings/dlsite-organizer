@@ -150,6 +150,7 @@ class QuickActionController(QObject):
         self._pending: deque[QuickActionRequest] = deque()
         self._identities: set[str] = set()
         self._shutting_down = False
+        self._finish_pending_on_shutdown = False
 
     @property
     def active_request(self) -> QuickActionRequest | None:
@@ -254,17 +255,20 @@ class QuickActionController(QObject):
             self._start(start_request)
         return result
 
-    def begin_shutdown(self) -> None:
-        """Reject new work and discard pending work without interrupting active work."""
+    def begin_shutdown(self, *, finish_pending: bool = False) -> None:
+        """Reject new work; optionally finish durable, already admitted work."""
         with self._lock:
             if self._shutting_down:
                 return
             self._shutting_down = True
-            previous_depth = len(self._pending)
-            for request in self._pending:
-                self._discard_identities(request)
-            self._pending.clear()
-
+            self._finish_pending_on_shutdown = finish_pending
+            if not finish_pending:
+                previous_depth = len(self._pending)
+                for request in self._pending:
+                    self._discard_identities(request)
+                self._pending.clear()
+            else:
+                previous_depth = 0
         if previous_depth:
             self._emit(self.queue_depth_changed, 0)
 
@@ -304,7 +308,7 @@ class QuickActionController(QObject):
                 # A factory should only construct a runner.  If a broken
                 # factory completed synchronously, do not start a stale runner.
                 return
-            if self._shutting_down:
+            if self._shutting_down and not self._finish_pending_on_shutdown:
                 self._active = None
                 self._active_runner = None
                 self._discard_identities(request)
@@ -331,7 +335,7 @@ class QuickActionController(QObject):
             self._active_runner = None
             self._discard_identities(active)
             previous_depth = len(self._pending)
-            if not self._shutting_down and self._pending:
+            if self._pending and (not self._shutting_down or self._finish_pending_on_shutdown):
                 next_request = self._pending.popleft()
                 self._active = next_request
             queue_depth = len(self._pending)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
@@ -20,6 +21,23 @@ from dlsite_organizer.services.naming import DEFAULT_NAMING_TEMPLATE, NamingServ
 _SUPPORTED_METADATA_LOCALES = frozenset(SUPPORTED_METADATA_LOCALES)
 _WINDOWS_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _DATE_DIRECTIVES = frozenset("aAbBcdHIjmMpSUwWxXyYZ%")
+
+
+class _Guid(ctypes.Structure):
+    _fields_ = [
+        ("data1", ctypes.c_uint32),
+        ("data2", ctypes.c_uint16),
+        ("data3", ctypes.c_uint16),
+        ("data4", ctypes.c_ubyte * 8),
+    ]
+
+
+_FOLDERID_LOCAL_APP_DATA = _Guid(
+    0xF1B32785,
+    0x6FBA,
+    0x4FCF,
+    (ctypes.c_ubyte * 8)(0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91),
+)
 
 
 class ProviderSettings(BaseModel):
@@ -107,8 +125,53 @@ class SettingsError(ValueError):
 def default_data_dir() -> Path:
     """Return the per-user directory used for mutable application data."""
     local_app_data = os.environ.get("LOCALAPPDATA")
-    base = Path(local_app_data) if local_app_data else Path.home() / ".local" / "share"
+    if local_app_data:
+        base = Path(local_app_data)
+    elif os.name == "nt":
+        base = _known_folder_local_app_data()
+    else:
+        base = Path.home() / ".local" / "share"
     return base / "dlsite-organizer"
+
+
+def _known_folder_local_app_data() -> Path:
+    """Resolve FOLDERID_LocalAppData using the Windows Known Folder API."""
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+    get_known_folder_path = shell32.SHGetKnownFolderPath
+    get_known_folder_path.argtypes = (
+        ctypes.POINTER(_Guid),
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    get_known_folder_path.restype = ctypes.c_long
+    co_task_mem_free = ole32.CoTaskMemFree
+    co_task_mem_free.argtypes = (ctypes.c_void_p,)
+    co_task_mem_free.restype = None
+
+    known_folder_path = ctypes.c_void_p()
+    result = get_known_folder_path(
+        ctypes.byref(_FOLDERID_LOCAL_APP_DATA),
+        0,
+        None,
+        ctypes.byref(known_folder_path),
+    )
+    try:
+        if result < 0:
+            raise OSError(
+                "SHGetKnownFolderPath(FOLDERID_LocalAppData) failed "
+                f"with HRESULT 0x{result & 0xFFFFFFFF:08X}"
+            )
+        if not known_folder_path.value:
+            raise OSError("SHGetKnownFolderPath(FOLDERID_LocalAppData) returned no path")
+        path = ctypes.wstring_at(known_folder_path)
+        if not path:
+            raise OSError("SHGetKnownFolderPath(FOLDERID_LocalAppData) returned an empty path")
+        return Path(path)
+    finally:
+        if known_folder_path.value:
+            co_task_mem_free(known_folder_path)
 
 
 def default_config_path() -> Path:

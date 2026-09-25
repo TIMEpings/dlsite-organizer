@@ -138,7 +138,8 @@ bool RunPrimaryStub(const std::wstring& pipe_name, const std::wstring& marker) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 2 || _wcsicmp(argv[1], L"--quick-rename-host") != 0) {
+    if (argc != 4 || _wcsicmp(argv[1], L"--quick-rename-host") != 0 ||
+        _wcsicmp(argv[2], L"--handoff-id") != 0) {
         return 7;
     }
 
@@ -148,7 +149,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::wstring pipe_name;
     if (ReadEnvironment(L"DLSITE_NATIVE_TEST_PIPE", pipe_name)) {
-        return RunPrimaryStub(pipe_name, marker) ? 0 : 9;
+        return WriteMarker(marker, "argc=4\nhost=--quick-rename-host\n") ? 0 : 9;
     }
-    return WriteMarker(marker, "argc=2\nhost=--quick-rename-host\n") ? 0 : 10;
+    std::string id;
+    for (const wchar_t* value = argv[3]; *value; ++value) id.push_back(static_cast<char>(*value));
+    return WriteMarker(marker, "argc=4\nhost=--quick-rename-host\nid=" + id + "\n") ? 0 : 10;
 }

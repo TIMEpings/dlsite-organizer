@@ -1,8 +1,11 @@
+import ctypes
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QLocale
 
+from dlsite_organizer.app import settings as settings_module
 from dlsite_organizer.app.locale import metadata_locale_for
 from dlsite_organizer.app.settings import (
     AppSettings,
@@ -11,9 +14,135 @@ from dlsite_organizer.app.settings import (
     SettingsError,
     SettingsService,
     StartupMode,
+    default_data_dir,
     load_settings,
 )
 from dlsite_organizer.services.naming import DEFAULT_NAMING_TEMPLATE
+
+
+def test_default_data_dir_uses_nonempty_local_app_data_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_app_data = tmp_path / "configured-local-app-data"
+    monkeypatch.setattr(
+        settings_module,
+        "os",
+        SimpleNamespace(name="nt", environ={"LOCALAPPDATA": str(local_app_data)}),
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "_known_folder_local_app_data",
+        lambda: pytest.fail("Known Folder fallback should not be used"),
+    )
+
+    assert default_data_dir() == local_app_data / "dlsite-organizer"
+
+
+@pytest.mark.parametrize("local_app_data", [None, ""])
+def test_default_data_dir_uses_windows_known_folder_when_local_app_data_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_app_data: str | None,
+) -> None:
+    known_folder = tmp_path / "Windows" / "LocalAppData"
+    environment = {} if local_app_data is None else {"LOCALAPPDATA": local_app_data}
+    monkeypatch.setattr(
+        settings_module,
+        "os",
+        SimpleNamespace(name="nt", environ=environment),
+    )
+    monkeypatch.setattr(settings_module, "_known_folder_local_app_data", lambda: known_folder)
+
+    expected = known_folder / "dlsite-organizer"
+    assert default_data_dir() == expected
+    assert settings_module.default_config_path() == expected / "config.toml"
+    assert settings_module.default_logs_path() == expected / "logs"
+
+
+def test_default_data_dir_keeps_non_windows_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings_module,
+        "os",
+        SimpleNamespace(name="posix", environ={}),
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert default_data_dir() == tmp_path / ".local" / "share" / "dlsite-organizer"
+
+
+def test_windows_known_folder_failure_does_not_choose_a_different_profile_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings_module,
+        "os",
+        SimpleNamespace(name="nt", environ={}),
+    )
+
+    def fail_resolution() -> Path:
+        raise OSError("Known Folder resolution failed")
+
+    monkeypatch.setattr(settings_module, "_known_folder_local_app_data", fail_resolution)
+    with pytest.raises(OSError, match="Known Folder resolution failed"):
+        default_data_dir()
+
+
+@pytest.mark.parametrize("hresult", [0, -2147024891])
+def test_known_folder_resolver_uses_local_app_data_guid_and_frees_api_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    hresult: int,
+) -> None:
+    expected = tmp_path / "Known Folder LocalAppData"
+    allocated_path = ctypes.create_unicode_buffer(str(expected))
+    allocated_pointer = ctypes.cast(allocated_path, ctypes.c_void_p).value
+    freed_pointers: list[int | None] = []
+
+    class FunctionStub:
+        def __init__(self, implementation):
+            self.implementation = implementation
+
+        def __call__(self, *arguments):
+            return self.implementation(*arguments)
+
+    def get_known_folder_path(folder_id, flags, token, output) -> int:
+        guid = ctypes.cast(folder_id, ctypes.POINTER(settings_module._Guid)).contents
+        assert (guid.data1, guid.data2, guid.data3, tuple(guid.data4)) == (
+            0xF1B32785,
+            0x6FBA,
+            0x4FCF,
+            (0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91),
+        )
+        assert flags == 0
+        assert token is None
+        output_pointer = ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))
+        output_pointer.contents.value = allocated_pointer
+        return hresult
+
+    def free_task_memory(pointer: ctypes.c_void_p) -> None:
+        freed_pointers.append(pointer.value)
+
+    libraries = {
+        "shell32": SimpleNamespace(SHGetKnownFolderPath=FunctionStub(get_known_folder_path)),
+        "ole32": SimpleNamespace(CoTaskMemFree=FunctionStub(free_task_memory)),
+    }
+    monkeypatch.setattr(
+        settings_module.ctypes,
+        "WinDLL",
+        lambda name, **_kwargs: libraries[name],
+        raising=False,
+    )
+
+    if hresult < 0:
+        with pytest.raises(OSError, match="HRESULT 0x80070005"):
+            settings_module._known_folder_local_app_data()
+    else:
+        assert settings_module._known_folder_local_app_data() == expected
+    assert freed_pointers == [allocated_pointer]
 
 
 def test_missing_config_uses_fresh_profile_defaults(

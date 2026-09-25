@@ -33,6 +33,7 @@ class ApplicationInvocation:
     mode: LaunchMode
     quick_rename_directories: tuple[Path, ...] = ()
     quick_rename_host: bool = False
+    handoff_id: str | None = None
 
     @property
     def quick_rename_directory(self) -> Path | None:
@@ -86,14 +87,20 @@ def parse_invocation(argv: Sequence[str]) -> ApplicationInvocation:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--handoff-id", action=_StoreOnce, type=_handoff_id_argument, help=argparse.SUPPRESS
+    )
     parsed = parser.parse_args(tuple(argv))
     directories = parsed.quick_rename_directories
     if parsed.quick_rename_host and directories is not None:
         parser.error("--quick-rename-host 不能与 --quick-rename 一起使用。")
+    if parsed.handoff_id is not None and not parsed.quick_rename_host:
+        parser.error("--handoff-id 需要 --quick-rename-host。")
     if directories is None:
         return ApplicationInvocation(
             mode=LaunchMode.NORMAL,
             quick_rename_host=parsed.quick_rename_host,
+            handoff_id=parsed.handoff_id,
         )
     if len(directories) > MAX_QUICK_RENAME_ITEMS:
         parser.error(quick_rename_batch_limit_message())
@@ -107,3 +114,12 @@ def _directory_argument(value: str) -> str:
     if not value.strip():
         raise argparse.ArgumentTypeError("DIRECTORY 不能为空。")
     return value
+
+
+def _handoff_id_argument(value: str) -> str:
+    from dlsite_organizer.app.single_instance import ProtocolError, _validate_request_id
+
+    try:
+        return _validate_request_id(value)
+    except ProtocolError as exc:
+        raise argparse.ArgumentTypeError("无效的 handoff ID。") from exc

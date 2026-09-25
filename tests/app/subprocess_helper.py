@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
+
+from PySide6.QtCore import QTimer
 
 import dlsite_organizer.__main__ as application_main
 from dlsite_organizer.persistence.database import Database
@@ -31,6 +34,11 @@ original_build_components = application_main.build_components
 
 
 def tracked_build_components(settings):
+    barrier = os.environ.get("DLSITE_ORGANIZER_TEST_BUILD_BARRIER")
+    if barrier:
+        _mark("startup-paused")
+        while not Path(barrier).exists():
+            time.sleep(0.02)
     _mark("components")
     components = original_build_components(settings)
     service = components.quick_rename_service
@@ -65,6 +73,21 @@ def tracked_listen(coordinator):
     result = original_listen(coordinator)
     if result:
         _mark("ready")
+        barrier = os.environ.get("DLSITE_ORGANIZER_TEST_SHUTDOWN_GAP_BARRIER")
+        if barrier:
+            def enter_gap() -> None:
+                coordinator.stop_server()
+                _mark("shutdown-gap")
+
+                def release_when_signaled() -> None:
+                    if Path(barrier).exists():
+                        coordinator.release_lock()
+                    else:
+                        QTimer.singleShot(25, release_when_signaled)
+
+                release_when_signaled()
+
+            QTimer.singleShot(0, enter_gap)
     return result
 
 
