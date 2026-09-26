@@ -7,6 +7,11 @@ from sqlalchemy import create_engine, inspect
 
 from dlsite_organizer.domain.candidate import CandidateEvidenceKind, CandidateSnapshotSource
 from dlsite_organizer.domain.manual_review import CandidateEvidenceSnapshot
+from dlsite_organizer.domain.rename_execution import (
+    ExecutionStatus,
+    TransactionStatus,
+    UndoStatus,
+)
 from dlsite_organizer.domain.work import AgeCategory, Availability, TranslationAttribution, Work
 from dlsite_organizer.persistence.database import (
     Database,
@@ -20,8 +25,10 @@ from dlsite_organizer.persistence.metadata_store import (
     MetadataStore,
     WorkMetadataCache,
 )
+from dlsite_organizer.persistence.rename_journal import TransactionJournal
 from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
 from dlsite_organizer.services.candidate_relations import CandidateRelationService
+from dlsite_organizer.services.rename_history import RenameHistoryService
 
 
 def make_work(
@@ -318,10 +325,10 @@ def test_v041_schema_migration_keeps_rename_journal_rows_and_adds_v05_metadata_t
             VALUES (1, 'RJ01609020', 'old observation', 'RG-old', '同名社团', 'maniax',
                     '2026-08-01 00:00:00');
         INSERT INTO rename_transactions
-            VALUES ('tx-1', 'C:/works', '2026-08-01 00:00:00', '2026-08-01 00:01:00', 'COMPLETED');
+            VALUES ('tx-1', 'C:/works', '2026-08-01 00:00:00', '2026-08-01 00:01:00', 'completed');
         INSERT INTO rename_operations
-            VALUES (1, 'tx-1', 1, 'C:/works/old', 'C:/works/new', 'SUCCESS', NULL,
-                    '2026-08-01 00:01:00', 'PENDING', NULL, NULL);
+            VALUES (1, 'tx-1', 1, 'C:/works/old', 'C:/works/new', 'success', NULL,
+                    '2026-08-01 00:01:00', 'pending', NULL, NULL);
         """
     )
     connection.commit()
@@ -330,6 +337,7 @@ def test_v041_schema_migration_keeps_rename_journal_rows_and_adds_v05_metadata_t
     database = Database(path)
     database.initialize()
     MetadataStore(database)
+    history = RenameHistoryService(TransactionJournal(database))
 
     engine = create_engine(f"sqlite:///{path.as_posix()}")
     table_names = set(inspect(engine).get_table_names())
@@ -347,8 +355,22 @@ def test_v041_schema_migration_keeps_rename_journal_rows_and_adds_v05_metadata_t
         transaction = session.get(RenameTransactionRecord, "tx-1")
         operation = session.get(RenameOperationRecord, 1)
         assert old_observation is not None and old_observation.title == "old observation"
-        assert transaction is not None and transaction.status == "COMPLETED"
-        assert operation is not None and operation.status == "SUCCESS"
+        assert transaction is not None and transaction.status == "completed"
+        assert operation is not None and operation.status == "success"
+
+    summaries = history.list_recent(limit=50)
+    assert len(summaries) == 1
+    assert summaries[0].transaction_id == "tx-1"
+    assert summaries[0].status is TransactionStatus.COMPLETED
+    legacy_transaction = history.get_transaction("tx-1")
+    assert legacy_transaction.recovery_stage is None
+    assert legacy_transaction.recovery_error is None
+    assert legacy_transaction.recovery_sequence is None
+    assert len(legacy_transaction.operations) == 1
+    assert legacy_transaction.operations[0].status is ExecutionStatus.SUCCESS
+    assert legacy_transaction.operations[0].error is None
+    assert legacy_transaction.operations[0].undo_status is UndoStatus.PENDING
+    assert legacy_transaction.operations[0].undo_error is None
     database.dispose()
 
 
@@ -447,10 +469,10 @@ def test_legacy_database_upgrade_preserves_metadata_reviews_journal_and_unknown_
                     '2026-07-01 00:00:00');
         INSERT INTO rename_transactions
             VALUES ('tx-legacy', 'C:/works', '2026-07-01 00:00:00',
-                    '2026-07-01 00:01:00', 'COMPLETED');
+                    '2026-07-01 00:01:00', 'completed');
         INSERT INTO rename_operations
-            VALUES (1, 'tx-legacy', 1, 'C:/works/old', 'C:/works/new', 'SUCCESS', NULL,
-                    '2026-07-01 00:01:00', 'PENDING', NULL, NULL);
+            VALUES (1, 'tx-legacy', 1, 'C:/works/old', 'C:/works/new', 'success', NULL,
+                    '2026-07-01 00:01:00', 'pending', NULL, NULL);
         INSERT INTO work_metadata_cache
             VALUES ('RJ01609020', 'cached legacy title', 'RG01058997', '同名社团',
                     '2026-07-07', '2026-07-07 12:34:56', '系列名', '["CV A"]',
@@ -484,6 +506,7 @@ def test_legacy_database_upgrade_preserves_metadata_reviews_journal_and_unknown_
     database.initialize()
     store = MetadataStore(database)
     reviews = ManualReviewRepository(database)
+    history = RenameHistoryService(TransactionJournal(database))
 
     engine = create_engine(f"sqlite:///{path.as_posix()}")
     assert "bonus_evidence_json" in {
@@ -534,12 +557,26 @@ def test_legacy_database_upgrade_preserves_metadata_reviews_journal_and_unknown_
     assert review.notes == "legacy note"
     assert review.evidence_snapshot.schema_version == 1
 
+    summaries = history.list_recent(limit=50)
+    assert len(summaries) == 1
+    assert summaries[0].transaction_id == "tx-legacy"
+    assert summaries[0].status is TransactionStatus.COMPLETED
+    legacy_transaction = history.get_transaction("tx-legacy")
+    assert legacy_transaction.recovery_stage is None
+    assert legacy_transaction.recovery_error is None
+    assert legacy_transaction.recovery_sequence is None
+    assert len(legacy_transaction.operations) == 1
+    assert legacy_transaction.operations[0].status is ExecutionStatus.SUCCESS
+    assert legacy_transaction.operations[0].error is None
+    assert legacy_transaction.operations[0].undo_status is UndoStatus.PENDING
+    assert legacy_transaction.operations[0].undo_error is None
+
     with database.session() as session:
         transaction = session.get(RenameTransactionRecord, "tx-legacy")
         operation = session.get(RenameOperationRecord, 1)
         placeholder = session.get(WorkObservation, 1)
-        assert transaction is not None and transaction.status == "COMPLETED"
-        assert operation is not None and operation.status == "SUCCESS"
+        assert transaction is not None and transaction.status == "completed"
+        assert operation is not None and operation.status == "success"
         assert placeholder is not None and placeholder.title == "placeholder history"
     database.dispose()
 

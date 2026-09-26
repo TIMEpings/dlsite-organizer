@@ -25,6 +25,15 @@ def _cell_text(page: RenameHistoryPage, table_name: str, row: int, column: int) 
     return item.text()
 
 
+def _visible_transaction_ids(page: RenameHistoryPage) -> list[object]:
+    transaction_ids = []
+    for index in range(page.transaction_list.count()):
+        item = page.transaction_list.item(index)
+        assert item is not None
+        transaction_ids.append(item.data(page._TRANSACTION_ID_ROLE))
+    return transaction_ids
+
+
 def _create_completed_transactions(journal: TransactionJournal, root: Path, count: int) -> None:
     for index in range(count):
         transaction = journal.create_transaction(
@@ -184,14 +193,29 @@ def test_filesystem_observation_failure_does_not_hide_transaction_facts(
 
 
 @pytest.mark.parametrize(
-    ("transaction_count", "has_older_page"),
-    [(50, False), (51, True)],
+    (
+        "transaction_count",
+        "expected_first_page_count",
+        "expected_older_page_count",
+        "has_third_page",
+    ),
+    [
+        (0, 0, 0, False),
+        (1, 1, 0, False),
+        (49, 49, 0, False),
+        (50, 50, 0, False),
+        (51, 50, 1, False),
+        (100, 50, 50, False),
+        (101, 50, 50, True),
+    ],
 )
 def test_pagination_handles_exact_and_partial_last_pages(
     qapp: QApplication,
     tmp_path: Path,
     transaction_count: int,
-    has_older_page: bool,
+    expected_first_page_count: int,
+    expected_older_page_count: int,
+    has_third_page: bool,
 ) -> None:
     database = Database(tmp_path / "journal.sqlite3")
     database.initialize()
@@ -203,13 +227,39 @@ def test_pagination_handles_exact_and_partial_last_pages(
     page = RenameHistoryPage(RenameHistoryService(journal))
     page.refresh_history()
 
-    assert page.transaction_list.count() == 50
-    assert page.older_button.isEnabled() is has_older_page
-    if has_older_page:
+    assert page.transaction_list.count() == expected_first_page_count
+    assert page.transaction_list.count() <= page.PAGE_SIZE
+    assert page.older_button.isEnabled() is (transaction_count > page.PAGE_SIZE)
+    first_page = journal.list_transactions(limit=page.PAGE_SIZE)
+    assert _visible_transaction_ids(page) == [
+        transaction.transaction_id for transaction in first_page
+    ]
+    if transaction_count:
+        assert page._selected_transaction is not None
+        assert page._selected_transaction.transaction_id == first_page[0].transaction_id
+    else:
+        assert page._selected_transaction is None
+        assert not page.newer_button.isEnabled()
+
+    if transaction_count > page.PAGE_SIZE:
         page.older_button.click()
         assert page.page_label.text().startswith("第 2 页")
-        assert page.transaction_list.count() == 1
-        assert not page.older_button.isEnabled()
+        assert page.transaction_list.count() == expected_older_page_count
+        assert page.transaction_list.count() <= page.PAGE_SIZE
+        older_page = journal.list_transactions(limit=page.PAGE_SIZE, offset=page.PAGE_SIZE)
+        assert _visible_transaction_ids(page) == [
+            transaction.transaction_id for transaction in older_page
+        ]
+        assert page.older_button.isEnabled() is has_third_page
+
+        if has_third_page:
+            page.older_button.click()
+            assert page.page_label.text().startswith("第 3 页")
+            assert page.transaction_list.count() == 1
+            assert not page.older_button.isEnabled()
+            page.newer_button.click()
+            assert page.page_label.text().startswith("第 2 页")
+
         page.newer_button.click()
         assert page.page_label.text().startswith("第 1 页")
 

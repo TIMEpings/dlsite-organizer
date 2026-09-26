@@ -22,7 +22,7 @@ DLsite Organizer 是一个面向 Windows 的桌面工具，用于查询 DLsite �
 
 应用以 PyInstaller onedir ZIP 形式分发，不需要安装器。解压后启动 `dlsite-organizer.exe`；首次启动会自动创建本机数据目录和 SQLite schema。
 
-当前源码版本为 `1.2.1`；Windows portable 版本支持下文所述的 Explorer Quick Rename 约定。
+当前源码版本为 `1.3.0`；Windows portable 版本支持下文所述的 Explorer Quick Rename 约定。
 
 ### 从源码运行
 

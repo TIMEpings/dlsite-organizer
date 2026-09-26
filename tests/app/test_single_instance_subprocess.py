@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -102,6 +103,25 @@ def _wait_for_marker(
             )
         time.sleep(0.05)
     raise AssertionError(f"timed out waiting for {target}")
+
+
+def _wait_for_journal_state(path: Path, state: str, timeout: float = 10.0) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    last_record: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            time.sleep(0.05)
+            continue
+        if isinstance(record, dict):
+            last_record = record
+            if record.get("state") == state:
+                return record
+        time.sleep(0.05)
+    raise AssertionError(
+        f"timed out waiting for journal state {state!r}; last record: {last_record!r}"
+    )
 
 
 def _stop_process(process: subprocess.Popen[str]) -> tuple[str, str]:
@@ -323,7 +343,7 @@ def test_durable_request_survives_startup_beyond_old_deadline(tmp_path: Path) ->
         assert marker.with_name("delayed-primary.controller-submit-count").read_text() == "1"
         assert marker.with_name("delayed-primary.quick-count").read_text() == "2"
         journal = profile / "handoff" / "v1" / "journal" / f"{request.request_id}.json"
-        assert '"state":"terminal"' in journal.read_text(encoding="utf-8")
+        assert _wait_for_journal_state(journal, "terminal")["state"] == "terminal"
     finally:
         barrier.touch()
         _stop_process(process)

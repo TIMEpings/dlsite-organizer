@@ -285,7 +285,9 @@ try {
     Write-Output ("Packaging PATH entries retained: {0}" -f @($pathIsolation.kept).Count)
 
     New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
-    $env:DLSITE_PACKAGING_OUTPUT_ROOT = $outputRoot
+    $provenanceOutputRoot = Split-Path -Parent $provenance
+    New-Item -ItemType Directory -Force -Path $provenanceOutputRoot | Out-Null
+    $env:DLSITE_PACKAGING_OUTPUT_ROOT = $provenanceOutputRoot
     $packagingOutputRootWasSet = $true
 
     Invoke-NativeTool -Executable $nativeToolchain.CMake -Description "Native CMake configure" -Arguments @(

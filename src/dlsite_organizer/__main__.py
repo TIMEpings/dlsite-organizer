@@ -399,7 +399,7 @@ def _schedule_startup_smoke(
     if os.environ.get("DLSITE_ORGANIZER_STARTUP_SMOKE") != "1":
         return
 
-    expected_pages = ["整理", "查询", "设置"]
+    expected_pages = ["整理", "查询", "设置", "重命名历史"]
     actual_pages = [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
