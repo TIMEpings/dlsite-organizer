@@ -16,3 +16,19 @@ logs/
 .vscode/
 *.spec
 research/
+
+# Local test reports and scratch files
+.coverage
+.coverage.*
+htmlcov/
+*.log
+*.tmp
+*.bak
+*.old
+
+# Editor and operating-system leftovers
+*.swp
+*.swo
+*~
+Thumbs.db
+.DS_Store
