@@ -13,9 +13,14 @@ from dlsite_organizer.domain.work import Availability, Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.metadata_store import MetadataStore
 from dlsite_organizer.providers.dlsite.client import DlsiteWorkLookup
-from dlsite_organizer.providers.dlsite.sources import parse_product_info_ajax
+from dlsite_organizer.providers.dlsite.sources import (
+    normalize_product_info_ajax,
+    parse_product_info_ajax,
+)
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
+
+FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "dlsite"
 
 
 @dataclass
@@ -59,6 +64,16 @@ def make_lookup(
 
     product = ProductInfoAjaxSource.model_validate(values)
     return DlsiteWorkLookup(work=work, product_info=product, source="DLSITE_PRODUCT_INFO_AJAX")
+
+
+def make_longitudinal_fixture_lookup(workno: str, phase: str) -> DlsiteWorkLookup:
+    payload = (FIXTURE_DIR / f"product_info_{workno}_{phase}.json").read_text(encoding="utf-8")
+    product_info = parse_product_info_ajax(payload, workno)
+    return DlsiteWorkLookup(
+        work=normalize_product_info_ajax(product_info, section="maniax"),
+        product_info=product_info,
+        source="DLSITE_PRODUCT_INFO_AJAX",
+    )
 
 
 def test_live_observations_preserve_non_empty_then_empty_bonus_states(tmp_path: Path) -> None:
@@ -118,6 +133,41 @@ def test_live_observations_preserve_non_empty_then_empty_bonus_states(tmp_path: 
             label="期間限定",
         ),
     )
+    assert observations[1].evidence == BonusEvidenceSnapshot(entries=())
+    assert provider.calls == 2
+    database.dispose()
+
+
+def test_real_expiry_transition_keeps_historical_positive_evidence(tmp_path: Path) -> None:
+    provider = SequencedProvider(
+        [
+            make_longitudinal_fixture_lookup("RJ01690645", "pre_expiry"),
+            make_longitudinal_fixture_lookup("RJ01690645", "post_expiry"),
+        ]
+    )
+    database = Database(tmp_path / "real-bonus-history.sqlite3")
+    database.initialize()
+    store = MetadataStore(database)
+    current_time = [
+        datetime(2026, 9, 6, 14, 59, tzinfo=UTC),
+        datetime(2026, 9, 7, 0, 0, tzinfo=UTC),
+    ]
+    service = LookupService(
+        provider,
+        NamingService(),
+        metadata_store=store,
+        clock=lambda: current_time[0],
+    )
+
+    service.lookup("RJ01690645")
+    current_time[0] = current_time[1]
+    service.lookup("RJ01690645", force_refresh=True)
+
+    observations = store.list_bonus_observations("RJ01690645")
+    assert len(observations) == 2
+    assert observations[0].evidence is not None
+    assert observations[0].evidence.entries[0].description == "Redacted source description"
+    assert observations[0].evidence.entries[0].end_at == datetime(2026, 9, 6, 23, 59, 59)
     assert observations[1].evidence == BonusEvidenceSnapshot(entries=())
     assert provider.calls == 2
     database.dispose()

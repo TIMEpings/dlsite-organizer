@@ -1,0 +1,18 @@
+{
+  "RJ01690645": {
+    "maker_id": "RG01061132",
+    "regist_date": "2026-08-24 00:00:00",
+    "work_name": "Redacted work title A",
+    "bonuses": [
+      {
+        "title": "Redacted listing title",
+        "description": "Redacted source description",
+        "dist_flg": "1",
+        "end_date": "2026-09-06 23:59:59",
+        "end_date_str": "2026/09/06 23:59",
+        "product_id": null,
+        "workno": null
+      }
+    ]
+  }
+}

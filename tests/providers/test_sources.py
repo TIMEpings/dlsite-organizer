@@ -25,6 +25,10 @@ def rich_fixture_payload(workno: str) -> str:
     return (FIXTURE_DIR / f"product_metadata_{workno}.json").read_text(encoding="utf-8")
 
 
+def longitudinal_bonus_payload(workno: str, phase: str) -> str:
+    return (FIXTURE_DIR / f"product_info_{workno}_{phase}.json").read_text(encoding="utf-8")
+
+
 def test_real_original_response_maps_metadata_and_preserves_regist_datetime() -> None:
     source = parse_product_info_ajax(fixture_payload("RJ01609020"), "rj01609020")
     work = normalize_product_info_ajax(source, section="maniax")
@@ -126,6 +130,61 @@ def test_real_child_response_checks_metadata_identity_and_translation_topology()
     assert source.translation_info.parent_workno == "RJ01636949"
     assert source.translation_info.child_worknos == []
     assert source.translation_info.lang == "CHI_HANS"
+
+
+def test_real_longitudinal_bonus_fixture_preserves_pre_expiry_evidence() -> None:
+    payload = longitudinal_bonus_payload("RJ01690645", "pre_expiry")
+    source = parse_product_info_ajax(payload, "RJ01690645")
+
+    assert source.bonuses is not None
+    assert len(source.bonuses) == 1
+    assert source.bonus_evidence is not None
+    entry = source.bonus_evidence.entries[0]
+    assert entry.description == "Redacted source description"
+    assert entry.end_at == datetime(2026, 9, 6, 23, 59, 59)
+
+    raw_entry = json.loads(payload)["RJ01690645"]["bonuses"][0]
+    assert raw_entry["dist_flg"] == "1"
+    assert raw_entry["end_date_str"] == "2026/09/06 23:59"
+
+
+def test_real_longitudinal_bonus_fixture_has_no_current_evidence_post_expiry() -> None:
+    source = parse_product_info_ajax(
+        longitudinal_bonus_payload("RJ01690645", "post_expiry"),
+        "RJ01690645",
+    )
+
+    assert source.bonuses == []
+    assert source.bonus_evidence is not None
+    assert source.bonus_evidence.entries == ()
+
+
+def test_real_bonus_work_remains_identifiable_after_main_bonus_expiry() -> None:
+    parsed = {
+        phase: parse_product_info_ajax(
+            longitudinal_bonus_payload("RJ01690654", phase),
+            "RJ01690654",
+        )
+        for phase in ("pre_expiry", "post_expiry")
+    }
+    raw = {
+        phase: json.loads(longitudinal_bonus_payload("RJ01690654", phase))["RJ01690654"]
+        for phase in ("pre_expiry", "post_expiry")
+    }
+
+    before = parsed["pre_expiry"]
+    after = parsed["post_expiry"]
+    assert before.maker_id == after.maker_id == "RG01061132"
+    assert before.regist_datetime == after.regist_datetime == datetime(2026, 8, 24)
+    assert before.work_name == after.work_name == "Redacted work title B"
+    assert before.bonus_evidence is not None and before.bonus_evidence.entries == ()
+    assert after.bonus_evidence is not None and after.bonus_evidence.entries == ()
+
+    for product in raw.values():
+        assert product["price"] == 0
+        assert product["is_free"] is True
+        assert product["is_sale"] is False
+        assert product["on_sale"] == 1
 
 
 def test_product_info_ajax_rejects_missing_requested_envelope_key() -> None:

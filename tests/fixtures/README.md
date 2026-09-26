@@ -9,6 +9,19 @@ DLsite `product/info/ajax` responses. They retain the relevant real envelope,
 field names, nesting, values, and null/array/object types. They contain no
 cookie, session, or account identifiers.
 
+`dlsite/product_info_RJ01690645_pre_expiry.json`,
+`dlsite/product_info_RJ01690645_post_expiry.json`,
+`dlsite/product_info_RJ01690654_pre_expiry.json`, and
+`dlsite/product_info_RJ01690654_post_expiry.json` are minimized, sanitized
+captures from a real longitudinal bonus-expiration pilot. They retain the
+work identifiers, maker and registration metadata, the observed bonus end
+date and distribution flag, the pre-expiry non-empty/post-expiry empty bonus
+arrays, and the bonus work's stable free/on-sale identity fields. Product and
+bonus titles and descriptions are redacted; mutable ratings, counts, and
+campaign data are omitted. These are parser and history regression fixtures,
+not a title catalogue. Bonus title wording or similarity is not an identity
+rule.
+
 `dlsite/product_metadata_RJ01609020.json`,
 `dlsite/product_metadata_RJ01636949.json`, and
 `dlsite/product_metadata_RJ01637033.json` are minimized, title-redacted

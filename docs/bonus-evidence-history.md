@@ -32,16 +32,37 @@ reported at observation time. Empty bonuses and unavailable legacy bonus
 evidence are different states. Historical bonus evidence is not itself a
 confirmed `BONUS_OF` relation.
 
-## Research note
+## Longitudinal expiration pilot
 
-Working hypothesis from the available cases:
+**Sample:** main work `RJ01690645`; bonus work `RJ01690654`
+
+**Observed bonus deadline:** `2026-09-06 23:59:59`
+
+**Verdict:** PASS
+
+The reported pre-expiry and post-expiry AJAX observations show this transition:
+
+| Observation | Main work (`RJ01690645`) | Bonus work (`RJ01690654`) |
+| --- | --- | --- |
+| Before expiry | `bonuses` contains an explicit entry with a description, `dist_flg = "1"`, `end_date = "2026-09-06 23:59:59"`, and `end_date_str = "2026/09/06 23:59"`. | Queryable. |
+| After expiry | `bonuses == []`; the current response no longer exposes that live entry. | Still queryable; maker, registration date, title, and free/on-sale identity fields remain materially unchanged. Mutable rating statistics changed. |
+
+Conclusion: DLsite may remove explicit live bonus evidence from the main
+work's AJAX response after expiry while leaving the bonus work available in
+AJAX data. This is one real longitudinal positive sample. It is regression
+evidence, not a universal or undocumented DLsite API guarantee.
+
+This transition changes only the current observation. It does not erase an
+earlier positive observation or establish that the work historically never
+had a limited-time bonus. The persisted distinction remains:
 
 ```text
-active time-limited bonus → parent AJAX may expose bonus metadata
-expired case → parent current AJAX may no longer expose it
-               while the bonus listing may remain queryable
+current explicit live evidence  ≠ historical positive evidence
+explicit empty response         ≠ historical negative fact
+NULL                            = unknown / legacy / not captured
 ```
 
-This is a working hypothesis, not a universal DLsite contract and not yet
-longitudinally proven. The project does not claim that DLsite always removes
-bonuses immediately after expiry.
+Bonus title wording or morphology is **not** an identity rule. In particular,
+title similarity, a shared title stem, or words such as `特典` and `早期購入`
+are not required to discover or preserve a possible bonus relationship. The
+sample's title pattern is sample-specific and must not be generalized.

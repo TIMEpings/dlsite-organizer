@@ -142,6 +142,16 @@ def test_default_policy_finds_same_maker_and_date_with_explainable_evidence() ->
     assert all("bonus" not in item.kind.value for item in candidate.supporting_evidence)
 
 
+def test_candidate_policy_does_not_require_title_similarity() -> None:
+    source = snapshot("RJ00000001").model_copy(update={"title": "A Quiet Harbor"})
+    target = snapshot("RJ00000002").model_copy(update={"title": "Nine Objects in Orbit"})
+
+    result = fixed_service(Repository(source, target)).for_work(source.workno)
+
+    assert result.state is CandidateSearchState.FOUND
+    assert [item.target_workno for item in result.candidates] == [target.workno]
+
+
 def test_different_maker_near_rj_does_not_become_candidate() -> None:
     result = fixed_service(
         Repository(snapshot("RJ00000001", "M"), snapshot("RJ00000002", "OTHER"))
