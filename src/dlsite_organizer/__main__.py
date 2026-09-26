@@ -134,6 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         quick_rename_service=components.quick_rename_service,
         explorer_integration_service=components.explorer_integration_service,
         runtime_signals=components.runtime_signals,
+        rename_history_service=components.rename_history_service,
     )
     lightweight_window = LightweightWindow(
         components.quick_rename_service,

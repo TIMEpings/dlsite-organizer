@@ -285,7 +285,7 @@ interoperability has been verified with PySide6 6.11.2 / Qt 6.11.2 against the W
 client. Any future PySide6/Qt upgrade must re-run the native/PySide interoperability tests; no
 arbitrary future Qt version is guaranteed.
 The footer About entry is the only About navigation entry and derives its version from the package
-version source; the main navigation remains `整理`, `查询`, `设置`.
+version source; the main navigation is `整理`, `查询`, `设置`, `重命名历史`.
 
 ## Single-instance application lifecycle
 
@@ -455,6 +455,31 @@ renamed directory was not manually replaced, so Undo is a best-effort path-based
 not an ACID or identity-verified transaction. Existing databases receive the two journal tables
 through SQLAlchemy `create_all` without manual deletion.
 
+## Rename history and recovery inspection
+
+The public Rename History page reads through `RenameHistoryService` and the journal repository; it
+does not receive a database connection. `TransactionJournal.list_transactions(limit, offset)` returns
+a bounded page of transaction summaries ordered by creation time descending, then transaction ID
+descending for a stable tie-break. The UI displays 50 summaries and fetches one additional summary
+to determine whether an older page exists. It loads operations in sequence order only for the
+selected transaction. Completed, partial, failed, undone, and unresolved transaction and operation
+states are shown from the persisted journal model.
+
+For a PENDING or RECOVERY_REQUIRED transaction, the page shows the stored recovery stage, sequence,
+error, and operation outcomes. Organizer keeps its existing mutation gate and offers a direct link
+to that transaction's detail. The history page does not change journal state or initiate filesystem
+mutations.
+
+When an unresolved transaction is selected, the service may inspect the recorded source and target
+paths with no-follow metadata reads. These are presented as **current filesystem observations** and
+are kept separate from persisted journal facts. Directory, file, other, link-like, absent, and
+inspection-error states describe only the path at inspection time. They do not establish that an
+entry is the original directory; entries may have been removed, recreated, replaced, or changed
+outside the application. A path inspection error does not prevent the journal transaction and its
+recorded operations from being displayed. This inspector is read-only: it has no recovery, retry,
+resume, rollback, journal edit, or journal deletion action. Manual resolution and repair remain out
+of scope. The feature uses existing journal columns and requires no schema migration.
+
 ## Thread boundary
 
 Each manual lookup and organizer batch gets one Qt `QThread` and one `QObject` worker. The
@@ -467,10 +492,6 @@ failure. No asyncio/Qt bridge or unsafe thread termination is used.
 The next larger feature should add these application components only when implemented:
 
 ```text
-RenamePlan[] → preview → RenameExecutor
-                           ↓
-                    TransactionLog → undo
-
 RelationAnalyzer → historical evidence-backed WorkRelation
 HistoryStore     → timestamped observations
 ```

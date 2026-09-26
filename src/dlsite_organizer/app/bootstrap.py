@@ -28,6 +28,7 @@ from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.quick_rename import QuickRenameService
 from dlsite_organizer.services.rename_executor import RenameExecutor
+from dlsite_organizer.services.rename_history import RenameHistoryService
 from dlsite_organizer.services.rename_planner import RenamePlanner
 from dlsite_organizer.services.update_checker import UpdateCheckService
 from dlsite_organizer.services.undo_service import UndoService
@@ -49,6 +50,7 @@ class ApplicationComponents:
     rename_executor: RenameExecutor
     undo_service: UndoService
     rename_journal: RenameJournal
+    rename_history_service: RenameHistoryService
     settings_service: SettingsService
     quick_rename_service: QuickRenameService
     explorer_integration_service: ExplorerIntegrationService
@@ -126,6 +128,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         mutation_history_changed=runtime_signals.notify_mutation_history_changed,
         mutation_gate=mutation_gate,
     )
+    rename_history_service = RenameHistoryService(journal)
     quick_rename_service = QuickRenameService(organizer_service, rename_executor)
     return ApplicationComponents(
         lookup_service=lookup_service,
@@ -137,6 +140,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         rename_executor=rename_executor,
         undo_service=undo_service,
         rename_journal=journal,
+        rename_history_service=rename_history_service,
         settings_service=SettingsService(settings),
         quick_rename_service=quick_rename_service,
         explorer_integration_service=ExplorerIntegrationService(),

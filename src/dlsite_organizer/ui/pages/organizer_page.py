@@ -9,7 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, cast
 
-from PySide6.QtCore import Qt, QThread, Slot
+from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent, QFont, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -76,6 +76,7 @@ class PreviewStaleReason(StrEnum):
 class OrganizerPage(QWidget):
     """Present scan results and expose explicit rename and undo actions."""
 
+    view_transaction_requested = Signal(str)
     _COLUMNS = ("状态", "当前目录名", "作品编号", "社团", "标题", "目标目录名")
 
     def __init__(
@@ -102,6 +103,7 @@ class OrganizerPage(QWidget):
         self._next_scan_mode = _ScanMode.REPLACE
         self._last_execution_result: RenameExecutionResult | None = None
         self._last_undo_result: UndoResult | None = None
+        self._unresolved_transaction_id: str | None = None
         self._build_ui()
 
         self.browse_button.clicked.connect(self.choose_root)
@@ -112,6 +114,7 @@ class OrganizerPage(QWidget):
         self.cancel_button.clicked.connect(self.cancel_scan)
         self.execute_button.clicked.connect(self.execute_rename)
         self.undo_button.clicked.connect(self.undo_recent)
+        self.view_transaction_button.clicked.connect(self._view_unresolved_transaction)
         self.table.itemChanged.connect(self._selection_changed)
         self.table.itemSelectionChanged.connect(self._table_selection_changed)
         self.remove_button.clicked.connect(self.remove_selected)
@@ -212,6 +215,10 @@ class OrganizerPage(QWidget):
         self.undo_button = QPushButton("撤销最近一次重命名")
         self.undo_button.setMinimumSize(152, 36)
         self.undo_button.setEnabled(False)
+        self.view_transaction_button = QPushButton("查看事务详情")
+        self.view_transaction_button.setToolTip("在重命名历史中查看该事务的记录和恢复信息")
+        self.view_transaction_button.hide()
+        recent_row.addWidget(self.view_transaction_button)
         recent_row.addWidget(self.recent_transaction_label, 1)
         recent_row.addWidget(self.undo_button)
         footer_layout.addLayout(recent_row)
@@ -779,10 +786,13 @@ class OrganizerPage(QWidget):
     def _refresh_recent_transaction(self) -> None:
         if self._undo_service is None:
             self.undo_button.setEnabled(False)
+            self.view_transaction_button.hide()
             return
         try:
             unresolved = self._undo_service.unresolved_transaction()
             if unresolved is not None:
+                self._unresolved_transaction_id = unresolved.transaction_id
+                self.view_transaction_button.show()
                 self.undo_button.setEnabled(False)
                 self.execute_button.setEnabled(False)
                 self.recent_transaction_label.setText(
@@ -791,14 +801,18 @@ class OrganizerPage(QWidget):
                 )
                 self.status_label.setProperty("state", "error")
                 self.status_label.setText(
-                "检测到未解决的重命名事务。为防止进一步改变文件系统，新的重命名和普通撤销已暂时禁用。"
-                "请人工检查 SQLite 与文件系统。"
+                    "检测到未解决的重命名事务。为防止进一步改变文件系统，新的重命名和普通撤销已暂时禁用。"
+                    "请查看重命名历史中的事务详情与当前路径观察。"
                 )
                 self._refresh_status_style()
                 return
+            self._unresolved_transaction_id = None
+            self.view_transaction_button.hide()
             transaction = self._undo_service.latest_transaction()
         except Exception:
             self.undo_button.setEnabled(False)
+            self._unresolved_transaction_id = None
+            self.view_transaction_button.hide()
             self.recent_transaction_label.setText("最近一次重命名：journal 不可用")
             return
         if transaction is None:
@@ -810,6 +824,8 @@ class OrganizerPage(QWidget):
             for operation in transaction.operations
         )
         self.undo_button.setEnabled(self._thread is None and pending > 0)
+        self._unresolved_transaction_id = None
+        self.view_transaction_button.hide()
         self.recent_transaction_label.setText(
             f"最近一次重命名：{transaction.created_at:%Y-%m-%d %H:%M} | "
             f"可撤销：{pending} | 事务：{transaction.transaction_id}"
@@ -849,6 +865,11 @@ class OrganizerPage(QWidget):
         self._refresh_status_style()
         self._update_summary(self._preview)
         self._update_execute_button()
+
+    @Slot()
+    def _view_unresolved_transaction(self) -> None:
+        if self._unresolved_transaction_id is not None:
+            self.view_transaction_requested.emit(self._unresolved_transaction_id)
 
     @Slot()
     def clear_preview(self) -> None:

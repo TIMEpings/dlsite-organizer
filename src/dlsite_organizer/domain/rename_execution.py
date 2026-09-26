@@ -80,6 +80,16 @@ class RenameTransaction:
 
 
 @dataclass(frozen=True, slots=True)
+class RenameTransactionSummary:
+    """Small journal header for bounded history lists without loading operation rows."""
+
+    transaction_id: str
+    root: Path
+    created_at: datetime
+    status: TransactionStatus
+
+
+@dataclass(frozen=True, slots=True)
 class RenameExecutionResult:
     """Result returned by the forward execution service."""
 

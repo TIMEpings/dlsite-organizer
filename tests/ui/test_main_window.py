@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QPoint, QRect
@@ -8,9 +9,16 @@ from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer import __version__
+from dlsite_organizer.domain.work import Work
+from dlsite_organizer.persistence.database import Database
+from dlsite_organizer.persistence.rename_journal import TransactionJournal
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
+from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.rename_executor import RenameExecutor
+from dlsite_organizer.services.rename_history import RenameHistoryService
+from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.services.update_checker import UpdateCheckResult, UpdateCheckStatus
 from dlsite_organizer.ui.main_window import MainWindow
 
@@ -55,7 +63,7 @@ def test_main_window_exposes_organizer_page_without_running_filesystem_work(
     assert [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
-    ] == ["整理", "查询", "设置"]
+    ] == ["整理", "查询", "设置", "重命名历史"]
     assert window.about_button.text() == f"关于 · v{__version__}"
     assert window.pages.widget(0) is window.organizer_page
     assert window.organizer_page.table.rowCount() == 0
@@ -77,7 +85,7 @@ def test_about_footer_opens_about_destination_without_main_nav_entry(
     assert [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
-    ] == ["整理", "查询", "设置"]
+    ] == ["整理", "查询", "设置", "重命名历史"]
     window.close()
 
 
@@ -91,6 +99,62 @@ def test_main_window_lightweight_settings_selects_settings_page(
     assert window.navigation_list.currentRow() == window.page_indices["settings"]
     assert window.pages.currentWidget() is window.settings_page
     window.close()
+
+
+def test_unresolved_organizer_link_opens_read_only_transaction_history(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "old RJ01609020"
+    source.mkdir()
+    target = root / "new RJ01609020"
+    transaction = journal.create_transaction(root, ((source, target),))
+    journal.mark_recovery_required(
+        transaction.transaction_id,
+        1,
+        "success journal update was interrupted",
+        transaction.created_at,
+    )
+    lookup_service = LookupService(
+        FakeProvider(work=Work(workno="RJ01609020", title="Fixture title")),
+        NamingService(),
+    )
+    organizer_service = OrganizerService(lookup_service)
+    window = MainWindow(
+        lookup_service,
+        CoverService(),
+        organizer_service=organizer_service,
+        rename_executor=RenameExecutor(journal),
+        undo_service=UndoService(journal),
+        rename_history_service=RenameHistoryService(journal),
+    )
+    window.organizer_page.set_root_path(root)
+    window.organizer_page.set_preview(organizer_service.preview(root))
+    before = journal.get_transaction(transaction.transaction_id)
+    before_entries = sorted((path.name, path.is_dir()) for path in root.iterdir())
+
+    assert window.organizer_page.selected_ready_count() == 1
+    assert not window.organizer_page.execute_button.isEnabled()
+    assert not window.organizer_page.undo_button.isEnabled()
+    assert not window.organizer_page.view_transaction_button.isHidden()
+    window.organizer_page.view_transaction_button.click()
+
+    assert window.pages.currentWidget() is window.rename_history_page
+    expected_heading = f"事务详情 · {transaction.transaction_id}"
+    assert window.rename_history_page.detail_heading.text() == expected_heading
+    recovery_text = window.rename_history_page.recovery_label.text()
+    assert "success journal update was interrupted" in recovery_text
+    assert journal.get_transaction(transaction.transaction_id) == before
+    assert sorted((path.name, path.is_dir()) for path in root.iterdir()) == before_entries
+    assert source.is_dir()
+    assert not target.exists()
+    window.close()
+    database.dispose()
 
 
 def test_organizer_minimum_height_keeps_table_and_footer_disjoint(

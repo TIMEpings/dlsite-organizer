@@ -30,26 +30,29 @@ from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
+from dlsite_organizer.services.rename_history import RenameHistoryService
 from dlsite_organizer.services.rename_planner import RenamePlanner
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.pages.about_page import AboutPage
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
+from dlsite_organizer.ui.pages.rename_history_page import RenameHistoryPage
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
 from dlsite_organizer.ui.workers.update_check_worker import UpdateCheckServiceLike
 
 
 class MainPage(StrEnum):
-    """Stable identities for the three main pages and the About destination."""
+    """Stable identities for the public pages and the About destination."""
 
     ORGANIZER = "organizer"
     LOOKUP = "lookup"
     SETTINGS = "settings"
+    RENAME_HISTORY = "rename_history"
     ABOUT = "about"
 
 
 class MainWindow(QMainWindow):
-    """Host the four public pages of the full application."""
+    """Host the public pages of the full application."""
 
     lightweight_requested = Signal()
 
@@ -66,6 +69,7 @@ class MainWindow(QMainWindow):
         explorer_integration_service: ExplorerIntegrationService | None = None,
         runtime_signals: RuntimeSignals | None = None,
         update_check_service: UpdateCheckServiceLike | None = None,
+        rename_history_service: RenameHistoryService | None = None,
     ) -> None:
         super().__init__()
         self._lookup_service = lookup_service
@@ -127,12 +131,14 @@ class MainWindow(QMainWindow):
             self._settings_service,
             explorer_integration_service=explorer_integration_service,
         )
+        self.rename_history_page = RenameHistoryPage(rename_history_service)
         self.about_page = AboutPage(update_check_service=update_check_service)
         self._settings_service.subscribe(self._settings_saved)
         page_definitions = (
             (MainPage.ORGANIZER, "整理", self.organizer_page),
             (MainPage.LOOKUP, "查询", self.lookup_page),
             (MainPage.SETTINGS, "设置", self.settings_page),
+            (MainPage.RENAME_HISTORY, "重命名历史", self.rename_history_page),
             (MainPage.ABOUT, "关于", self.about_page),
         )
         self.page_indices: dict[str, int] = {}
@@ -143,6 +149,8 @@ class MainWindow(QMainWindow):
             self.pages.addWidget(page)
 
         self.navigation_list.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.navigation_list.currentRowChanged.connect(self._navigation_changed)
+        self.organizer_page.view_transaction_requested.connect(self.show_transaction_history)
         self.navigation_list.setCurrentRow(self.page_indices[MainPage.ORGANIZER.value])
         shell.addWidget(navigation)
         shell.addWidget(self.pages, 1)
@@ -159,6 +167,25 @@ class MainWindow(QMainWindow):
             self._runtime_signals.mutation_history_changed.connect(
                 self.organizer_page.mark_filesystem_changed
             )
+            self._runtime_signals.mutation_history_changed.connect(
+                self.rename_history_page.refresh_after_mutation
+            )
+
+    @Slot(int)
+    def _navigation_changed(self, row: int) -> None:
+        if row == self.page_indices[MainPage.RENAME_HISTORY.value]:
+            self.rename_history_page.refresh_history()
+
+    @Slot(str)
+    def show_transaction_history(self, transaction_id: str) -> None:
+        """Open the history page on a journal transaction selected by Organizer."""
+        history_row = self.page_indices[MainPage.RENAME_HISTORY.value]
+        already_on_history = self.navigation_list.currentRow() == history_row
+        self.navigation_list.setCurrentRow(history_row)
+        self.rename_history_page.open_transaction(
+            transaction_id,
+            refresh=already_on_history,
+        )
 
     @Slot()
     def refresh_mutation_state(self) -> None:

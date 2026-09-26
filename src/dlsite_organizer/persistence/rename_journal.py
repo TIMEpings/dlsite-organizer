@@ -16,6 +16,7 @@ from dlsite_organizer.domain.rename_execution import (
     ExecutionStatus,
     RenameOperation,
     RenameTransaction,
+    RenameTransactionSummary,
     TransactionStatus,
     UndoStatus,
 )
@@ -49,6 +50,12 @@ class RenameJournal(Protocol):
         ...
 
     def get_transaction(self, transaction_id: str) -> RenameTransaction:
+        ...
+
+    def list_transactions(
+        self, *, limit: int, offset: int = 0
+    ) -> tuple[RenameTransactionSummary, ...]:
+        """Return a bounded page ordered newest first, with a stable tie-breaker."""
         ...
 
     def latest_undoable(self) -> RenameTransaction | None:
@@ -115,6 +122,13 @@ class UnavailableRenameJournal:
 
     def get_transaction(self, transaction_id: str) -> RenameTransaction:
         del transaction_id
+        self._raise()
+        raise AssertionError('unreachable')
+
+    def list_transactions(
+        self, *, limit: int, offset: int = 0
+    ) -> tuple[RenameTransactionSummary, ...]:
+        del limit, offset
         self._raise()
         raise AssertionError('unreachable')
 
@@ -292,6 +306,33 @@ class TransactionJournal:
         except Exception as exc:
             logger.exception('Could not read rename transaction journal %s', transaction_id)
             raise JournalError('无法读取重命名事务日志。') from exc
+
+    def list_transactions(
+        self, *, limit: int, offset: int = 0
+    ) -> tuple[RenameTransactionSummary, ...]:
+        """Read a bounded page of transaction headers in deterministic order."""
+        self._ensure_available()
+        if not 1 <= limit <= 100:
+            raise ValueError('transaction page size must be between 1 and 100')
+        if offset < 0:
+            raise ValueError('transaction page offset must not be negative')
+        try:
+            with self._database.session() as session:
+                records = session.scalars(
+                    select(RenameTransactionRecord)
+                    .order_by(
+                        RenameTransactionRecord.created_at.desc(),
+                        RenameTransactionRecord.id.desc(),
+                    )
+                    .limit(limit)
+                    .offset(offset)
+                ).all()
+                return tuple(_to_transaction_summary(record) for record in records)
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.exception('Could not list rename transaction journal history')
+            raise JournalError('无法读取重命名历史。') from exc
 
     def latest_undoable(self) -> RenameTransaction | None:
         self._ensure_available()
@@ -560,6 +601,15 @@ def _to_transaction(
             )
             for operation in operations
         ),
+    )
+
+
+def _to_transaction_summary(record: RenameTransactionRecord) -> RenameTransactionSummary:
+    return RenameTransactionSummary(
+        transaction_id=record.id,
+        root=Path(record.root),
+        created_at=_as_utc(record.created_at),
+        status=TransactionStatus(record.status),
     )
 
 
