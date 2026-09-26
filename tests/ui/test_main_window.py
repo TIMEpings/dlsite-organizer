@@ -145,8 +145,9 @@ def test_unresolved_organizer_link_opens_read_only_transaction_history(
     window.organizer_page.view_transaction_button.click()
 
     assert window.pages.currentWidget() is window.rename_history_page
-    expected_heading = f"事务详情 · {transaction.transaction_id}"
+    expected_heading = "事务详情"
     assert window.rename_history_page.detail_heading.text() == expected_heading
+    assert window.rename_history_page.transaction_id_value.text() == transaction.transaction_id
     recovery_text = window.rename_history_page.recovery_label.text()
     assert "success journal update was interrupted" in recovery_text
     assert journal.get_transaction(transaction.transaction_id) == before

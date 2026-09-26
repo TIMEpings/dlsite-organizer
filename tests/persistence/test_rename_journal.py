@@ -75,7 +75,10 @@ def test_list_transactions_is_bounded_ordered_and_preserves_legacy_nulls(tmp_pat
 
     # List rows are headers only; optional legacy fields and operations load on selection.
     completed_record = journal.get_transaction(completed.transaction_id)
+    assert completed_record.created_at == now
+    assert completed_record.created_at.tzinfo is UTC
     assert [operation.sequence for operation in completed_record.operations] == [1, 2]
+    assert completed_record.operations[0].executed_at == now
     assert completed_record.recovery_stage is None
     assert completed_record.recovery_error is None
     assert completed_record.recovery_sequence is None
