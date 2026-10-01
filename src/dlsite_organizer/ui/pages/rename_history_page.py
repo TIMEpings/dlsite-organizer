@@ -511,13 +511,12 @@ class RenameHistoryPage(QWidget):
         self.transaction_id_value.setToolTip(transaction.transaction_id)
         self.technical_section.show()
         created_at = _format_datetime(transaction.created_at)
-        completed_at = (
-            _format_datetime(transaction.completed_at) if transaction.completed_at else "无"
-        )
+        completion = transaction.undo_completed_at or transaction.completed_at
+        completed_at = _format_datetime(completion) if completion else "无"
         self.transaction_summary.setText(
             f"创建时间：{created_at}\n"
             f"根目录：{transaction.root}\n"
-            f"事务状态：{_transaction_status_text(transaction.status)}\n"
+            f"事务状态：{_transaction_status_text(transaction.display_status)}\n"
             f"完成时间：{completed_at}"
         )
         self._render_recovery(transaction)
@@ -566,6 +565,11 @@ class RenameHistoryPage(QWidget):
             f"恢复序号：{_recovery_sequence_text(transaction.recovery_sequence)}",
             f"恢复错误：{transaction.recovery_error or '未记录'}",
         ]
+        if transaction.undo_state is not None and transaction.undo_state.unresolved:
+            values.append(
+                f"撤销已启动，尚无持久化终态；此前事务状态："
+                f"{_transaction_status_text(transaction.status)}"
+            )
         if _is_unresolved(transaction):
             values.append("该事务仍处于未解决状态，因此 Organizer 会继续阻止新的重命名和普通撤销。")
         self.recovery_label.setText("\n".join(values))
@@ -646,10 +650,10 @@ class RenameHistoryPage(QWidget):
         prefix: str = "",
     ) -> QListWidgetItem:
         item = QListWidgetItem(
-            f"{prefix}{_transaction_status_text(transaction.status)}\n"
+            f"{prefix}{_transaction_status_text(transaction.display_status)}\n"
             f"{_format_local_wall_time(transaction.created_at)}"
         )
-        item.setIcon(self.style().standardIcon(_transaction_status_icon(transaction.status)))
+        item.setIcon(self.style().standardIcon(_transaction_status_icon(transaction.display_status)))
         item.setData(self._TRANSACTION_ID_ROLE, transaction.transaction_id)
         item.setToolTip(str(transaction.root))
         self.transaction_list.addItem(item)
@@ -818,10 +822,7 @@ def _observation_text(observation: CurrentPathObservation) -> str:
 
 
 def _is_unresolved(transaction: RenameTransaction) -> bool:
-    return transaction.status in {
-        TransactionStatus.PENDING,
-        TransactionStatus.RECOVERY_REQUIRED,
-    }
+    return transaction.unresolved
 
 
 class _OperationRowDelegate(QStyledItemDelegate):

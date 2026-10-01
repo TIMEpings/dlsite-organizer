@@ -442,6 +442,8 @@ UndoService
       ↓
 Preflight
       ↓
+Durable Undo Intent
+      ↓
 Filesystem
 ```
 
@@ -450,10 +452,34 @@ UNDO_PARTIAL transaction. It validates the renamed path and original path under 
 root, rejects symlink/junctions, target conflicts and missing paths, and executes in reverse
 sequence. It stops on the first filesystem or journal failure. A partial undo remains
 `UNDO_PARTIAL` and can be retried after the external condition is resolved; journal failure after
-a successful undo is `RECOVERY_REQUIRED`. The journal stores paths and cannot prove that a
+a successful undo requires recovery. The journal stores paths and cannot prove that a
 renamed directory was not manually replaced, so Undo is a best-effort path-based recovery aid,
 not an ACID or identity-verified transaction. Existing databases receive the two journal tables
 through SQLAlchemy `create_all` without manual deletion.
+
+Before the first reverse mutation (including before progress callbacks), Undo commits a separate
+transaction-level `undo_state = in_progress` and `undo_started_at`. This reservation uses
+`BEGIN IMMEDIATE` and the same unresolved-state check as forward transaction creation. Each
+operation's undo outcome is committed before the next reverse operation; these progress writes
+do not clear the reservation. Terminal success atomically records `undo_state = success`,
+`undo_completed_at`, and the existing `UNDONE` aggregate status. A known filesystem failure
+atomically records the failed operation, `undo_state = partial`, `undo_completed_at`, and
+`UNDO_PARTIAL`; the remaining operations can still be retried through ordinary confirmed Undo.
+The original `completed_at` and forward operation facts are preserved throughout Undo.
+
+An interrupted attempt remains `in_progress`, or `recovery_required` if a journal error can be
+recorded. Both are unresolved and block forward creation and ordinary Undo. Even if progress,
+terminal, and recovery-error writes all fail, the already-committed intent keeps mutation blocked.
+The prior aggregate status (such as `COMPLETED`) is retained while Undo is unresolved: a successful
+forward transaction and a later incomplete Undo are distinct facts. History presents this as
+requiring inspection and also shows the prior status and recorded operation outcomes. Path
+existence cannot resolve uncertainty or establish object identity. No automatic replay, resume,
+or repair of an interrupted Undo is authorized by this contract.
+
+Core schema initialization additively introduces nullable `undo_state`, `undo_started_at`, and
+`undo_completed_at` columns in existing profiles. NULL means no separately recorded attempt
+metadata; legacy terminal and recovery statuses retain their existing meaning. Historical rows
+are not backfilled or reinterpreted. Fresh and upgraded profiles use the same mutation guard.
 
 ## Rename history and recovery inspection
 
@@ -465,7 +491,8 @@ to determine whether an older page exists. It loads operations in sequence order
 selected transaction. Completed, partial, failed, undone, and unresolved transaction and operation
 states are shown from the persisted journal model.
 
-For a PENDING or RECOVERY_REQUIRED transaction, the page shows the stored recovery stage, sequence,
+For a PENDING or RECOVERY_REQUIRED transaction, or an unresolved Undo attempt, the page shows
+the stored recovery stage, sequence,
 error, and operation outcomes. Organizer keeps its existing mutation gate and offers a direct link
 to that transaction's detail. The history page does not change journal state or initiate filesystem
 mutations.
@@ -478,7 +505,7 @@ entry is the original directory; entries may have been removed, recreated, repla
 outside the application. A path inspection error does not prevent the journal transaction and its
 recorded operations from being displayed. This inspector is read-only: it has no recovery, retry,
 resume, rollback, journal edit, or journal deletion action. Manual resolution and repair remain out
-of scope. The feature uses existing journal columns and requires no schema migration.
+of scope. Inspection itself does not change journal state.
 
 ## Thread boundary
 
@@ -503,7 +530,10 @@ the existing `Work` model without importing the UI or DLsite-specific raw fields
 
 ## Startup journal health
 
-At startup and immediately before execution, the journal is checked for PENDING or RECOVERY_REQUIRED transactions. Any unresolved transaction blocks mutation. Execution facts (SUCCESS/FAILED/PENDING) remain separate from recovery uncertainty metadata; no automatic crash recovery is attempted.
+At startup and immediately before execution, the journal is checked for PENDING or RECOVERY_REQUIRED
+transactions and for Undo attempts with `in_progress` or `recovery_required` state. Any unresolved
+transaction blocks mutation. Execution facts (SUCCESS/FAILED/PENDING) remain separate from recovery
+uncertainty metadata; no automatic crash recovery is attempted.
 LookupService uses MetadataStore for a current cache and append-only observations. Cache freshness is independent from historical evidence: fresh hits replace neither observations nor provenance, while successful live provider responses update the current row and append one observation. Metadata persistence failures are logged and never disable live lookup; rename journal availability remains a separate safety boundary.
 # Historical translation evidence
 

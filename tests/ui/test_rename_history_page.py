@@ -35,6 +35,52 @@ def _cell_text(page: RenameHistoryPage, table_name: str, row: int, column: int) 
     return item.text()
 
 
+@pytest.mark.parametrize("recovery_error", [None, "progress journal failed"])
+def test_unfinished_undo_shows_recovery_without_rewriting_forward_history(
+    qapp: QApplication, tmp_path: Path, recovery_error: str | None,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    target = root / "renamed"
+    target.mkdir()
+    source = root / "original"
+    transaction = journal.create_transaction(root, ((source, target),))
+    journal.mark_operation_success(transaction.transaction_id, 1, transaction.created_at)
+    journal.mark_transaction_completed(transaction.transaction_id, transaction.created_at)
+    journal.begin_undo(transaction.transaction_id, datetime.now(UTC))
+    target.rename(source)  # Filesystem mutation happened, but progress is indeterminate.
+    if recovery_error:
+        journal.mark_undo_recovery_required(
+            transaction.transaction_id, 1, recovery_error, datetime.now(UTC),
+        )
+    before = journal.get_transaction(transaction.transaction_id)
+    page = RenameHistoryPage(RenameHistoryService(journal))
+    try:
+        page.refresh_history()
+        item = page.transaction_list.item(0)
+        assert item is not None
+        assert "需要检查" in item.text()
+        assert "事务状态：需要检查" in page.transaction_summary.text()
+        assert "此前事务状态：已完成" in page.recovery_label.text()
+        assert "恢复阶段：undo" in page.recovery_label.text()
+        assert "阻止新的重命名和普通撤销" in page.recovery_label.text()
+        assert not page.observation_section.isHidden()
+        assert _cell_text(page, "operations_table", 0, 1) == "成功"
+        assert _cell_text(page, "operations_table", 0, 2) == "未撤销"
+        assert _cell_text(page, "observations_table", 0, 1) == "存在，目录"
+        assert _cell_text(page, "observations_table", 0, 2) == "不存在"
+        assert journal.get_transaction(transaction.transaction_id) == before
+        assert before.status is TransactionStatus.COMPLETED
+        assert source.is_dir()
+        assert not target.exists()
+    finally:
+        page.close()
+        database.dispose()
+
+
 def _visible_transaction_ids(page: RenameHistoryPage) -> list[object]:
     transaction_ids = []
     for index in range(page.transaction_list.count()):

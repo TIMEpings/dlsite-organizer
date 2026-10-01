@@ -797,7 +797,7 @@ class OrganizerPage(QWidget):
                 self.execute_button.setEnabled(False)
                 self.recent_transaction_label.setText(
                     f"检测到未解决的重命名事务: {unresolved.transaction_id} "
-                    f"| root={unresolved.root} | 状态={unresolved.status.value}"
+                    f"| root={unresolved.root} | 状态={unresolved.display_status.value}"
                 )
                 self.status_label.setProperty("state", "error")
                 self.status_label.setText(

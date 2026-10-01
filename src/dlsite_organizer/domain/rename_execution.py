@@ -47,6 +47,19 @@ class UndoStatus(StrEnum):
     CONFLICT = "conflict"
 
 
+class UndoTransactionState(StrEnum):
+    """Durable lifecycle of the latest undo attempt, separate from forward facts."""
+
+    IN_PROGRESS = "in_progress"
+    RECOVERY_REQUIRED = "recovery_required"
+    SUCCESS = "success"
+    PARTIAL = "partial"
+
+    @property
+    def unresolved(self) -> bool:
+        return self in {self.IN_PROGRESS, self.RECOVERY_REQUIRED}
+
+
 @dataclass(frozen=True, slots=True)
 class RenameOperation:
     """A journaled source-to-target operation and its undo state."""
@@ -77,6 +90,21 @@ class RenameTransaction:
     recovery_stage: str | None = None
     recovery_error: str | None = None
     recovery_sequence: int | None = None
+    undo_state: UndoTransactionState | None = None
+    undo_started_at: datetime | None = None
+    undo_completed_at: datetime | None = None
+
+    @property
+    def display_status(self) -> TransactionStatus:
+        if self.undo_state is not None and self.undo_state.unresolved:
+            return TransactionStatus.RECOVERY_REQUIRED
+        return self.status
+
+    @property
+    def unresolved(self) -> bool:
+        return self.display_status in {
+            TransactionStatus.PENDING, TransactionStatus.RECOVERY_REQUIRED,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +115,13 @@ class RenameTransactionSummary:
     root: Path
     created_at: datetime
     status: TransactionStatus
+    undo_state: UndoTransactionState | None = None
+
+    @property
+    def display_status(self) -> TransactionStatus:
+        if self.undo_state is not None and self.undo_state.unresolved:
+            return TransactionStatus.RECOVERY_REQUIRED
+        return self.status
 
 
 @dataclass(frozen=True, slots=True)

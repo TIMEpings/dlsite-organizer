@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session
 
 from dlsite_organizer.domain.rename_execution import (
@@ -19,6 +19,7 @@ from dlsite_organizer.domain.rename_execution import (
     RenameTransactionSummary,
     TransactionStatus,
     UndoStatus,
+    UndoTransactionState,
 )
 from dlsite_organizer.persistence.database import (
     Database,
@@ -91,6 +92,9 @@ class RenameJournal(Protocol):
         ...
 
     def mark_undo_conflict(self, transaction_id: str, sequence: int, error: str) -> None:
+        ...
+
+    def begin_undo(self, transaction_id: str, when: datetime) -> None:
         ...
 
     def mark_undo_success(self, transaction_id: str, sequence: int, when: datetime) -> None:
@@ -175,6 +179,10 @@ class UnavailableRenameJournal:
         del transaction_id, sequence, error
         self._raise()
 
+    def begin_undo(self, transaction_id: str, when: datetime) -> None:
+        del transaction_id, when
+        self._raise()
+
     def mark_undo_success(self, transaction_id: str, sequence: int, when: datetime) -> None:
         del transaction_id, sequence, when
         self._raise()
@@ -202,14 +210,7 @@ class TransactionJournal:
             with self._database.session() as session:
                 record = session.scalar(
                     select(RenameTransactionRecord)
-                    .where(
-                        RenameTransactionRecord.status.in_(
-                            [
-                                TransactionStatus.PENDING.value,
-                                TransactionStatus.RECOVERY_REQUIRED.value,
-                            ]
-                        )
-                    )
+                    .where(_unresolved_condition())
                     .order_by(RenameTransactionRecord.created_at.asc())
                 )
                 if record is None:
@@ -242,14 +243,7 @@ class TransactionJournal:
                 session.execute(text('BEGIN IMMEDIATE'))
                 unresolved_id = session.scalar(
                     select(RenameTransactionRecord.id)
-                    .where(
-                        RenameTransactionRecord.status.in_(
-                            [
-                                TransactionStatus.PENDING.value,
-                                TransactionStatus.RECOVERY_REQUIRED.value,
-                            ]
-                        )
-                    )
+                    .where(_unresolved_condition())
                     .limit(1)
                 )
                 if unresolved_id is not None:
@@ -355,7 +349,7 @@ class TransactionJournal:
                         .order_by(RenameOperationRecord.sequence)
                     ).all()
                     transaction = _to_transaction(record, operations)
-                    if any(
+                    if not transaction.unresolved and any(
                         operation.status is ExecutionStatus.SUCCESS
                         and operation.undo_status is not UndoStatus.SUCCESS
                         for operation in transaction.operations
@@ -444,6 +438,43 @@ class TransactionJournal:
             )
             raise JournalError('事务日志无法标记为需要恢复。') from exc
 
+    def begin_undo(self, transaction_id: str, when: datetime) -> None:
+        """Atomically reserve mutation ownership before any reverse filesystem operation."""
+        self._ensure_available()
+        try:
+            with self._database.session() as session:
+                session.execute(text('BEGIN IMMEDIATE'))
+                if session.scalar(
+                    select(RenameTransactionRecord.id).where(_unresolved_condition()).limit(1)
+                ) is not None:
+                    raise JournalError('已有未解决的事务，已阻止撤销文件操作。')
+                transaction = session.get(RenameTransactionRecord, transaction_id)
+                if transaction is None:
+                    raise JournalError(f'找不到重命名事务日志：{transaction_id}')
+                if transaction.status not in {
+                    TransactionStatus.COMPLETED.value,
+                    TransactionStatus.PARTIAL.value,
+                    TransactionStatus.UNDO_PARTIAL.value,
+                } or session.scalar(
+                    select(RenameOperationRecord.id).where(
+                        RenameOperationRecord.transaction_id == transaction_id,
+                        RenameOperationRecord.status == ExecutionStatus.SUCCESS.value,
+                        RenameOperationRecord.undo_status != UndoStatus.SUCCESS.value,
+                    ).limit(1)
+                ) is None:
+                    raise JournalError('该事务状态不允许撤销。')
+                transaction.undo_state = UndoTransactionState.IN_PROGRESS.value
+                transaction.undo_started_at = when
+                transaction.undo_completed_at = None
+                transaction.recovery_stage = 'undo'
+                transaction.recovery_error = None
+                transaction.recovery_sequence = None
+                session.commit()
+        except JournalError:
+            raise
+        except Exception as exc:
+            raise JournalError('无法写入撤销意图，未执行任何撤销文件操作。') from exc
+
     def mark_undo_conflict(self, transaction_id: str, sequence: int, error: str) -> None:
         self._write_operation(
             transaction_id,
@@ -460,7 +491,7 @@ class TransactionJournal:
                 transaction = session.get(RenameTransactionRecord, transaction_id)
                 if transaction is None:
                     raise JournalError(f'找不到重命名事务日志：{transaction_id}')
-                transaction.status = TransactionStatus.RECOVERY_REQUIRED.value
+                transaction.undo_state = UndoTransactionState.RECOVERY_REQUIRED.value
                 transaction.recovery_stage = 'undo'
                 transaction.recovery_error = error
                 transaction.recovery_sequence = sequence
@@ -500,7 +531,11 @@ class TransactionJournal:
                 if transaction is None:
                     raise JournalError(f'找不到重命名事务日志：{transaction_id}')
                 transaction.status = TransactionStatus.UNDO_PARTIAL.value
-                transaction.completed_at = when
+                transaction.undo_state = UndoTransactionState.PARTIAL.value
+                transaction.undo_completed_at = when
+                transaction.recovery_stage = None
+                transaction.recovery_error = None
+                transaction.recovery_sequence = None
                 session.commit()
         except JournalError:
             raise
@@ -515,7 +550,14 @@ class TransactionJournal:
     def mark_transaction_undone(self, transaction_id: str, when: datetime) -> None:
         self._write_transaction(
             transaction_id,
-            {'status': TransactionStatus.UNDONE.value, 'completed_at': when},
+            {
+                'status': TransactionStatus.UNDONE.value,
+                'undo_state': UndoTransactionState.SUCCESS.value,
+                'undo_completed_at': when,
+                'recovery_stage': None,
+                'recovery_error': None,
+                'recovery_sequence': None,
+            },
         )
 
     def _write_operation(
@@ -559,6 +601,18 @@ class TransactionJournal:
             raise JournalUnavailableError('事务日志不可用，已禁止文件系统重命名。')
 
 
+def _unresolved_condition():
+    """Shared durable mutation guard for forward creation and undo reservation."""
+    return or_(
+        RenameTransactionRecord.status.in_(
+            [TransactionStatus.PENDING.value, TransactionStatus.RECOVERY_REQUIRED.value]
+        ),
+        RenameTransactionRecord.undo_state.in_(
+            [UndoTransactionState.IN_PROGRESS.value, UndoTransactionState.RECOVERY_REQUIRED.value]
+        ),
+    )
+
+
 def _operation_or_raise(
     session: Session, transaction_id: str, sequence: int
 ) -> RenameOperationRecord:
@@ -585,6 +639,9 @@ def _to_transaction(
         recovery_stage=record.recovery_stage,
         recovery_error=record.recovery_error,
         recovery_sequence=record.recovery_sequence,
+        undo_state=UndoTransactionState(record.undo_state) if record.undo_state else None,
+        undo_started_at=_as_utc(record.undo_started_at) if record.undo_started_at else None,
+        undo_completed_at=_as_utc(record.undo_completed_at) if record.undo_completed_at else None,
         operations=tuple(
             RenameOperation(
                 operation_id=operation.id,
@@ -610,6 +667,7 @@ def _to_transaction_summary(record: RenameTransactionRecord) -> RenameTransactio
         root=Path(record.root),
         created_at=_as_utc(record.created_at),
         status=TransactionStatus(record.status),
+        undo_state=UndoTransactionState(record.undo_state) if record.undo_state else None,
     )
 
 

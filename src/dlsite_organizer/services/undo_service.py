@@ -15,6 +15,7 @@ from dlsite_organizer.domain.rename_execution import (
     TransactionStatus,
     UndoResult,
     UndoStatus,
+    UndoTransactionState,
 )
 from dlsite_organizer.persistence.rename_journal import RenameJournal
 from dlsite_organizer.services.mutation_gate import MutationGate, shared_mutation_gate
@@ -155,7 +156,7 @@ class UndoService:
                 operations=transaction.operations,
                 error='该重命名事务已经撤销，或没有剩余可撤销操作。',
             )
-        if transaction.status is TransactionStatus.RECOVERY_REQUIRED:
+        if transaction.unresolved:
             return UndoResult(
                 status=TransactionStatus.RECOVERY_REQUIRED,
                 transaction=transaction,
@@ -211,6 +212,27 @@ class UndoService:
                 operations=snapshot.operations,
                 error='撤销前验证失败：整批未执行，请处理冲突后重试。',
             )
+
+        when = _now()
+        try:
+            self._journal.begin_undo(transaction.transaction_id, when)
+        except Exception as exc:
+            return UndoResult(
+                status=TransactionStatus.FAILED,
+                transaction=transaction,
+                operations=transaction.operations,
+                error=f'无法写入撤销意图，未执行任何撤销文件操作：{exc}',
+            )
+        transaction = replace(
+            transaction,
+            undo_state=UndoTransactionState.IN_PROGRESS,
+            undo_started_at=when,
+            undo_completed_at=None,
+            recovery_stage='undo',
+            recovery_error=None,
+            recovery_sequence=None,
+        )
+        self._notify_mutation_history_changed()
 
         filesystem = self._filesystem
         if filesystem is None:
@@ -352,7 +374,7 @@ class UndoService:
             )
         snapshot = _read_or_local(
             self._journal,
-            replace(transaction, status=TransactionStatus.RECOVERY_REQUIRED),
+            replace(transaction, undo_state=UndoTransactionState.RECOVERY_REQUIRED),
             operations,
         )
         return UndoResult(

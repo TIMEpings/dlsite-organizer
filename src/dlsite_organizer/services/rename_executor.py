@@ -594,5 +594,7 @@ def _last_mile_issue(
 
 
 def _unresolved_message(transaction: RenameTransaction) -> str:
-    return (f'检测到未解决的重命名事务: {transaction.transaction_id} '
-            f'root={transaction.root} status={transaction.status.value}；已阻止新的文件系统修改')
+    return (
+        f'检测到未解决的重命名事务: {transaction.transaction_id} '
+        f'root={transaction.root} status={transaction.display_status.value}；已阻止新的文件系统修改'
+    )

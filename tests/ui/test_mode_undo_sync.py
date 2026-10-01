@@ -277,8 +277,9 @@ def test_full_mode_rename_then_lightweight_undo_is_immediately_available(
         database.dispose()
 
 
+@pytest.mark.parametrize("stage", ["forward", "undo_intent", "undo_recovery"])
 def test_recovery_required_state_is_refreshed_in_both_modes(
-    qapp: QApplication, tmp_path: Path
+    qapp: QApplication, tmp_path: Path, stage: str,
 ) -> None:
     database, journal, signals, full, lightweight = _windows(tmp_path)
     source = tmp_path / "RJ01609020 old"
@@ -293,12 +294,18 @@ def test_recovery_required_state_is_refreshed_in_both_modes(
         assert organizer.execute_button.isEnabled()
 
         transaction = journal.create_transaction(tmp_path, ((source, target),))
-        journal.mark_recovery_required(
-            transaction.transaction_id,
-            None,
-            "fixture recovery state",
-            datetime.now(UTC),
-        )
+        if stage == "forward":
+            journal.mark_recovery_required(
+                transaction.transaction_id, None, "fixture recovery state", datetime.now(UTC),
+            )
+        else:
+            journal.mark_operation_success(transaction.transaction_id, 1, datetime.now(UTC))
+            journal.mark_transaction_completed(transaction.transaction_id, datetime.now(UTC))
+            journal.begin_undo(transaction.transaction_id, datetime.now(UTC))
+            if stage == "undo_recovery":
+                journal.mark_undo_recovery_required(
+                    transaction.transaction_id, 1, "fixture undo recovery", datetime.now(UTC),
+                )
         signals.notify_mutation_history_changed()
         qapp.processEvents()
 
@@ -306,6 +313,11 @@ def test_recovery_required_state_is_refreshed_in_both_modes(
         assert not organizer.undo_button.isEnabled()
         assert not lightweight.drop_zone.isEnabled()
         assert not lightweight.undo_button.isEnabled()
+        if stage != "forward":
+            assert journal.get_transaction(transaction.transaction_id).status is (
+                TransactionStatus.COMPLETED
+            )
+            assert "recovery_required" in organizer.recent_transaction_label.text()
     finally:
         full.close()
         lightweight.close()

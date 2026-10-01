@@ -44,6 +44,9 @@ class RenameTransactionRecord(Base):
     recovery_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
     recovery_error: Mapped[str | None] = mapped_column(String, nullable=True)
     recovery_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    undo_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    undo_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    undo_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RenameOperationRecord(Base):
@@ -103,6 +106,9 @@ class Database:
                 ("recovery_stage", "VARCHAR(64)"),
                 ("recovery_error", "VARCHAR"),
                 ("recovery_sequence", "INTEGER"),
+                ("undo_state", "VARCHAR(32)"),
+                ("undo_started_at", "DATETIME"),
+                ("undo_completed_at", "DATETIME"),
             ):
                 if name not in columns:
                     connection.execute(
