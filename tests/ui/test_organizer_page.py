@@ -56,6 +56,11 @@ class BlockingLookupService(FakeLookupService):
 
 
 class FlakyOrganizerService:
+    settings_generation = 0
+
+    def snapshot(self):
+        return self
+
     def __init__(self) -> None:
         self._fallback = OrganizerService(FakeLookupService())
         self.fail_next = True
@@ -716,6 +721,11 @@ def test_append_failure_preserves_existing_preview(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     class FailingAppendService:
+        settings_generation = 0
+
+        def snapshot(self):
+            return self
+
         def __init__(self) -> None:
             self._fallback = OrganizerService(FakeLookupService())
 

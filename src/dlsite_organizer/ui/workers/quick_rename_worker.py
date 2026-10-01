@@ -23,7 +23,7 @@ class QuickRenameWorker(QObject):
 
     def __init__(self, service: QuickRenameService, paths: Sequence[Path | str]) -> None:
         super().__init__()
-        self._service = service
+        self._service = service.snapshot()
         self._paths = tuple(paths)
 
     @Slot()

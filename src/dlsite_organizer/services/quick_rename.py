@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from copy import copy
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -90,6 +91,14 @@ class QuickRenameService:
         self._organizer_service = organizer_service
         self._rename_executor = rename_executor
         self._input_service = input_service or DropInputService()
+        self._snapshot_captured = False
+
+    def snapshot(self) -> QuickRenameService:
+        """One admitted batch uses the same configuration through execution."""
+        operation = copy(self)
+        operation._organizer_service = self._organizer_service.snapshot()
+        operation._snapshot_captured = True
+        return operation
 
     def rename(
         self,
@@ -99,6 +108,20 @@ class QuickRenameService:
         execution_progress_callback: ExecutionProgressCallback | None = None,
     ) -> QuickRenameResult:
         """Run one validated batch; no mutation occurs before executor preflight/journal."""
+        operation = self if self._snapshot_captured else self.snapshot()
+        return operation._rename(
+            paths,
+            progress_callback=progress_callback,
+            execution_progress_callback=execution_progress_callback,
+        )
+
+    def _rename(
+        self,
+        paths: Sequence[Path | str],
+        *,
+        progress_callback: QuickProgressCallback | None = None,
+        execution_progress_callback: ExecutionProgressCallback | None = None,
+    ) -> QuickRenameResult:
         input_paths = tuple(Path(path).expanduser().absolute() for path in paths)
         logger.info("Quick Rename start work_count=%d", len(input_paths))
         if len(input_paths) > MAX_QUICK_RENAME_ITEMS:

@@ -86,7 +86,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         logger.exception("Database initialization failed; metadata persistence disabled")
         metadata_store = None
     else:
-        metadata_store = MetadataStore(database) if settings.cache.enabled else None
+        metadata_store = MetadataStore(database)
     manual_review_service = None
     candidate_review_queue_service = None
     if database.initialized:
@@ -94,7 +94,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
             manual_review_service = ManualReviewService(ManualReviewRepository(database))
         except Exception:
             logger.exception("Manual review persistence unavailable")
-    if metadata_store is not None:
+    if metadata_store is not None and settings.cache.enabled:
         candidate_review_queue_service = CandidateReviewQueueService(
             metadata_store,
             manual_reviews=manual_review_service,
@@ -107,7 +107,10 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         cache_ttl_hours=settings.cache.ttl_hours,
         allow_stale_on_error=settings.cache.allow_stale_on_error,
         manual_review_service=manual_review_service,
+        settings=settings,
     )
+    settings_service = SettingsService(settings)
+    settings_service.subscribe(lookup_service.apply_settings)
     organizer_service = OrganizerService(
         lookup_service,
         scanner=FolderScanner(),
@@ -141,7 +144,7 @@ def build_components(settings: AppSettings) -> ApplicationComponents:
         undo_service=undo_service,
         rename_journal=journal,
         rename_history_service=rename_history_service,
-        settings_service=SettingsService(settings),
+        settings_service=settings_service,
         quick_rename_service=quick_rename_service,
         explorer_integration_service=ExplorerIntegrationService(),
         runtime_signals=runtime_signals,

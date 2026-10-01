@@ -29,7 +29,7 @@ class LookupWorker(QObject):
         force_refresh: bool = False,
     ) -> None:
         super().__init__()
-        self._lookup_service = lookup_service
+        self._lookup_service = lookup_service.snapshot()
         self._cover_service = cover_service
         self._raw_workno = raw_workno
         self._force_refresh = force_refresh

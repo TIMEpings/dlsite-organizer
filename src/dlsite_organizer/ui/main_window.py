@@ -27,7 +27,7 @@ from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.drop_input import DropInputService
 from dlsite_organizer.services.explorer_integration import ExplorerIntegrationService
 from dlsite_organizer.services.folder_scanner import FolderScanner
-from dlsite_organizer.services.lookup import LookupService
+from dlsite_organizer.services.lookup import LookupService, operation_settings_key
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_history import RenameHistoryService
@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self._lookup_service = lookup_service
         self._settings_service = settings_service or SettingsService(AppSettings())
         self._settings_snapshot = self._settings_service.settings
+        self._lookup_service.apply_settings(self._settings_snapshot)
         self._quick_rename_service = quick_rename_service
         self._runtime_signals = runtime_signals
         self._close_handler: Callable[[object, object], None] | None = None
@@ -242,10 +243,9 @@ class MainWindow(QMainWindow):
             else AppSettings.model_validate(settings)
         )
         previous_settings = self._settings_snapshot
-        self._settings_snapshot = saved_settings
-        self._lookup_service.apply_settings(saved_settings)
         self.organizer_page.apply_settings(saved_settings)
-        if _naming_settings_key(previous_settings) != _naming_settings_key(saved_settings):
+        self._settings_snapshot = saved_settings
+        if operation_settings_key(previous_settings) != operation_settings_key(saved_settings):
             self.organizer_page.invalidate_preview()
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -304,19 +304,3 @@ QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
 #modeButton { color: #c9d2e3; background: #222e43; border-color: #3b4a64; }
 #modeButton:hover { background: #2e3c55; color: white; }
 """
-
-
-def _naming_settings_key(settings: AppSettings) -> tuple[object, ...]:
-    """Return only settings that can change a generated target directory name."""
-    return (
-        settings.naming_template,
-        settings.cv_separator,
-        settings.cv_prefix,
-        settings.cv_suffix,
-        settings.tag_separator,
-        settings.max_tags,
-        settings.hide_general_age,
-        settings.date_format,
-        settings.illegal_char_replacement,
-        settings.provider.metadata_locale,
-    )

@@ -2,10 +2,15 @@ from __future__ import annotations
 # ruff: noqa
 
 import logging
+from copy import copy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Callable, Protocol, cast, runtime_checkable
+from threading import Lock
+from typing import TYPE_CHECKING, Any, Callable, Protocol, cast, runtime_checkable
+
+if TYPE_CHECKING:
+    from dlsite_organizer.app.settings import AppSettings
 
 from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
 from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
@@ -102,6 +107,47 @@ class LookupResult:
 LookupClock = Callable[[], datetime]
 
 
+@dataclass(frozen=True, slots=True)
+class LookupConfiguration:
+    """Published together; configuration objects are never mutated after publication."""
+
+    generation: int
+    naming: NamingService
+    provider: WorkProvider | _SourceAwareProvider
+    metadata_store: MetadataStore | None
+    cache_ttl: timedelta
+    allow_stale_on_error: bool
+    cache_enabled: bool = True
+    settings: AppSettings | None = None
+
+
+def operation_settings_key(settings: AppSettings) -> tuple[object, ...]:
+    """Launch-time fields do not change the active profile or provider route."""
+    return (
+        settings.naming_template, settings.cv_separator, settings.cv_prefix, settings.cv_suffix,
+        settings.tag_separator, settings.max_tags, settings.hide_general_age,
+        settings.date_format, settings.illegal_char_replacement,
+        settings.provider.timeout_seconds, settings.provider.metadata_locale, settings.cache,
+    )
+
+
+def _configured_provider(
+    provider: WorkProvider | _SourceAwareProvider, settings: AppSettings
+) -> WorkProvider | _SourceAwareProvider:
+    """Copy configurable providers, retaining request-owned client factories and shared stores."""
+    if getattr(provider, "apply_settings", None) is None:
+        return provider
+    snapshot = getattr(provider, "snapshot", None)
+    configured = cast(
+        WorkProvider | _SourceAwareProvider, snapshot() if callable(snapshot) else copy(provider)
+    )
+    getattr(configured, "apply_settings")(
+        timeout_seconds=settings.provider.timeout_seconds,
+        metadata_locale=settings.provider.metadata_locale,
+    )
+    return configured
+
+
 class LookupService:
     def __init__(
         self,
@@ -115,11 +161,29 @@ class LookupService:
         cache_ttl_hours: float = 24.0,
         allow_stale_on_error: bool = True,
         clock: LookupClock | None = None,
+        settings: AppSettings | None = None,
     ):
-        self._provider = provider
-        self._naming = naming
+        self._settings_lock = Lock()
+        self._store = metadata_store
+        naming = copy(naming)
+        if settings is not None:
+            naming.apply_settings(settings)
+            provider = _configured_provider(provider, settings)
+        self._configuration = LookupConfiguration(
+            generation=0,
+            naming=naming,
+            provider=provider,
+            metadata_store=metadata_store if settings is None or settings.cache.enabled else None,
+            cache_ttl=timedelta(
+                hours=settings.cache.ttl_hours if settings is not None else cache_ttl_hours
+            ),
+            allow_stale_on_error=(
+                settings.cache.allow_stale_on_error if settings is not None else allow_stale_on_error
+            ),
+            cache_enabled=settings.cache.enabled if settings is not None else True,
+            settings=settings,
+        )
         self._translation_relations = translation_relations or TranslationRelationService()
-        self._metadata_store = metadata_store
         self._historical_relations = historical_relations or (HistoricalRelationService(metadata_store, self._translation_relations) if metadata_store else None)
         self._manual_review_service = manual_review_service
         self._candidate_relations = candidate_relations or (
@@ -131,20 +195,32 @@ class LookupService:
             if metadata_store
             else None
         )
-        self._cache_ttl = timedelta(hours=cache_ttl_hours)
-        self._allow_stale_on_error = allow_stale_on_error
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def lookup(self, raw_workno: str, *, force_refresh: bool = False) -> LookupResult:
+        return self.snapshot()._lookup(raw_workno, force_refresh=force_refresh)
+
+    @property
+    def settings_generation(self) -> int:
+        return self._configuration.generation
+
+    def snapshot(self) -> LookupService:
+        """Capture one published configuration without duplicating persistence resources."""
+        with self._settings_lock:
+            return copy(self)
+
+    def _lookup(self, raw_workno: str, *, force_refresh: bool = False) -> LookupResult:
+        configuration = self._configuration
+        store = configuration.metadata_store
         try:
             workno = normalize_workno(raw_workno)
         except WorkCodeError as exc:
             raise LookupFailure(LookupFailureKind.INVALID_CODE, str(exc)) from exc
-        cached = self._metadata_store.get(workno) if self._metadata_store else None
+        cached = store.get(workno) if store else None
         if (
             cached
             and not force_refresh
-            and self._now() - cached.fetched_at < self._cache_ttl
+            and self._now() - cached.fetched_at < configuration.cache_ttl
         ):
             return self._result(
                 workno,
@@ -177,7 +253,7 @@ class LookupService:
                 "DLsite 返回的数据暂时无法读取，请稍后重试。",
             ) from exc
         except (DlsiteConnectionError, DlsiteHttpError) as exc:
-            if cached and self._allow_stale_on_error:
+            if cached and configuration.allow_stale_on_error:
                 return self._result(
                     workno,
                     cached.work,
@@ -203,7 +279,7 @@ class LookupService:
         except Exception as exc:
             logger.exception("Unexpected lookup failure for %s", workno)
             raise LookupFailure(LookupFailureKind.UNEXPECTED, "Unexpected lookup failure") from exc
-        if self._metadata_store:
+        if store:
             product = getattr(obj, "product_info", None)
             bonus_evidence = cast(
                 BonusEvidenceSnapshot | None,
@@ -218,7 +294,7 @@ class LookupService:
             work_type = cast(str | None, getattr(product, "work_type", None))
             age_category = cast(str | int | None, getattr(product, "age_category", None))
             try:
-                self._metadata_store.save(
+                store.save(
                     work,
                     info,
                     source=source,
@@ -233,7 +309,7 @@ class LookupService:
             except Exception:
                 logger.exception("Metadata cache persistence failed for %s", workno)
             try:
-                self._metadata_store.append_observation(
+                store.append_observation(
                     work,
                     info,
                     source=source,
@@ -264,26 +340,32 @@ class LookupService:
     def manual_review_service(self) -> ManualReviewService | None:
         return self._manual_review_service
 
-    def apply_settings(self, settings: Any) -> None:
-        """Apply settings that are safe to change for the next lookup.
-
-        The method deliberately uses the existing provider and naming
-        instances.  In-flight workers finish with their captured request,
-        while the next lookup/preview observes the new values.
-        """
-        self._naming.apply_settings(settings)
-        self._cache_ttl = timedelta(hours=settings.cache.ttl_hours)
-        self._allow_stale_on_error = settings.cache.allow_stale_on_error
-        provider_apply = getattr(self._provider, "apply_settings", None)
-        if provider_apply is not None:
-            provider_apply(
-                timeout_seconds=settings.provider.timeout_seconds,
-                metadata_locale=settings.provider.metadata_locale,
+    def apply_settings(self, settings: AppSettings) -> None:
+        """Publish a complete configuration after the caller successfully persists settings."""
+        with self._settings_lock:
+            current = self._configuration
+            if current.settings is not None and (
+                operation_settings_key(current.settings) == operation_settings_key(settings)
+            ):
+                return
+            naming = copy(current.naming)
+            naming.apply_settings(settings)
+            provider = _configured_provider(current.provider, settings)
+            self._configuration = LookupConfiguration(
+                generation=current.generation + 1,
+                naming=naming,
+                provider=provider,
+                metadata_store=self._store if settings.cache.enabled else None,
+                cache_ttl=timedelta(hours=settings.cache.ttl_hours),
+                allow_stale_on_error=settings.cache.allow_stale_on_error,
+                cache_enabled=settings.cache.enabled,
+                settings=settings,
             )
 
     def _fetch_work(self, workno):
-        if isinstance(self._provider, _SourceAwareProvider):
-            x = self._provider.fetch_work_lookup(workno)
+        provider = self._configuration.provider
+        if isinstance(provider, _SourceAwareProvider):
+            x = provider.fetch_work_lookup(workno)
             return (
                 x.work,
                 x.translation_info,
@@ -294,7 +376,7 @@ class LookupService:
                 getattr(x, "metadata_source", None),
                 x,
             )
-        return self._provider.fetch_work(workno), None, None, "LIVE", self._now(), None, None, None
+        return provider.fetch_work(workno), None, None, "LIVE", self._now(), None, None, None
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -317,7 +399,7 @@ class LookupService:
     ):
         return LookupResult(
             work=work,
-            formatted_name=self._naming.format(work),
+            formatted_name=self._configuration.naming.format(work),
             translation=self._translation_relations.analyze(workno, info),
             freshness=freshness,
             source=source,
@@ -325,7 +407,7 @@ class LookupService:
             core_source=core_source,
             metadata_source=metadata_source,
             translation_attribution=translation_attribution,
-            historical_relations=self._historical_relations.for_work(workno) if self._historical_relations else HistoricalRelations(),
-            candidate_relations=self._candidate_relations.for_work(workno) if self._candidate_relations else None,
+            historical_relations=self._historical_relations.for_work(workno) if self._configuration.cache_enabled and self._historical_relations else HistoricalRelations(),
+            candidate_relations=self._candidate_relations.for_work(workno) if self._configuration.cache_enabled and self._candidate_relations else None,
             manual_reviews=(self._manual_review_service.reviews_for_work(workno) if self._manual_review_service else ()),
         )

@@ -40,7 +40,7 @@ from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerServi
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.widgets.drop_zone import DirectoryDropZone, local_directory_paths
-from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorker
+from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorker, OrganizerWorkerResult
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ class PreviewStaleReason(StrEnum):
 
     SETTINGS_CHANGED = "settings_changed"
     FILESYSTEM_CHANGED = "filesystem_changed"
+    CANCELLED = "cancelled"
 
 
 class OrganizerPage(QWidget):
@@ -101,6 +102,9 @@ class OrganizerPage(QWidget):
         self._preview_stale_reason: PreviewStaleReason | None = None
         self._scan_mode = _ScanMode.REPLACE
         self._next_scan_mode = _ScanMode.REPLACE
+        self._scan_request_id = 0
+        self._preview_revision = 0
+        self._scan_cancelled = False
         self._last_execution_result: RenameExecutionResult | None = None
         self._last_undo_result: UndoResult | None = None
         self._unresolved_transaction_id: str | None = None
@@ -254,6 +258,8 @@ class OrganizerPage(QWidget):
 
         self._scan_mode = self._next_scan_mode
         self._next_scan_mode = _ScanMode.REPLACE
+        self._scan_request_id += 1
+        self._scan_cancelled = False
         self._set_loading(True)
         self.status_label.setProperty("state", "loading")
         self.status_label.setText("正在扫描目录…")
@@ -264,7 +270,10 @@ class OrganizerPage(QWidget):
         try:
             thread = QThread()
             thread.setObjectName("organizer-scan")
-            worker = OrganizerWorker(self._organizer_service, root, selected_paths)
+            worker = OrganizerWorker(
+                self._organizer_service, root, selected_paths,
+                request_id=self._scan_request_id, preview_revision=self._preview_revision,
+            )
             worker.moveToThread(thread)
             thread.started.connect(worker.run)
             worker.progress.connect(self._show_progress)
@@ -336,6 +345,8 @@ class OrganizerPage(QWidget):
         if self._preview_stale:
             if self._preview_stale_reason is PreviewStaleReason.SETTINGS_CHANGED:
                 self._show_error("当前预览已因设置变化失效；请先重新扫描或清空后再拖放。")
+            elif self._preview_stale_reason is PreviewStaleReason.CANCELLED:
+                self._show_error("当前预览来自已取消的扫描；请先重新扫描或清空后再拖放。")
             else:
                 self._show_error("当前预览已因文件系统变化失效；请先重新扫描或清空后再拖放。")
             return
@@ -365,6 +376,7 @@ class OrganizerPage(QWidget):
         """Request cooperative cancellation and leave the current request bounded."""
         if self._worker is None:
             return
+        self._scan_cancelled = True
         self._worker.cancel()
         self.cancel_button.setEnabled(False)
         self.status_label.setProperty("state", "loading")
@@ -379,7 +391,18 @@ class OrganizerPage(QWidget):
 
     @Slot(object)
     def _show_preview(self, value: object) -> None:
-        preview = cast(OrganizerPreview, value)
+        result = cast(OrganizerWorkerResult, value)
+        preview = result.preview
+        if (
+            result.request_id != self._scan_request_id
+            or result.preview_revision != self._preview_revision
+        ):
+            return
+        if preview.settings_generation != self._organizer_service.settings_generation:
+            self.invalidate_preview()
+            return
+        if self._scan_cancelled:
+            preview = replace(preview, cancelled=True)
         previous_checked = self._checked_source_keys()
         if preview.cancelled:
             if self._scan_mode is _ScanMode.APPEND:
@@ -398,6 +421,12 @@ class OrganizerPage(QWidget):
             return
 
         if self._scan_mode is _ScanMode.APPEND and self._preview is not None:
+            if (
+                self._preview_stale
+                or self._preview.settings_generation != preview.settings_generation
+            ):
+                self.invalidate_preview()
+                return
             preview = _merge_previews(self._preview, preview)
             self._commit_preview(preview, checked_source_keys=previous_checked)
             self.status_label.setProperty("state", "success")
@@ -433,7 +462,10 @@ class OrganizerPage(QWidget):
         return self._preview
 
     def selected_ready_plans(self) -> tuple[RenamePlan, ...]:
-        if self._preview is None or self._preview_stale:
+        if (
+            self._preview is None or self._preview_stale or self._preview.cancelled
+            or self._preview.settings_generation != self._organizer_service.settings_generation
+        ):
             return ()
         selected: list[RenamePlan] = []
         for row, plan in enumerate(self._preview.plans):
@@ -458,7 +490,7 @@ class OrganizerPage(QWidget):
         return self._preview_stale_reason
 
     def invalidate_preview(self) -> None:
-        """Invalidate an existing preview after a naming-settings change."""
+        """Invalidate existing rows and in-flight ownership after runtime settings change."""
         self._invalidate_preview(PreviewStaleReason.SETTINGS_CHANGED)
 
     def apply_settings(self, settings: object) -> None:
@@ -772,7 +804,8 @@ class OrganizerPage(QWidget):
             self.undo_button.setEnabled(False)
 
     def _invalidate_preview(self, reason: PreviewStaleReason) -> None:
-        if not self._has_preview_content():
+        self._preview_revision += 1
+        if not self._has_preview_content() and self._worker is None:
             self._preview_stale = False
             self._preview_stale_reason = None
             return
@@ -832,6 +865,7 @@ class OrganizerPage(QWidget):
         )
 
     def _clear_preview(self) -> None:
+        self._preview_revision += 1
         self._preview = None
         self._preview_stale = False
         self._preview_stale_reason = None
@@ -898,10 +932,15 @@ class OrganizerPage(QWidget):
         *,
         checked_source_keys: set[str] | None = None,
     ) -> None:
+        self._preview_revision += 1
         self._preview = preview
         self._preview_stale = False
         self._preview_stale_reason = None
         self._render_preview(preview, checked_source_keys=checked_source_keys)
+        if preview.settings_generation != self._organizer_service.settings_generation:
+            self.invalidate_preview()
+        elif preview.cancelled:
+            self._invalidate_preview(PreviewStaleReason.CANCELLED)
 
     def _render_preview(
         self,
@@ -1006,6 +1045,8 @@ def _merge_previews(
     incoming: OrganizerPreview,
 ) -> OrganizerPreview:
     """Upsert a successful drop result while retaining existing row order."""
+    if current.settings_generation != incoming.settings_generation:
+        raise ValueError("Cannot merge previews from different settings generations")
     candidates = _merge_path_items(current.scan.candidates, incoming.scan.candidates)
     skipped = _merge_path_items(current.scan.skipped, incoming.scan.skipped)
     scan = replace(

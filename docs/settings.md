@@ -47,6 +47,23 @@ long-path warning and rename safety checks remain unchanged.
 
 ## Metadata and cache
 
+Saved naming, metadata locale, timeout, and cache policy apply immediately to newly started work.
+Each lookup, Organizer scan, or Quick Rename batch keeps one configuration snapshot through the
+whole operation. A Settings save cannot mix old and new names inside a batch. Existing Organizer
+previews become stale when these settings change; late results from an older generation are
+discarded, and Execute stays disabled until a new scan finishes. Append requires matching settings
+generations. Cancelled scans cannot enable Execute; completed rows may remain for inspection.
+Quick Rename finishes an already-started batch under its captured settings, including execution.
+Changing the startup mode only affects the next launch and does not invalidate a preview.
+
+`cache.enabled` applies immediately in both directions, without restart. Disabled operations do
+not consult fresh/stale persistent metadata, write cache rows or observations, or use stale cache
+after network failure. There is no separate memory metadata cache. Existing stored data is retained;
+re-enabling reuses the profile's store. Metadata-derived historical/candidate relations are also
+omitted while disabled; manual reviews and rename journals remain independent. Already-running
+operations keep the enabled/disabled policy they captured. If database initialization failed,
+persistent metadata remains unavailable for that runtime even when enabled.
+
 The GUI exposes the verified provider locales and stores their canonical codes:
 
 ```text
@@ -172,8 +189,11 @@ Save performs this sequence:
 
 ```text
 GUI values → AppSettings validation → UTF-8 temporary TOML → fsync → os.replace(config.toml)
+           → publish runtime settings generation → invalidate obsolete preview ownership
 ```
 
+If saving fails, runtime settings and generation remain unchanged. Database path and advanced
+provider section/base URL are launch-time settings and are not rewired during a save.
 Invalid values are never written. Existing configurations that omit new fields load with defaults;
 the existing strict unknown-key policy remains in force. Saving regenerates the application-owned
 TOML document, so comments and unknown keys are not preserved; this avoids adding a second TOML

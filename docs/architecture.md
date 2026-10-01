@@ -531,6 +531,38 @@ of scope. Inspection itself does not change journal state.
 
 ## Thread boundary
 
+### Runtime settings and operation ownership
+
+Persisted `AppSettings` are validated and atomically saved before runtime publication. Lookup
+owns a monotonically increasing settings generation and publishes naming, provider request
+configuration, and cache policy together. Naming fields, provider timeout/metadata locale, and
+cache policy are operation-semantic; startup mode, database path, and provider section/base URL
+remain launch-time settings. Saving only launch-time fields does not invalidate a preview.
+
+Each lookup, Organizer replace/append scan, and Quick Rename batch captures one configuration
+at operation start (Qt workers capture it before dispatch). Running operations keep that snapshot
+through every item and planning step. Quick Rename finishes its admitted batch, including execution,
+under that snapshot; queued work captures settings when it actually starts.
+
+Organizer completion carries a request ID, preview revision, and settings generation. Settings
+changes invalidate existing previews and in-flight ownership, including when no rows exist yet.
+Obsolete completions are discarded and cannot clear stale state or enable Execute. Append accepts
+only matching generations. Cancellation retains completed rows only as non-executable diagnostic
+state when no prior preview exists; it preserves a prior preview otherwise.
+
+The database and MetadataStore remain profile-owned and are reused across cache toggles. Disabled
+operations do not read/write metadata cache or observations, derive stored metadata relations, or
+use stale fallback. Independent manual-review persistence and rename journals are unaffected.
+Enabling applies immediately to new operations when database initialization succeeded. In-flight
+operations retain their captured enabled/disabled policy; toggling never deletes stored data.
+
+```text
+validate -> atomic TOML save -> publish runtime generation N+1
+                                  |                 |
+                    new work snapshots N+1    invalidate old preview ownership
+operation N finishes with N -> ownership comparison -> discard obsolete preview result
+```
+
 Each manual lookup and organizer batch gets one Qt `QThread` and one `QObject` worker. The
 synchronous HTTP provider executes inside that worker thread. Metadata is emitted before the
 optional cover download for manual lookup, and cover failure cannot turn metadata success into

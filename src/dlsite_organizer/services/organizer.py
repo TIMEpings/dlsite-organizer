@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from copy import copy
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -17,7 +18,12 @@ from dlsite_organizer.domain.organizer import (
 )
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.services.folder_scanner import FolderScanner
-from dlsite_organizer.services.lookup import LookupFailure, LookupFreshness, LookupResult
+from dlsite_organizer.services.lookup import (
+    LookupFailure,
+    LookupFreshness,
+    LookupResult,
+    LookupService,
+)
 from dlsite_organizer.services.rename_planner import RenamePlanner
 
 logger = logging.getLogger(__name__)
@@ -69,6 +75,7 @@ class OrganizerPreview:
     lookups: tuple[WorkLookup, ...]
     plans: tuple[RenamePlan, ...]
     cancelled: bool = False
+    settings_generation: int = 0
 
     @property
     def skipped_count(self) -> int:
@@ -91,10 +98,31 @@ class OrganizerService:
         self._lookup_service = lookup_service
         self._scanner = scanner or FolderScanner()
         self._planner = planner or RenamePlanner()
+        self._snapshot_captured = False
+
+    @property
+    def settings_generation(self) -> int:
+        lookup = self._lookup_service
+        return lookup.settings_generation if isinstance(lookup, LookupService) else 0
+
+    def snapshot(self) -> OrganizerService:
+        """Pin the lookup configuration before scanning or dispatching a worker."""
+        operation = copy(self)
+        if isinstance(self._lookup_service, LookupService):
+            operation._lookup_service = self._lookup_service.snapshot()
+        operation._planner = self._planner.snapshot()
+        operation._snapshot_captured = True
+        return operation
 
     def apply_settings(self, settings: Any) -> None:
-        """Apply validated naming settings without rebuilding the organizer."""
-        self._planner.apply_settings(settings)
+        """Publish lookup/naming/cache policy through the shared runtime boundary."""
+        from dlsite_organizer.app.settings import AppSettings
+
+        if isinstance(self._lookup_service, LookupService):
+            self._lookup_service.apply_settings(AppSettings.model_validate(settings))
+        else:
+            self._planner = self._planner.snapshot()
+            self._planner.apply_settings(settings)
 
     def preview(
         self,
@@ -108,6 +136,18 @@ class OrganizerService:
         Work codes are looked up sequentially and only once per run.  A failed
         lookup becomes a single failed row; it does not abort other works.
         """
+        operation = self if self._snapshot_captured else self.snapshot()
+        return operation._preview(
+            root_path, progress_callback=progress_callback, cancel_check=cancel_check
+        )
+
+    def _preview(
+        self,
+        root_path: Path | str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> OrganizerPreview:
         scan = self._scanner.scan(root_path, cancel_check=cancel_check)
         return self._preview_scan(
             scan, progress_callback=progress_callback, cancel_check=cancel_check
@@ -122,6 +162,19 @@ class OrganizerService:
         cancel_check: CancelCheck | None = None,
     ) -> OrganizerPreview:
         """Build a preview for explicitly selected direct child directories only."""
+        operation = self if self._snapshot_captured else self.snapshot()
+        return operation._preview_paths(
+            root_path, paths, progress_callback=progress_callback, cancel_check=cancel_check
+        )
+
+    def _preview_paths(
+        self,
+        root_path: Path | str,
+        paths: tuple[Path | str, ...] | list[Path | str],
+        *,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> OrganizerPreview:
         scan = self._scanner.scan_paths(root_path, paths, cancel_check=cancel_check)
         return self._preview_scan(
             scan, progress_callback=progress_callback, cancel_check=cancel_check
@@ -263,4 +316,5 @@ class OrganizerService:
             lookups=lookups,
             plans=finalized,
             cancelled=cancelled,
+            settings_generation=self.settings_generation,
         )

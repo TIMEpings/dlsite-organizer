@@ -5,15 +5,23 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from dlsite_organizer.services.folder_scanner import FolderScanFailure
-from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizerWorkerResult:
+    request_id: int
+    preview_revision: int
+    preview: OrganizerPreview
 
 
 class OrganizerWorker(QObject):
@@ -29,9 +37,14 @@ class OrganizerWorker(QObject):
         organizer_service: OrganizerService,
         root_path: Path | str,
         selected_paths: Sequence[Path | str] | None = None,
+        *,
+        request_id: int = 0,
+        preview_revision: int = 0,
     ) -> None:
         super().__init__()
-        self._organizer_service = organizer_service
+        self._organizer_service = organizer_service.snapshot()
+        self._request_id = request_id
+        self._preview_revision = preview_revision
         self._root_path = root_path
         self._selected_paths = tuple(selected_paths) if selected_paths is not None else None
         self._cancel_event = Event()
@@ -60,7 +73,9 @@ class OrganizerWorker(QObject):
                     progress_callback=self._report_progress,
                     cancel_check=self._cancel_event.is_set,
                 )
-            self.result_ready.emit(preview)
+            self.result_ready.emit(
+                OrganizerWorkerResult(self._request_id, self._preview_revision, preview)
+            )
             logger.debug(
                 "organizer worker success emitted thread=%s plans=%d cancelled=%s",
                 thread.objectName() or "<unnamed>",

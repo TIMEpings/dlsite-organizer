@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -162,7 +163,11 @@ class DlsiteProvider:
         self._site = DlsiteSite(base_url=base_url.rstrip("/"), section=normalized_section)
         self._timeout = httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 10.0))
         self._metadata_locale = metadata_locale.strip() or "ja_jp"
-        self._client_factory = client_factory or self._new_client
+        self._client_factory = client_factory
+
+    def snapshot(self) -> DlsiteProvider:
+        """Copy request configuration; clients remain request-owned context managers."""
+        return copy(self)
 
     def fetch_work(self, workno: str) -> Work:
         """Fetch normalized metadata, retaining the minimal legacy interface."""
@@ -191,7 +196,7 @@ class DlsiteProvider:
         last_http_status: int | None = None
         last_parse_error: DlsiteParseError | None = None
         try:
-            with self._client_factory() as client:
+            with (self._client_factory or self._new_client)() as client:
                 for section in route.sections:
                     site = self._site_for_section(section)
                     page_response: httpx.Response | None = None

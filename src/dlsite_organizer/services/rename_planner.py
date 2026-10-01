@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import ntpath
 from collections.abc import Iterable
+from copy import copy
 from dataclasses import replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -38,6 +39,12 @@ class RenamePlanner:
         self._naming = naming or NamingService()
         self._case_insensitive = case_insensitive
         self._path_warning_threshold = path_warning_threshold
+
+    def snapshot(self) -> RenamePlanner:
+        """Keep standalone naming configuration stable through a planning operation."""
+        planner = copy(self)
+        planner._naming = copy(self._naming)
+        return planner
 
     def apply_settings(self, settings: Any) -> None:
         """Update the shared naming renderer for subsequent plans."""
