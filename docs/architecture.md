@@ -444,6 +444,8 @@ Preflight
       ↓
 Durable Undo Intent
       ↓
+Per-operation Revalidation
+      ↓
 Filesystem
 ```
 
@@ -452,10 +454,30 @@ UNDO_PARTIAL transaction. It validates the renamed path and original path under 
 root, rejects symlink/junctions, target conflicts and missing paths, and executes in reverse
 sequence. It stops on the first filesystem or journal failure. A partial undo remains
 `UNDO_PARTIAL` and can be retried after the external condition is resolved; journal failure after
-a successful undo requires recovery. The journal stores paths and cannot prove that a
-renamed directory was not manually replaced, so Undo is a best-effort path-based recovery aid,
-not an ACID or identity-verified transaction. Existing databases receive the two journal tables
+a successful undo requires recovery. Existing databases receive the two journal tables
 through SQLAlchemy `create_all` without manual deletion.
+
+Batch preflight is advisory: Undo revalidates each reverse operation immediately before mutation,
+after the operation's progress callback, while retaining the transaction mutation gate. It checks
+root and current-entry existence, directory type, symlink/junction/reparse rejection, direct-child
+path boundaries, distinct non-case-only paths, and destination conflicts (including case aliases
+and dangling links). Non-following `Path.lstat()` captures ephemeral `(st_dev, st_ino,
+st_birthtime_ns when available)` identities during preflight and compares root/current identities
+at each operation. Missing/zero file identity fails closed. Ordinary content changes do not
+invalidate identity. A known revalidation failure follows the same durable partial outcome as
+a filesystem failure: the unsafe operation is untouched, earlier successes remain journaled,
+and later operations do not execute.
+
+These fingerprints are scoped to one Undo attempt; they cannot identify a replacement made before
+its preflight or across restart. File-index reuse may also defeat a fingerprint (birth time reduces
+that ambiguity where available). There remains an interval after the final userspace observation
+and before the pathname-based rename syscall in which an external actor can replace the source or
+redirect a parent. The mutation gate coordinates this application's operations only. Windows'
+non-replacing rename still protects against a destination that appears at the syscall, but does
+not bind the source to the checked identity. Undo is therefore a best-effort path-based recovery
+aid, not an atomic identity-verified transaction. Eliminating this residual source/boundary race
+would require platform-specific handle-based rename with retained, validated source and parent
+handles and suitable sharing/reparse controls; that stronger mechanism is outside this hardening.
 
 Before the first reverse mutation (including before progress callbacks), Undo commits a separate
 transaction-level `undo_state = in_progress` and `undo_started_at`. This reservation uses
