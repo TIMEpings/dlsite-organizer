@@ -1,5 +1,6 @@
 #include "identity.h"
 #include "ipc_client.h"
+#include "durable_handoff.h"
 
 #include <iostream>
 #include <string>
@@ -21,6 +22,7 @@ int wmain(int argc, wchar_t** argv) {
     // This executable is test-only.  The production COM helper has no
     // user-supplied profile/server/pipe argument surface.
     std::wstring profile_root;
+    std::wstring publish_id;
     std::vector<std::wstring> paths;
     for (int index = 1; index < argc; ++index) {
         std::wstring value;
@@ -28,12 +30,25 @@ int wmain(int argc, wchar_t** argv) {
             profile_root = std::move(value);
         } else if (ReadArgument(index, argc, argv, L"--path", value)) {
             paths.push_back(std::move(value));
+        } else if (ReadArgument(index, argc, argv, L"--publish-id", value)) {
+            publish_id = std::move(value);
         } else {
             return 2;
         }
     }
     if (profile_root.empty() || paths.empty()) {
         return 2;
+    }
+    if (!publish_id.empty()) {
+        if (publish_id.find_first_not_of(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+            != std::wstring::npos) return 2;
+        std::string id;
+        for (const wchar_t c : publish_id) id.push_back(static_cast<char>(c));
+        dlsite::shell::Win32HandoffPublisher publisher(profile_root);
+        const auto published = publisher.Publish({id, paths});
+        if (published != dlsite::shell::PublishResult::Committed &&
+            published != dlsite::shell::PublishResult::Identical) return 6;
+        return publisher.MarkLaunchSucceeded(id) ? 0 : 7;
     }
 
     dlsite::shell::InstanceIdentity identity;

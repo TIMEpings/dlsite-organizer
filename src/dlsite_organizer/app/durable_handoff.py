@@ -17,7 +17,8 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
@@ -44,6 +45,85 @@ logger = logging.getLogger(__name__)
 TERMINAL_RETENTION_SECONDS = 7 * 24 * 60 * 60
 MAX_RECORD_SIZE = MAX_REQUEST_FRAME_SIZE - 4
 MAX_JOURNAL_SIZE = 4096
+MAX_PUBLICATION_SEQUENCE = (1 << 64) - 1
+
+
+@contextmanager
+def _publication_lock(root: Path) -> Iterator[None]:
+    """Serialize Python/native publication using an OS-owned byte-zero lock.
+
+    The file stays in place; process death releases the lock. The counter is a
+    separate atomically replaced file so an interrupted write cannot reset it.
+    """
+    _safe_directory(root)
+    path = root / "publication.lock"
+    if path.is_symlink():
+        raise OSError("reparse publication lock")
+    with path.open("a+b") as stream:
+        if os.name == "nt":
+            import msvcrt
+
+            def acquire() -> None:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+
+            def release() -> None:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            def acquire() -> None:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            def release() -> None:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                acquire()
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            release()
+
+
+def _read_sequence(path: Path) -> int:
+    if path.is_symlink() or path.stat().st_size != 21:
+        raise ProtocolError("invalid publication sequence")
+    raw = path.read_bytes()
+    if re.fullmatch(rb"[0-9]{20}\n", raw) is None:
+        raise ProtocolError("invalid publication sequence")
+    sequence = int(raw)
+    if not 1 <= sequence <= MAX_PUBLICATION_SEQUENCE:
+        raise ProtocolError("invalid publication sequence")
+    return sequence
+
+
+def _reserve_publication(root: Path, request_id: str) -> None:
+    """Caller holds publication lock through subsequent pending visibility."""
+    counter = root / "publication-sequence"
+    sequence = _read_sequence(counter) + 1 if counter.exists() else 1
+    if sequence > MAX_PUBLICATION_SEQUENCE:
+        raise ProtocolError("publication sequence exhausted")
+    content = f"{sequence:020d}\n".encode("ascii")
+    _atomic_write(counter, content)
+    _atomic_write(root / "ordering" / f"{request_id}.seq", content)
+
+
+def _publication_key(path: Path) -> tuple[int, int, str]:
+    sidecar = path.parent.parent / "ordering" / f"{path.stem}.seq"
+    if not sidecar.exists():
+        # Historical publication order is unknowable. Legacy files precede
+        # sequenced files and retain the old deterministic ID fallback.
+        return (0, 0, path.stem)
+    return (1, _read_sequence(sidecar), path.stem)
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
@@ -221,21 +301,9 @@ class DurableHandoff(QObject):
                         data.get("path_count"),
                         data.get("execution"),
                     )
-                elif (
-                    data["state"] == "terminal"
-                    and self._clock() - float(data["time"]) > TERMINAL_RETENTION_SECONDS
-                ):
-                    if (
-                        self._can_release_payload(data)
-                        and not (self.pending / path.name).exists()
-                    ):
-                        (self.claimed / path.name).unlink(missing_ok=True)
-                        path.unlink()
-                    else:
-                        self._seen[path.stem] = data
                 else:
                     self._seen[path.stem] = data
-            except (OSError, ValueError, KeyError, TypeError):
+            except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 logger.exception("invalid admission marker: %s", path.name)
                 self._blocked_ids.add(path.stem)
         for path in sorted(self.claimed.glob("*.json")):
@@ -249,6 +317,7 @@ class DurableHandoff(QObject):
                 path.unlink(missing_ok=True)
             else:
                 logger.error("orphan claimed Quick Rename record: %s", path.name)
+        self._prune_terminal()
 
     def admit(self, command: LocalCommand) -> LocalReply:
         try:
@@ -289,6 +358,7 @@ class DurableHandoff(QObject):
             "operation": "QUICK_RENAME",
             "time": self._clock(),
         }
+        new_ipc_claim = not (self.claimed / f"{command.request_id}.json").exists()
         try:
             _publish_record(self.claimed, command, canonical)
             self._write_journal(command.request_id, claim)
@@ -337,7 +407,7 @@ class DurableHandoff(QObject):
                 "indeterminate admission",
             )
         if final_state == "retryable":
-            self._restore_pending(command.request_id)
+            self._restore_pending(command.request_id, new_publication=new_ipc_claim)
         elif self._can_release_payload(terminal):
             (self.claimed / f"{command.request_id}.json").unlink(missing_ok=True)
         return reply
@@ -362,17 +432,20 @@ class DurableHandoff(QObject):
             or record.get("execution") == "completed"
         )
 
-    def _restore_pending(self, request_id: str) -> None:
+    def _restore_pending(self, request_id: str, *, new_publication: bool = False) -> None:
         claimed = self.claimed / f"{request_id}.json"
         pending = self.pending / claimed.name
         try:
-            if pending.exists():
-                canonical = _canonical(_read_command(claimed))
-                if not _same_payload(pending, canonical):
-                    raise ProtocolError("retryable request payload conflict")
-                claimed.unlink()
-            else:
-                claimed.rename(pending)
+            with _publication_lock(self.root):
+                if pending.exists():
+                    canonical = _canonical(_read_command(claimed))
+                    if not _same_payload(pending, canonical):
+                        raise ProtocolError("retryable request payload conflict")
+                    claimed.unlink()
+                else:
+                    if new_publication:
+                        _reserve_publication(self.root, request_id)
+                    claimed.rename(pending)
         except (OSError, ProtocolError):
             logger.exception(
                 "retryable Quick Rename record could not return to pending: %s", request_id
@@ -416,7 +489,13 @@ class DurableHandoff(QObject):
         if self._clock() >= self._next_prune:
             self._prune_terminal()
             self._next_prune = self._clock() + 3600
-        for path in sorted(self.pending.glob("*.json")):
+        ordered: list[tuple[tuple[int, int, str], Path]] = []
+        for path in self.pending.glob("*.json"):
+            try:
+                ordered.append((_publication_key(path), path))
+            except (OSError, ProtocolError):
+                self._quarantine(path)
+        for _key, path in sorted(ordered):
             try:
                 command = _read_command(path)
                 target = self.claimed / path.name
@@ -424,10 +503,17 @@ class DurableHandoff(QObject):
                     if not _same_payload(target, _canonical(command)):
                         raise ProtocolError("claimed request payload mismatch")
                     path.unlink()
-                    self.admit(command)
+                    reply = self.admit(command)
+                    if reply.status in {
+                        LocalReplyStatus.QUEUE_FULL,
+                        LocalReplyStatus.SHUTTING_DOWN,
+                    }:
+                        break
                     continue
                 path.rename(target)
                 reply = self.admit(command)
+                if reply.status in {LocalReplyStatus.QUEUE_FULL, LocalReplyStatus.SHUTTING_DOWN}:
+                    break
                 if self._can_release_payload(self._seen.get(command.request_id, {})):
                     target.unlink(missing_ok=True)
                 elif reply.status is LocalReplyStatus.REJECTED:
@@ -435,11 +521,14 @@ class DurableHandoff(QObject):
                         "Quick Rename pending record requires review: %s", command.request_id
                     )
             except (OSError, ProtocolError, ValueError):
-                logger.exception("invalid Quick Rename inbox record: %s", path.name)
-                try:
-                    path.rename(self.quarantine / path.name)
-                except OSError:
-                    logger.exception("could not quarantine inbox record: %s", path.name)
+                self._quarantine(path)
+
+    def _quarantine(self, path: Path) -> None:
+        logger.exception("invalid Quick Rename inbox record: %s", path.name)
+        try:
+            path.rename(self.quarantine / path.name)
+        except OSError:
+            logger.exception("could not quarantine inbox record: %s", path.name)
 
     def _prune_terminal(self) -> None:
         for request_id, record in tuple(self._seen.items()):
@@ -455,10 +544,16 @@ class DurableHandoff(QObject):
                 and _valid_timestamp(timestamp)
                 and self._clock() - timestamp > TERMINAL_RETENTION_SECONDS
                 and not (self.pending / f"{request_id}.json").exists()
+                and request_id not in self._controller_to_external.values()
             ):
                 try:
-                    (self.claimed / f"{request_id}.json").unlink(missing_ok=True)
-                    self._journal_path(request_id).unlink(missing_ok=True)
+                    with _publication_lock(self.root):
+                        if (self.pending / f"{request_id}.json").exists():
+                            continue
+                        (self.claimed / f"{request_id}.json").unlink(missing_ok=True)
+                        (self.root / "ordering" / f"{request_id}.seq").unlink(missing_ok=True)
+                        self._journal_path(request_id).unlink(missing_ok=True)
+                        self._seen.pop(request_id, None)
                 except OSError:
                     logger.exception("terminal marker cleanup failed: %s", request_id)
 
@@ -467,7 +562,11 @@ def publish(profile_root: Path, command: LocalCommand) -> Path:
     """Publish a CLI request without replacing another committed ID."""
     content = _canonical(command)
     directory = profile_root / "handoff" / "v1" / "pending"
-    return _publish_record(directory, command, content)
+    with _publication_lock(directory.parent):
+        target = directory / f"{command.request_id}.json"
+        if not target.exists() and not (directory.parent / "claimed" / target.name).exists():
+            _reserve_publication(directory.parent, command.request_id)
+        return _publish_record(directory, command, content)
 
 
 def _publish_record(directory: Path, command: LocalCommand, content: bytes) -> Path:

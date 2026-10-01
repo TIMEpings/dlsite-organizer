@@ -343,6 +343,52 @@ begins controller shutdown, drops pending-but-not-started Quick Actions, and let
 finish. It then closes windows, disposes the primary database, releases the profile lock last, and
 quits the application. Close is idempotent, and no new queued mutation starts after shutdown begins.
 
+### Durable ingress ordering and resource lifetime
+
+Quick Rename CLI requests and native IPC fallback use the profile's `handoff/v1` inbox. Native
+payloads remain non-executable in `prepared` until launch succeeds; launch failures stay in
+`recoverable`. Publication means the fully written, flushed payload is atomically made visible in
+`pending`, not the time it was prepared or a wall-clock timestamp. The primary moves it to `claimed`
+and flushes a journal claim before controller submission. Capacity/startup/shutdown deferral records
+`retryable` and restores the same payload to pending. Drain stops at the first `QUEUE_FULL` or
+`SHUTTING_DOWN`, so later requests cannot overtake it. Each payload keeps its batch boundary.
+
+New Python and native publishers serialize publication with an OS-owned byte-zero lock on
+`publication.lock` (Windows CRT byte locking / Win32 `LockFileEx`; POSIX Python uses `flock`). The
+lock remains held through pending visibility. Under that lock, `publication-sequence` reserves a
+durable increasing unsigned 64-bit sequence, then `ordering/<request-id>.seq` records it. Both are
+atomically replaced, flushed files containing 20 ASCII decimal digits and a newline. Counter gaps
+after failed publication or a crash are harmless; a preparation/sidecar alone is never executable.
+The counter persists through retention and restart, and a corrupt/exhausted allocator fails closed.
+Lock acquisition has a five-second bound and process death releases the lock automatically. The
+native promotion participates because Python cannot reconstruct the order of historical renames.
+
+Distinct requests from participating publishers have a strict total publication order, including
+concurrent processes; lock acquisition order itself has no fairness guarantee. Drain sorts by the
+stored sequence and retry retains it, including claim recovery before admission. A fresh IPC request
+that is first deferred to disk receives its sequence at that pending publication. A duplicate pending
+ID keeps its original order. Payload JSON, protocol version, request-ID identity and canonical digest
+are unchanged. Legacy files without a sidecar remain readable without migration: they precede all
+sequenced files and use lexical request-ID order within the legacy group. Their original publication
+order is unknowable; an older helper still publishing without sidecars receives this legacy policy.
+Invalid payloads/ordering sidecars are quarantined, while corrupt admission journals block their ID.
+
+Accepted tracked work progresses through queued/started/completed execution markers. Orphan journal
+claims and accepted work without confirmed completion become `indeterminate` after restart and are
+never replayed automatically. Safe terminal records retain the existing seven-day window. Pruning
+under the publication lock removes their claimed payload, ordering sidecar, journal and in-memory
+duplicate entry together; pending work, controller mappings and unresolved states prevent expiry.
+After expiry the same ID can be admitted again, identically in a running process and after restart.
+
+IPC normalizes invalid UTF-8, malformed JSON (including recursion-depth failures), duplicate keys,
+nonstandard constants, wrong types/fields and frame-size violations to protocol rejection. The timer
+stays active through decoding/admission and bounds reply flushing as well. A rejection is sent when
+possible, then the connection closes; unexpected internal failures are logged and cleaned up. One
+idempotent cleanup removes tracking first, stops the timer, disconnects connection signals, clears
+the buffer, aborts a still-connected socket and schedules its Qt deferred deletion. Each timer is a
+child of its socket and is destroyed with it. A stopped timer is not retained as a server child;
+signal closures are released before deletion to avoid stale callbacks and ownership cycles.
+
 The safety invariant remains prominent:
 
 ```text

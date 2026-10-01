@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEventLoop, QLockFile
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QLockFile, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
+from dlsite_organizer.app import single_instance as ipc_module
 from dlsite_organizer.app.single_instance import (
     CLIENT_ACK_DEADLINE_MS,
     CLIENT_TOTAL_DEADLINE_MS,
@@ -673,5 +674,248 @@ def test_client_malformed_reply_is_ambiguous(qcore: QCoreApplication, tmp_path: 
                 identity.server_name, connect_deadline_ms=CLIENT_TOTAL_DEADLINE_MS
             ).send(_activate())
         assert error.value.is_ambiguous
+    finally:
+        server.close()
+
+
+def _flush_deferred_deletes(qcore: QCoreApplication) -> None:
+    qcore.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qcore.processEvents()
+
+
+def _exchange_raw(qcore: QCoreApplication, server: LocalCommandServer, frame: bytes) -> LocalReply:
+    socket = QLocalSocket()
+    try:
+        socket.connectToServer(server.server_name)
+        assert socket.waitForConnected(1000)
+        socket.write(frame)
+        socket.flush()
+        assert _pump_until(qcore, lambda: socket.bytesAvailable() > 0)
+        reply = decode_reply(_socket_bytes(socket))
+        assert _pump_until(qcore, lambda: not server._connections)
+        _flush_deferred_deletes(qcore)
+        assert server.findChildren(QTimer) == []
+        return reply
+    finally:
+        socket.abort()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"[" * 1500 + b"]" * 1500,
+        b'{"x":' * 1500 + b"0" + b"}" * 1500,
+        b"\xff",
+        b"{broken",
+        b"[]",
+        b'{"version":1,"request_id":"a","command":"ACTIVATE","payload":[]}',
+        b'{"version":1,"request_id":"a","command":"ACTIVATE","payload":{},"extra":1}',
+        b'{"version":1,"request_id":"a","command":"ACTIVATE","payload":{},"version":1}',
+        b'{"version":NaN}',
+    ],
+    ids=[
+        "deep-array",
+        "deep-object",
+        "utf8",
+        "json",
+        "top-level",
+        "field-type",
+        "field",
+        "duplicate-key",
+        "constant",
+    ],
+)
+def test_bad_input_is_fail_closed_and_real_server_survives(
+    qcore: QCoreApplication, tmp_path: Path, payload: bytes
+) -> None:
+    server = LocalCommandServer(
+        instance_identity(tmp_path).server_name,
+        lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED),
+    )
+    assert server.listen()
+    try:
+        assert (
+            _exchange_raw(qcore, server, encode_request(_activate())).status
+            is LocalReplyStatus.ACCEPTED
+        )
+        rejected = _exchange_raw(
+            qcore, server, encode_frame_payload(payload, MAX_REQUEST_FRAME_SIZE)
+        )
+        assert rejected.status is LocalReplyStatus.REJECTED
+        assert (
+            _exchange_raw(qcore, server, encode_request(_activate())).status
+            is LocalReplyStatus.ACCEPTED
+        )
+    finally:
+        server.close()
+        _flush_deferred_deletes(qcore)
+
+
+def test_ipc_resources_remain_stable_through_many_success_and_error_clients(
+    qcore: QCoreApplication, tmp_path: Path
+) -> None:
+    server = LocalCommandServer(
+        instance_identity(tmp_path).server_name,
+        lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED),
+        incomplete_timeout_ms=20,
+    )
+    assert server.listen()
+    try:
+        for _ in range(40):
+            assert (
+                _exchange_raw(qcore, server, encode_request(_activate())).status
+                is LocalReplyStatus.ACCEPTED
+            )
+        for _ in range(3):
+            for payload in (b"{broken", b"[" * 1500 + b"]" * 1500):
+                assert (
+                    _exchange_raw(
+                        qcore, server, encode_frame_payload(payload, MAX_REQUEST_FRAME_SIZE)
+                    ).status
+                    is LocalReplyStatus.REJECTED
+                )
+            assert _exchange_raw(qcore, server, b"\x00\x00\x00\x10").detail == "truncated_frame"
+    finally:
+        server.close()
+        _flush_deferred_deletes(qcore)
+    assert not server._connections
+    assert not server.findChildren(QTimer)
+
+
+@pytest.mark.parametrize(
+    "finish", ["peer-disconnect", "shutdown", "repeated-cleanup", "timeout", "reply-timeout"]
+)
+def test_connection_cleanup_is_idempotent_on_all_terminal_paths(
+    qcore: QCoreApplication, tmp_path: Path, finish: str
+) -> None:
+    server = LocalCommandServer(
+        instance_identity(tmp_path).server_name,
+        lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED),
+        incomplete_timeout_ms=1000,
+    )
+    assert server.listen()
+    client = QLocalSocket()
+    try:
+        client.connectToServer(server.server_name)
+        assert client.waitForConnected(1000)
+        client.write(b"\x00\x00")
+        client.flush()
+        assert _pump_until(qcore, lambda: bool(server._connections))
+        state = next(iter(server._connections.values()))
+        assert state.timer.isActive()
+        assert state.timer.parent() is state.socket
+        assert server.findChildren(QTimer) == [state.timer]
+        if finish == "peer-disconnect":
+            client.abort()
+        elif finish == "shutdown":
+            server.close()
+            server.close()
+            server._on_disconnected(state.socket)
+        elif finish == "timeout":
+            server._on_frame_timeout(state.socket)
+            server._on_frame_timeout(state.socket)
+        elif finish == "reply-timeout":
+            state.response_sent = True
+            state.waiting_for_bytes = True
+            server._on_frame_timeout(state.socket)
+        else:
+            server._cleanup_connection(state.socket)
+            server._on_disconnected(state.socket)
+            server._on_frame_timeout(state.socket)
+            server._cleanup_connection(state.socket)
+        assert _pump_until(qcore, lambda: not server._connections)
+        assert not state.buffer
+        _flush_deferred_deletes(qcore)
+        assert not server.findChildren(QTimer)
+    finally:
+        client.abort()
+        server.close()
+        _flush_deferred_deletes(qcore)
+
+
+@pytest.mark.parametrize("mode", ["handler-error", "invalid-reply", "rejected"])
+def test_admission_failure_releases_all_connection_resources(
+    qcore: QCoreApplication, tmp_path: Path, mode: str
+) -> None:
+    def handler(value: LocalCommand) -> LocalReply:
+        if mode == "handler-error":
+            raise RuntimeError("injected handler bug")
+        if mode == "invalid-reply":
+            return LocalReply(1, "other-id", LocalReplyStatus.ACCEPTED)
+        return LocalReply(1, value.request_id, LocalReplyStatus.REJECTED)
+
+    server = LocalCommandServer(instance_identity(tmp_path).server_name, handler)
+    assert server.listen()
+    try:
+        assert (
+            _exchange_raw(qcore, server, encode_request(_activate())).status
+            is LocalReplyStatus.REJECTED
+        )
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize("boundary", ["decode_request", "encode_reply"])
+def test_unexpected_protocol_failure_is_logged_and_cleans_up_before_qt_returns(
+    qcore: QCoreApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    boundary: str,
+) -> None:
+    server = LocalCommandServer(
+        instance_identity(tmp_path).server_name,
+        lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED),
+    )
+    assert server.listen()
+    original = getattr(ipc_module, boundary)
+
+    def bug(_frame: bytes) -> LocalCommand:
+        raise RuntimeError("injected decoder bug")
+
+    client = QLocalSocket()
+    try:
+        monkeypatch.setattr(ipc_module, boundary, bug)
+        client.connectToServer(server.server_name)
+        assert client.waitForConnected(1000)
+        client.write(encode_request(_activate()))
+        client.flush()
+        assert _pump_until(qcore, lambda: "injected decoder bug" in caplog.text)
+        assert not server._connections
+        _flush_deferred_deletes(qcore)
+        assert not server.findChildren(QTimer)
+        monkeypatch.setattr(ipc_module, boundary, original)
+        assert (
+            _exchange_raw(qcore, server, encode_request(_activate())).status
+            is LocalReplyStatus.ACCEPTED
+        )
+    finally:
+        client.abort()
+        server.close()
+
+
+def test_timeout_stays_active_during_decode_and_admission(
+    qcore: QCoreApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = ipc_module.decode_request
+    server: LocalCommandServer
+
+    def decode(frame: bytes) -> LocalCommand:
+        assert all(state.timer.isActive() for state in server._connections.values())
+        return original(frame)
+
+    def handler(value: LocalCommand) -> LocalReply:
+        assert all(state.timer.isActive() for state in server._connections.values())
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    server = LocalCommandServer(instance_identity(tmp_path).server_name, handler)
+    monkeypatch.setattr(ipc_module, "decode_request", decode)
+    assert server.listen()
+    try:
+        assert (
+            _exchange_raw(qcore, server, encode_request(_activate())).status
+            is LocalReplyStatus.ACCEPTED
+        )
     finally:
         server.close()

@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from dlsite_organizer.app import durable_handoff as handoff_module
 from dlsite_organizer.app import settings as settings_module
 from dlsite_organizer.app.durable_handoff import (
     TERMINAL_RETENTION_SECONDS,
     DurableHandoff,
     _canonical,
+    _publication_key,
     publish,
 )
 from dlsite_organizer.app.invocation import InvocationParseError, parse_invocation
@@ -282,9 +286,12 @@ def test_quarantine_and_indeterminate_work_are_not_replayed(tmp_path: Path) -> N
     inbox.drain()
     assert calls == []
     assert quarantine_path.exists()
-    assert json.loads(
-        (inbox.journal / f"{indeterminate.request_id}.json").read_text(encoding="utf-8")
-    )["state"] == "indeterminate"
+    assert (
+        json.loads(
+            (inbox.journal / f"{indeterminate.request_id}.json").read_text(encoding="utf-8")
+        )["state"]
+        == "indeterminate"
+    )
 
 
 def test_timer_observes_requests_published_after_startup_scan(tmp_path: Path) -> None:
@@ -538,8 +545,349 @@ def test_concurrent_cold_ids_and_retryable_queue(tmp_path: Path) -> None:
     for request_id in ("A", "B", "C"):
         publish(tmp_path, command(request_id))
     inbox.drain()
-    assert calls == ["A", "C"]
+    assert calls == ["A"]
     assert (inbox.pending / "B.json").exists()
+    assert (inbox.pending / "C.json").exists()
     inbox.drain()
-    assert calls == ["A", "C", "B"]
+    assert calls == ["A", "B", "C"]
     assert attempts == {"A": 1, "B": 2, "C": 1}
+
+
+@pytest.mark.parametrize("ids", [("z-earlier", "a-later"), ("Z", "A", "M", "B")])
+def test_publication_order_survives_restart_and_frozen_timestamps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ids: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(handoff_module.time, "time", lambda: 100.0)
+    for request_id in ids:
+        path = publish(tmp_path, command(request_id))
+        # Deliberately collide all filesystem timestamps as well.
+        os.utime(path, (100, 100))
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    DurableHandoff(tmp_path, submit).drain()
+    assert calls == list(ids)
+
+
+def test_concurrent_publishers_reserve_distinct_durable_sequences(tmp_path: Path) -> None:
+    ids = [f"request-{index}" for index in reversed(range(20))]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        paths = list(executor.map(lambda request_id: publish(tmp_path, command(request_id)), ids))
+    keys = [_publication_key(path) for path in paths]
+    assert {key[1] for key in keys} == set(range(1, 21))
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    DurableHandoff(tmp_path, submit).drain()
+    assert calls == [key[2] for key in sorted(keys)]
+
+
+@pytest.mark.parametrize("status", [LocalReplyStatus.QUEUE_FULL, LocalReplyStatus.SHUTTING_DOWN])
+def test_retry_preserves_sequence_and_blocks_overtaking_across_restart(
+    tmp_path: Path, status: LocalReplyStatus
+) -> None:
+    ids = ("Z", "A", "M")
+    paths = [publish(tmp_path, command(request_id)) for request_id in ids]
+    keys = [_publication_key(path) for path in paths]
+    calls: list[str] = []
+    blocked = [True]
+
+    def submit(value: LocalCommand) -> LocalReply:
+        if value.request_id == "A" and blocked[0]:
+            return LocalReply(1, value.request_id, status)
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    inbox = DurableHandoff(tmp_path, submit)
+    inbox.drain()
+    assert calls == ["Z"]
+    assert [_publication_key(path) for path in paths[1:]] == keys[1:]
+    blocked[0] = False
+    DurableHandoff(tmp_path, submit).drain()
+    assert calls == list(ids)
+
+
+def test_legacy_mixed_queue_has_documented_order_and_ignores_temporary_files(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    inbox = DurableHandoff(tmp_path, submit)
+    for request_id in ("legacy-z", "legacy-a"):
+        (inbox.pending / f"{request_id}.json").write_bytes(_canonical(command(request_id)))
+    for request_id in ("new-z", "new-a"):
+        publish(tmp_path, command(request_id))
+    (inbox.pending / ".partial.tmp").write_bytes(b"{")
+    inbox.drain()
+    assert calls == ["legacy-a", "legacy-z", "new-z", "new-a"]
+    assert (inbox.pending / ".partial.tmp").exists()
+
+
+def test_ordering_preserves_independent_batches(tmp_path: Path) -> None:
+    batches: list[tuple[str, ...]] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        batches.append(value.quick_rename_paths)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    publish(tmp_path, command("Z", [r"C:\A", r"C:\B"]))
+    publish(tmp_path, command("A", [r"C:\C"]))
+    DurableHandoff(tmp_path, submit).drain()
+    assert batches == [(r"C:\A", r"C:\B"), (r"C:\C",)]
+
+
+def test_duplicate_publication_keeps_original_sequence(tmp_path: Path) -> None:
+    path = publish(tmp_path, command("Z"))
+    key = _publication_key(path)
+    publish(tmp_path, command("A"))
+    publish(tmp_path, command("Z"))
+    assert _publication_key(path) == key
+
+
+@pytest.mark.parametrize("bad", [b"[" * 1500 + b"]" * 1500, b'{"x":' * 1100 + b"0" + b"}" * 1100])
+def test_deeply_nested_inbox_records_are_quarantined(tmp_path: Path, bad: bytes) -> None:
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    inbox = DurableHandoff(tmp_path, submit)
+    (inbox.pending / "bad.json").write_bytes(bad)
+    publish(tmp_path, command("valid"))
+    inbox.drain()
+    inbox.drain()
+    assert calls == ["valid"]
+    assert (inbox.quarantine / "bad.json").exists()
+
+
+def test_deeply_nested_journal_blocks_id_and_allows_other_requests(tmp_path: Path) -> None:
+    inbox = DurableHandoff(
+        tmp_path, lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+    )
+    (inbox.journal / "bad.json").write_bytes(b"[" * 1500 + b"]" * 1500)
+    recovered = DurableHandoff(tmp_path, inbox._submit)
+    assert recovered.admit(command("bad")).status is LocalReplyStatus.REJECTED
+    assert recovered.admit(command("valid")).status is LocalReplyStatus.ACCEPTED
+
+
+def test_corrupt_sequence_is_quarantined_without_blocking_valid_record(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    path = publish(tmp_path, command("bad"))
+    (path.parent.parent / "ordering" / "bad.seq").write_bytes(b"broken")
+    publish(tmp_path, command("valid"))
+    inbox = DurableHandoff(tmp_path, submit)
+    inbox.drain()
+    assert calls == ["valid"]
+    assert (inbox.quarantine / "bad.json").exists()
+
+
+def test_corrupt_allocator_fails_closed_without_publishing(tmp_path: Path) -> None:
+    path = publish(tmp_path, command("first"))
+    (path.parent.parent / "publication-sequence").write_bytes(b"broken")
+    with pytest.raises(ProtocolError):
+        publish(tmp_path, command("second"))
+    assert not (path.parent / "second.json").exists()
+
+
+def test_terminal_retention_prunes_memory_disk_and_ordering_at_same_cutoff(tmp_path: Path) -> None:
+    now = [100.0]
+    inbox = DurableHandoff(
+        tmp_path,
+        lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED),
+        clock=lambda: now[0],
+    )
+    path = publish(tmp_path, command("old"))
+    inbox.drain()
+    now[0] += TERMINAL_RETENTION_SECONDS
+    inbox._prune_terminal()
+    assert "old" in inbox._seen
+    assert (inbox.journal / "old.json").exists()
+    assert (inbox.root / "ordering" / "old.seq").exists()
+    inbox.admit(command("young"))
+    now[0] += 1
+    inbox._prune_terminal()
+    assert "old" not in inbox._seen
+    assert not (inbox.journal / "old.json").exists()
+    assert not (inbox.root / "ordering" / "old.seq").exists()
+    assert "young" in inbox._seen
+    assert (inbox.journal / "young.json").exists()
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_same_id_after_expiry_is_new_admission_in_process_and_after_restart(
+    tmp_path: Path, restart: bool
+) -> None:
+    now = [100.0]
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    inbox = DurableHandoff(tmp_path, submit, clock=lambda: now[0])
+    publish(tmp_path, command("same"))
+    inbox.drain()
+    now[0] += TERMINAL_RETENTION_SECONDS + 1
+    inbox._prune_terminal()
+    if restart:
+        inbox = DurableHandoff(tmp_path, submit, clock=lambda: now[0])
+    publish(tmp_path, command("same"))
+    inbox.drain()
+    assert calls == ["same", "same"]
+
+
+@pytest.mark.parametrize(
+    "protected", ["pending", "claimed", "indeterminate", "retryable", "active", "queued", "started"]
+)
+def test_retention_never_forgets_pending_or_unresolved_state(
+    tmp_path: Path, protected: str
+) -> None:
+    now = [100.0]
+    inbox = DurableHandoff(
+        tmp_path,
+        lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED),
+        clock=lambda: now[0],
+    )
+    request = command("protected")
+    inbox.admit(request)
+    record = inbox._seen[request.request_id]
+    if protected == "pending":
+        publish(tmp_path, request)
+    elif protected == "active":
+        inbox._controller_to_external[10] = request.request_id
+    elif protected in {"queued", "started"}:
+        record.update(tracked=True, execution=protected)
+    else:
+        record["state"] = protected
+    inbox._write_journal(request.request_id, record)
+    now[0] += TERMINAL_RETENTION_SECONDS + 1
+    inbox._prune_terminal()
+    assert request.request_id in inbox._seen
+    assert (inbox.journal / "protected.json").exists()
+
+
+def test_failed_retention_disk_cleanup_keeps_seen_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [100.0]
+    inbox = DurableHandoff(
+        tmp_path,
+        lambda value: LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED),
+        clock=lambda: now[0],
+    )
+    inbox.admit(command("retained"))
+    original = Path.unlink
+
+    def fail_marker(path: Path, *args, **kwargs) -> None:
+        if path == inbox.journal / "retained.json":
+            raise OSError("injected unlink failure")
+        original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_marker)
+    now[0] += TERMINAL_RETENTION_SECONDS + 1
+    inbox._prune_terminal()
+    assert "retained" in inbox._seen
+    assert (inbox.journal / "retained.json").exists()
+
+
+def test_ipc_admission_pressure_first_publishes_in_retry_order(tmp_path: Path) -> None:
+    ready = [False]
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        if not ready[0]:
+            return LocalReply(1, value.request_id, LocalReplyStatus.QUEUE_FULL)
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    inbox = DurableHandoff(tmp_path, submit)
+    for request_id in ("Z", "A", "M"):
+        assert inbox.admit(command(request_id)).status is LocalReplyStatus.QUEUE_FULL
+    ready[0] = True
+    inbox.drain()
+    assert calls == ["Z", "A", "M"]
+
+
+def test_sequence_reserved_before_failed_publication_does_not_establish_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = handoff_module._publish_record
+
+    def fail(*_args) -> Path:
+        raise OSError("injected failure before pending visibility")
+
+    monkeypatch.setattr(handoff_module, "_publish_record", fail)
+    with pytest.raises(OSError):
+        publish(tmp_path, command("Z"))
+    monkeypatch.setattr(handoff_module, "_publish_record", original)
+    later = publish(tmp_path, command("A"))
+    retried = publish(tmp_path, command("Z"))
+    assert _publication_key(later)[1] < _publication_key(retried)[1]
+
+
+def test_real_controller_capacity_defers_following_batches_in_publication_order(
+    tmp_path: Path,
+) -> None:
+    completions = []
+    started: list[str] = []
+
+    class Runner:
+        def start(self) -> None:
+            pass
+
+    def factory(request, completion):
+        started.append(request.path.name)
+        completions.append(completion)
+        return Runner()
+
+    controller = QuickActionController(factory)
+    for index in range(8):
+        assert controller.submit(tmp_path / f"filler-{index}").accepted
+    inbox: DurableHandoff
+    attempts: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        attempts.append(value.request_id)
+        admission = controller.submit(value.quick_rename_paths)
+        if admission.accepted:
+            assert admission.request is not None
+            inbox.note_controller_request(value.request_id, admission.request)
+            return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+        return LocalReply(1, value.request_id, LocalReplyStatus.QUEUE_FULL)
+
+    inbox = DurableHandoff(tmp_path, submit, controller=controller)
+    for request_id in ("Z", "A", "M"):
+        publish(tmp_path, command(request_id, [str(tmp_path / request_id)]))
+    inbox.drain()
+    assert attempts == ["Z", "A"]
+    assert (inbox.pending / "A.json").exists()
+    assert (inbox.pending / "M.json").exists()
+    completions[0](None, None)
+    inbox.drain()
+    assert attempts == ["Z", "A", "A", "M"]
+    completions[1](None, None)
+    inbox.drain()
+    assert attempts == ["Z", "A", "A", "M", "M"]
+    for index in range(2, 11):
+        completions[index](None, None)
+    assert started[-3:] == ["Z", "A", "M"]
+    assert all(
+        inbox._seen[request_id]["execution"] == "completed" for request_id in ("Z", "A", "M")
+    )

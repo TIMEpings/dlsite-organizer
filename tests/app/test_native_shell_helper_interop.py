@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -12,6 +13,12 @@ import pytest
 from PySide6.QtCore import QCoreApplication, QEventLoop
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
+from dlsite_organizer.app.durable_handoff import (
+    DurableHandoff,
+    _publication_key,
+    _publication_lock,
+    publish,
+)
 from dlsite_organizer.app.single_instance import (
     MAX_REQUEST_FRAME_SIZE,
     LocalCommand,
@@ -29,13 +36,105 @@ from dlsite_organizer.domain.quick_rename import MAX_QUICK_RENAME_ITEMS
 def _native_client_path() -> Path:
     repository = Path(__file__).resolve().parents[2]
     return (
-        repository
-        / "build"
-        / "native"
-        / "shell_helper"
-        / "bin"
-        / "shell_helper_interop_client.exe"
+        repository / "build" / "native" / "shell_helper" / "bin" / "shell_helper_interop_client.exe"
     )
+
+
+def test_native_and_python_durable_publication_share_order_and_byte_lock(
+    qcore: QCoreApplication, tmp_path: Path
+) -> None:
+    client = _require_native_client()
+    profile = tmp_path / "mixed-publication"
+
+    def request(request_id: str) -> LocalCommand:
+        return LocalCommand(1, request_id, LocalCommandName.QUICK_RENAME, {"paths": [r"C:\A"]})
+
+    first = publish(profile, request("Z-python"))
+    root = first.parent.parent
+    with _publication_lock(root):
+        process = subprocess.Popen(
+            [
+                str(client),
+                "--profile-root",
+                str(profile),
+                "--publish-id",
+                "A-native",
+                "--path",
+                r"C:\B",
+            ]
+        )
+        assert _pump_until(qcore, lambda: (root / "prepared" / "A-native.json").exists())
+        assert process.poll() is None
+        assert not (root / "pending" / "A-native.json").exists()
+    try:
+        assert process.wait(timeout=8) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+    publish(profile, request("M-python"))
+    paths = [
+        root / "pending" / f"{request_id}.json"
+        for request_id in ("Z-python", "A-native", "M-python")
+    ]
+    assert [_publication_key(path)[1] for path in paths] == [1, 2, 3]
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    DurableHandoff(profile, submit).drain()
+    assert calls == ["Z-python", "A-native", "M-python"]
+
+
+def test_concurrent_native_and_python_processes_publish_unique_order(tmp_path: Path) -> None:
+    client = _require_native_client()
+    root = tmp_path / "handoff" / "v1"
+    processes: list[subprocess.Popen] = []
+    try:
+        with _publication_lock(root):
+            for index in range(4):
+                processes.append(
+                    subprocess.Popen(
+                        [
+                            str(client),
+                            "--profile-root",
+                            str(tmp_path),
+                            "--publish-id",
+                            f"native-{index}",
+                            "--path",
+                            r"C:\A",
+                        ]
+                    )
+                )
+                script = (
+                    "from pathlib import Path; "
+                    "from dlsite_organizer.app.durable_handoff import publish; "
+                    "from dlsite_organizer.app.single_instance "
+                    "import LocalCommand, LocalCommandName; "
+                    f"publish(Path({str(tmp_path)!r}), LocalCommand(1, 'python-{index}', "
+                    r"LocalCommandName.QUICK_RENAME, {'paths': [r'C:\A']}))"
+                )
+                processes.append(subprocess.Popen([sys.executable, "-c", script]))
+            assert not list((root / "pending").glob("*.json"))
+        for process in processes:
+            assert process.wait(timeout=10) == 0
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=3)
+    keys = sorted(_publication_key(path) for path in (root / "pending").glob("*.json"))
+    assert [key[1] for key in keys] == list(range(1, 9))
+    calls: list[str] = []
+
+    def submit(value: LocalCommand) -> LocalReply:
+        calls.append(value.request_id)
+        return LocalReply(1, value.request_id, LocalReplyStatus.ACCEPTED)
+
+    DurableHandoff(tmp_path, submit).drain()
+    assert calls == [key[2] for key in keys]
 
 
 def _require_native_client() -> Path:
@@ -166,9 +265,7 @@ def test_native_win32_client_rejects_oversized_batch_before_ipc_write(
             LocalReply(1, command.request_id, LocalReplyStatus.ACCEPTED),
         )[1],
     )
-    paths = tuple(
-        rf"C:\batch\RJ{index:08d}" for index in range(MAX_QUICK_RENAME_ITEMS + 1)
-    )
+    paths = tuple(rf"C:\batch\RJ{index:08d}" for index in range(MAX_QUICK_RENAME_ITEMS + 1))
     try:
         result = _run_native(qcore, client, profile, paths)
         assert result.returncode == 0, result.stderr

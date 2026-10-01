@@ -329,7 +329,7 @@ def _decode_json_object(frame: bytes, maximum_frame_size: int) -> dict[str, obje
         )
     except ProtocolError:
         raise
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise ProtocolError("payload is not valid JSON", code="invalid_json") from exc
     return _validate_json_object(value, label="top-level payload")
 
@@ -561,23 +561,23 @@ class LocalCommandServer(QObject):
         self._closed = True
         self._server.close()
         for state in tuple(self._connections.values()):
-            state.timer.stop()
-            state.socket.abort()
-            state.socket.deleteLater()
-        self._connections.clear()
+            self._cleanup_connection(state.socket)
 
     def _on_new_connection(self) -> None:
         while self._server.hasPendingConnections():
             socket = self._server.nextPendingConnection()
             if socket is None:
                 return
-            timer = QTimer(self)
+            timer = QTimer(socket)
             timer.setSingleShot(True)
             state = _ConnectionState(socket, bytearray(), timer)
             key = id(socket)
             self._connections[key] = state
             socket.readyRead.connect(lambda socket=socket: self._on_ready_read(socket))
             socket.disconnected.connect(lambda socket=socket: self._on_disconnected(socket))
+            socket.errorOccurred.connect(
+                lambda _error, socket=socket: self._cleanup_connection(socket)
+            )
             socket.bytesWritten.connect(
                 lambda _count, socket=socket: self._on_bytes_written(socket)
             )
@@ -589,6 +589,15 @@ class LocalCommandServer(QObject):
         return self._connections.get(id(socket))
 
     def _on_ready_read(self, socket: QLocalSocket) -> None:
+        try:
+            self._receive_request(socket)
+        except Exception:
+            # Programmer/internal failures remain visible, but cannot strand a
+            # connection in a Qt callback with a stopped timeout.
+            logger.exception("local IPC request processing failed")
+            self._cleanup_connection(socket)
+
+    def _receive_request(self, socket: QLocalSocket) -> None:
         state = self._state_for(socket)
         if state is None or state.response_sent:
             return
@@ -604,7 +613,6 @@ class LocalCommandServer(QObject):
             self._reject(socket, exc)
             return
 
-        state.timer.stop()
         try:
             command = decode_request(bytes(state.buffer))
         except ProtocolError as exc:
@@ -614,7 +622,7 @@ class LocalCommandServer(QObject):
         try:
             reply = self._handler(command)
         except Exception:
-            logger.error("local IPC command handler failed")
+            logger.exception("local IPC command handler failed")
             reply = LocalReply(
                 PROTOCOL_VERSION,
                 command.request_id,
@@ -634,7 +642,6 @@ class LocalCommandServer(QObject):
         state = self._state_for(socket)
         if state is None or state.response_sent:
             return
-        state.timer.stop()
         self.protocol_rejected.emit(error.code)
         status = (
             LocalReplyStatus.UNSUPPORTED_VERSION
@@ -646,17 +653,26 @@ class LocalCommandServer(QObject):
             if error.request_id and _REQUEST_ID_RE.fullmatch(error.request_id)
             else _UNKNOWN_REQUEST_ID
         )
-        detail = (
-            quick_rename_batch_limit_message()
-            if error.code == "batch_limit"
-            else error.code
-        )
+        detail = quick_rename_batch_limit_message() if error.code == "batch_limit" else error.code
         self._send_reply(socket, LocalReply(PROTOCOL_VERSION, request_id, status, detail))
 
     def _on_frame_timeout(self, socket: QLocalSocket) -> None:
+        state = self._state_for(socket)
+        if state is None:
+            return
+        if state.response_sent:
+            self._cleanup_connection(socket)
+            return
         self._reject(socket, ProtocolError("incomplete frame timed out", code="truncated_frame"))
 
     def _send_reply(self, socket: QLocalSocket, reply: LocalReply) -> None:
+        try:
+            self._write_reply(socket, reply)
+        except Exception:
+            logger.exception("local IPC reply failed")
+            self._cleanup_connection(socket)
+
+    def _write_reply(self, socket: QLocalSocket, reply: LocalReply) -> None:
         state = self._state_for(socket)
         if state is None or state.response_sent:
             return
@@ -676,11 +692,14 @@ class LocalCommandServer(QObject):
                 )
             )
         state.response_sent = True
+        # A timeout rejection also needs a bounded reply-flush lifetime.
+        state.timer.start(self._incomplete_timeout_ms)
         socket.write(frame)
         socket.flush()
-        if socket.bytesToWrite() == 0:
+        if self._state_for(socket) is not None and socket.bytesToWrite() == 0:
+            state.waiting_for_bytes = False
             socket.disconnectFromServer()
-        else:
+        elif self._state_for(socket) is not None:
             state.waiting_for_bytes = True
 
     def _on_bytes_written(self, socket: QLocalSocket) -> None:
@@ -690,9 +709,23 @@ class LocalCommandServer(QObject):
             socket.disconnectFromServer()
 
     def _on_disconnected(self, socket: QLocalSocket) -> None:
+        self._cleanup_connection(socket)
+
+    def _cleanup_connection(self, socket: QLocalSocket) -> None:
+        """Pop first so overlapping timeout/error/disconnect/shutdown are safe."""
         state = self._connections.pop(id(socket), None)
         if state is not None:
             state.timer.stop()
+            state.timer.timeout.disconnect()
+            socket.readyRead.disconnect()
+            socket.disconnected.disconnect()
+            socket.bytesWritten.disconnect()
+            socket.errorOccurred.disconnect()
+            # The socket owns its timer. One deferred socket deletion destroys
+            # both objects in Qt's parent/child order.
+            state.buffer.clear()
+            if socket.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+                socket.abort()
             socket.deleteLater()
 
 

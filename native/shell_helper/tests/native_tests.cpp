@@ -926,6 +926,10 @@ bool TestRealDurablePublisher() {
     DeleteFileW(blocked_prepared.c_str());
     DeleteFileW((root + L"\\handoff\\v1\\prepared\\failed-id.json").c_str());
     DeleteFileW((root + L"\\handoff\\v1\\pending\\native-id.json").c_str());
+    DeleteFileW((root + L"\\handoff\\v1\\ordering\\native-id.seq").c_str());
+    RemoveDirectoryW((root + L"\\handoff\\v1\\ordering").c_str());
+    DeleteFileW((root + L"\\handoff\\v1\\publication-sequence").c_str());
+    DeleteFileW((root + L"\\handoff\\v1\\publication.lock").c_str());
     RemoveDirectoryW((root + L"\\handoff\\v1\\prepared").c_str());
     RemoveDirectoryW((root + L"\\handoff\\v1\\pending").c_str());
     RemoveDirectoryW((root + L"\\handoff\\v1\\recoverable").c_str());
