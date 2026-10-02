@@ -30,7 +30,9 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysis,
     TranslationAnalysisStatus,
 )
+from dlsite_organizer.ui.theme import ButtonRole, set_button_role
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
+from dlsite_organizer.ui.widgets.constrained_content import ConstrainedContent
 from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
@@ -52,6 +54,9 @@ class LookupPage(QWidget):
         self.refresh_button = QPushButton("强制刷新")
 
         self._build_ui()
+        set_button_role(self.query_button, ButtonRole.PRIMARY)
+        set_button_role(self.refresh_button, ButtonRole.SECONDARY)
+        set_button_role(self.copy_button, ButtonRole.SECONDARY)
         self.query_button.clicked.connect(self.start_lookup)
         self.refresh_button.clicked.connect(self.force_refresh)
         self.code_input.returnPressed.connect(self.start_lookup)
@@ -64,8 +69,9 @@ class LookupPage(QWidget):
         scroll_area.setObjectName("lookupScrollArea")
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setWidgetResizable(True)
-        content = QWidget()
-        layout = QVBoxLayout(content)
+        scroll_area.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        content = ConstrainedContent(1120)
+        layout = content.content_layout
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(18)
 

@@ -46,6 +46,8 @@ from dlsite_organizer.services.naming import (
     NamingService,
     NamingTemplateError,
 )
+from dlsite_organizer.ui.theme import ButtonRole, set_button_role
+from dlsite_organizer.ui.widgets.constrained_content import ConstrainedContent
 from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
@@ -92,8 +94,9 @@ class SettingsPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        content = ConstrainedContent(1080)
+        content_layout = content.content_layout
         content_layout.setContentsMargins(0, 4, 8, 4)
         content_layout.setSpacing(12)
 
@@ -139,8 +142,10 @@ class SettingsPage(QWidget):
         explorer_actions = QHBoxLayout()
         self.register_explorer_button = QPushButton("注册 / 更新")
         self.register_explorer_button.setObjectName("registerExplorerButton")
+        set_button_role(self.register_explorer_button, ButtonRole.SECONDARY)
         self.remove_explorer_button = QPushButton("移除")
         self.remove_explorer_button.setObjectName("removeExplorerButton")
+        set_button_role(self.remove_explorer_button, ButtonRole.DANGER)
         explorer_actions.addWidget(self.register_explorer_button)
         explorer_actions.addWidget(self.remove_explorer_button)
         explorer_actions.addStretch(1)
@@ -191,6 +196,7 @@ class SettingsPage(QWidget):
             button = QPushButton(f"{label} {variable}")
             button.setObjectName("templateVariableButton")
             button.setToolTip(f"插入 {variable}")
+            set_button_role(button, ButtonRole.QUIET)
             button.clicked.connect(
                 lambda _checked=False, value=variable: self._insert_variable(value)
             )
@@ -294,8 +300,10 @@ class SettingsPage(QWidget):
         self.save_button = QPushButton("保存设置")
         self.save_button.setObjectName("primaryButton")
         self.save_button.setMinimumSize(112, 38)
+        set_button_role(self.save_button, ButtonRole.PRIMARY)
         self.reset_button = QPushButton("恢复默认设置")
         self.reset_button.setMinimumSize(124, 38)
+        set_button_role(self.reset_button, ButtonRole.QUIET)
         self.settings_status_label = QLabel()
         self.settings_status_label.setObjectName("statusLabel")
         self.settings_status_label.setWordWrap(True)
@@ -333,6 +341,7 @@ class SettingsPage(QWidget):
         path_label.setWordWrap(True)
         button = QPushButton(button_text)
         button.setObjectName("openPathButton")
+        set_button_role(button, ButtonRole.QUIET)
         button.clicked.connect(lambda _checked=False, value=path: self._open_path(value))
         row_layout.addWidget(path_label, 1)
         row_layout.addWidget(button)

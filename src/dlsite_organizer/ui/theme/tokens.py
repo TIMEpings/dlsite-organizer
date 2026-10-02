@@ -21,7 +21,9 @@ class Shape:
     """Shared corner radii."""
 
     CONTROL_RADIUS = 7
+    SOFT_RADIUS = 8
     PANEL_RADIUS = 10
+    SCROLLBAR_RADIUS = 4
 
 
 class Geometry:
@@ -32,6 +34,7 @@ class Geometry:
     SIDEBAR_WIDTH = 184
     TITLE_BAR_HEIGHT = 40
     CAPTION_WIDTH = 46
+    PAGE_HEADER_HEIGHT = 52
 
 
 class FontRole(StrEnum):
@@ -46,6 +49,15 @@ class FontRole(StrEnum):
     STATUS = "status"
 
 
+class ButtonRole(StrEnum):
+    """Presentation-only hierarchy for shared push button styling."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    QUIET = "quiet"
+    DANGER = "danger"
+
+
 @dataclass(frozen=True, slots=True)
 class FontSpec:
     point_size: float
@@ -53,8 +65,8 @@ class FontSpec:
 
 
 FONT_ROLES: dict[FontRole, FontSpec] = {
-    FontRole.PAGE_TITLE: FontSpec(20, 600),
-    FontRole.PAGE_DESCRIPTION: FontSpec(10),
+    FontRole.PAGE_TITLE: FontSpec(19, 600),
+    FontRole.PAGE_DESCRIPTION: FontSpec(9.5),
     FontRole.SECTION_TITLE: FontSpec(10, 600),
     FontRole.BODY: FontSpec(10),
     FontRole.BODY_STRONG: FontSpec(10, 600),
@@ -105,9 +117,9 @@ LIGHT_COLORS = SemanticColors(
     accent_pressed="#2245A9",
     selection="#E6EDFF",
     focus="#6D91F2",
-    success="#16805B",
-    warning="#A65C00",
-    error="#BC3543",
-    blocked="#A52D3C",
-    stale="#8B5A16",
+    success="#287354",
+    warning="#805111",
+    error="#A33D48",
+    blocked="#8F3340",
+    stale="#76521E",
 )

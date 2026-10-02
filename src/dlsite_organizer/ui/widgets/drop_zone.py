@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QMimeData, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
+    QColor,
     QDragEnterEvent,
     QDragLeaveEvent,
     QDragMoveEvent,
@@ -20,6 +21,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QFrame, QLabel, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
 from dlsite_organizer.app.branding import load_branding_pixmap
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 
 
 class DirectoryDropZone(QFrame):
@@ -98,15 +100,11 @@ class DirectoryDropZone(QFrame):
             )
         painter.restore()
 
-        border_role = (
-            QPalette.ColorRole.Highlight
-            if self.property("dragActive") is True
-            else QPalette.ColorRole.Mid
+        drag_active = self.property("dragActive") is True
+        border_color = QColor(
+            LIGHT_COLORS.focus if drag_active else LIGHT_COLORS.border_strong
         )
-        border_color = palette.color(border_role)
-        if self.property("dragActive") is not True:
-            border_color.setAlpha(190)
-        pen = QPen(border_color, 2.0, Qt.PenStyle.DashLine)
+        pen = QPen(border_color, 1.5 if drag_active else 1.25, Qt.PenStyle.DashLine)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)

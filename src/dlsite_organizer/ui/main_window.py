@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import StrEnum
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -40,6 +40,8 @@ from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.pages.rename_history_page import RenameHistoryPage
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
 from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
+from dlsite_organizer.ui.theme.icons import navigation_icon
+from dlsite_organizer.ui.theme.tokens import Geometry
 from dlsite_organizer.ui.widgets.navigation import NavigationItemDelegate
 from dlsite_organizer.ui.widgets.title_bar import TitleBar
 from dlsite_organizer.ui.windows.native_chrome import WindowsChrome
@@ -116,32 +118,45 @@ class MainWindow(QMainWindow):
 
         self.navigation = QWidget()
         self.navigation.setObjectName("navigation")
-        self.navigation.setFixedWidth(184)
+        self.navigation.setFixedWidth(Geometry.SIDEBAR_WIDTH)
         nav_layout = QVBoxLayout(self.navigation)
-        nav_layout.setContentsMargins(16, 12, 16, 16)
-        nav_layout.setSpacing(12)
+        nav_layout.setContentsMargins(16, 28, 16, 16)
+        nav_layout.setSpacing(0)
 
         self.navigation_list = QListWidget()
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
+        self.navigation_list.setIconSize(QSize(18, 18))
         self.navigation_list.setItemDelegate(NavigationItemDelegate(self.navigation_list))
         nav_layout.addWidget(self.navigation_list, 1)
 
         self.settings_button = QPushButton("设置")
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setCheckable(True)
+        self.settings_button.setIcon(navigation_icon("settings"))
+        self.settings_button.setIconSize(QSize(18, 18))
+        self.settings_button.setAccessibleName("设置")
         self.settings_button.setToolTip("打开设置页面")
         self.settings_button.clicked.connect(self._navigate_from_sidebar_to_settings)
-        nav_layout.addWidget(self.settings_button)
 
         self.about_button = QPushButton(f"关于 · v{__version__}")
         self.about_button.setObjectName("aboutButton")
         self.about_button.setCheckable(True)
+        self.about_button.setIcon(navigation_icon("about"))
+        self.about_button.setIconSize(QSize(18, 18))
+        self.about_button.setAccessibleName(f"关于，版本 {__version__}")
         self.about_button.setToolTip("打开关于页面")
         self.about_button.clicked.connect(self.show_about_page)
-        nav_layout.addWidget(self.about_button)
+        footer_group = QVBoxLayout()
+        footer_group.setContentsMargins(0, 0, 0, 0)
+        footer_group.setSpacing(4)
+        footer_group.addWidget(self.settings_button)
+        footer_group.addWidget(self.about_button)
+        nav_layout.addLayout(footer_group)
+
         self.lightweight_button = QPushButton("切换到轻量模式")
         self.lightweight_button.setObjectName("modeButton")
+        nav_layout.addSpacing(12)
         self.lightweight_button.clicked.connect(self.request_lightweight_mode)
         nav_layout.addWidget(self.lightweight_button)
 
@@ -177,13 +192,15 @@ class MainWindow(QMainWindow):
         for page in self._pages_by_identity.values():
             self.pages.addWidget(page)
 
-        for page_identity, label in (
-            (MainPage.ORGANIZER, "整理"),
-            (MainPage.LOOKUP, "查询"),
-            (MainPage.HISTORY, "重命名历史"),
+        for page_identity, label, icon_name in (
+            (MainPage.ORGANIZER, "整理", "organizer"),
+            (MainPage.LOOKUP, "查询", "lookup"),
+            (MainPage.HISTORY, "重命名历史", "history"),
         ):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, page_identity.value)
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, label)
+            item.setIcon(navigation_icon(icon_name))
             self.navigation_list.addItem(item)
 
         self._current_page: MainPage | None = None

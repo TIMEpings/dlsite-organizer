@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +26,9 @@ from dlsite_organizer.services.update_checker import (
     UpdateCheckService,
     UpdateCheckStatus,
 )
+from dlsite_organizer.ui.theme import ButtonRole, set_button_role
+from dlsite_organizer.ui.widgets.constrained_content import ConstrainedContent
+from dlsite_organizer.ui.widgets.page_header import PageHeader
 from dlsite_organizer.ui.workers.update_check_worker import (
     UpdateCheckServiceLike,
     UpdateCheckWorker,
@@ -55,9 +59,21 @@ class AboutPage(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+
+        content = ConstrainedContent(880)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        content_layout = content.content_layout
+        content_layout.setSpacing(12)
 
         header = QHBoxLayout()
+        header.setSpacing(16)
         self.branding_image = QLabel()
         self.branding_image.setObjectName("aboutBrandingImage")
         self.branding_image.setFixedSize(104, 104)
@@ -70,21 +86,20 @@ class AboutPage(QWidget):
             self.branding_image.setPixmap(pixmap)
         header.addWidget(self.branding_image)
 
-        header_copy = QVBoxLayout()
-        heading = QLabel("关于")
-        heading.setObjectName("pageTitle")
-        header_copy.addWidget(heading)
-        header_copy.addWidget(QLabel("DLsite Organizer"))
-        header_copy.addStretch(1)
-        header.addLayout(header_copy, 1)
-        layout.addLayout(header)
+        self.about_header = PageHeader("DLsite Organizer", f"v{__version__}")
+        version_value = self.about_header.description_label
+        if version_value is None:
+            raise RuntimeError("About identity header must include its version label")
+        self.version_value: QLabel = version_value
+        self.version_label = self.version_value
+        header.addWidget(self.about_header, 1, Qt.AlignmentFlag.AlignVCenter)
+        content_layout.addLayout(header)
 
-        identity = QGroupBox("DLsite Organizer")
+        identity = QGroupBox("产品信息")
+        identity.setObjectName("aboutProductInfo")
+        self.identity_box = identity
         identity_layout = QFormLayout(identity)
         identity_layout.setHorizontalSpacing(20)
-        self.version_value = QLabel(f"v{__version__}")
-        self.version_value.setObjectName("aboutVersionValue")
-        self.version_label = self.version_value
         self.description_value = QLabel("DLsite 作品元数据查询与文件夹整理工具")
         self.description_value.setWordWrap(True)
         self.description_value.setObjectName("aboutDescriptionValue")
@@ -96,73 +111,85 @@ class AboutPage(QWidget):
         self.copyright_label = self.copyright_value
         self.license_value = QLabel("MIT")
         self.license_value.setObjectName("aboutLicenseValue")
-        identity_layout.addRow("Version", self.version_value)
         identity_layout.addRow("简介", self.description_value)
         identity_layout.addRow("开发与维护", self.developer_value)
         identity_layout.addRow("版权", self.copyright_value)
         identity_layout.addRow("License", self.license_value)
-        layout.addWidget(identity)
+        content_layout.addWidget(identity)
 
         updates = QGroupBox("版本更新")
-        updates_layout = QVBoxLayout(updates)
+        updates.setObjectName("aboutUpdateSection")
+        self.update_section = updates
+        updates_layout = QHBoxLayout(updates)
+        updates_layout.setSpacing(8)
         current_version_row = QHBoxLayout()
         current_version_row.addWidget(QLabel("当前版本"))
         self.update_current_version_value = QLabel(f"v{__version__}")
         self.update_current_version_value.setObjectName("aboutCurrentVersionValue")
         current_version_row.addWidget(self.update_current_version_value)
-        current_version_row.addStretch(1)
         updates_layout.addLayout(current_version_row)
 
-        update_actions = QHBoxLayout()
-        self.check_update_button = QPushButton("检查更新")
-        self.check_update_button.setObjectName("checkUpdateButton")
-        self.release_page_button = QPushButton("查看发布页")
+        self.release_page_button = QPushButton("查看发布页面")
         self.release_page_button.setObjectName("releasePageButton")
         self.release_page_button.setEnabled(False)
         self.release_page_button.hide()
-        update_actions.addWidget(self.check_update_button)
-        update_actions.addWidget(self.release_page_button)
-        update_actions.addStretch(1)
-        updates_layout.addLayout(update_actions)
-
         self.update_status_label = QLabel("尚未检查更新")
         self.update_status_label.setObjectName("statusLabel")
         self.update_status_label.setWordWrap(True)
-        updates_layout.addWidget(self.update_status_label)
-        layout.addWidget(updates)
+        updates_layout.addWidget(self.update_status_label, 1)
+
+        self.check_update_button = QPushButton("检查更新")
+        self.check_update_button.setObjectName("checkUpdateButton")
+        set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+        set_button_role(self.release_page_button, ButtonRole.SECONDARY)
+        updates_layout.addWidget(self.release_page_button)
+        updates_layout.addWidget(self.check_update_button)
+        content_layout.addWidget(updates)
 
         self.disclaimer_value = QLabel(
             "本项目为非官方工具，与 DLsite / 株式会社エイシス无官方关联。"
         )
         self.disclaimer_value.setObjectName("aboutDisclaimer")
         self.disclaimer_value.setWordWrap(True)
-        layout.addWidget(self.disclaimer_value)
-
         self.privacy_value = QLabel(
             "应用数据保存在本机。没有遥测、分析或远程错误上报。作品查询和可选封面下载会访问 "
             "DLsite；只有用户点击“检查更新”时才会以匿名 HTTPS 访问 GitHub 公开 Releases。"
         )
         self.privacy_value.setObjectName("aboutPrivacy")
         self.privacy_value.setWordWrap(True)
-        layout.addWidget(self.privacy_value)
+        privacy_section = QWidget()
+        privacy_layout = QVBoxLayout(privacy_section)
+        privacy_layout.setContentsMargins(0, 0, 0, 0)
+        privacy_layout.setSpacing(4)
+        privacy_heading = QLabel("隐私与声明")
+        privacy_heading.setObjectName("sectionLabel")
+        privacy_layout.addWidget(privacy_heading)
+        privacy_layout.addWidget(self.disclaimer_value)
+        privacy_layout.addWidget(self.privacy_value)
+        content_layout.addWidget(privacy_section)
 
         notices = QGroupBox("许可证与声明")
+        notices.setObjectName("aboutLicenseSection")
+        self.notices_box = notices
         notices_layout = QVBoxLayout(notices)
         notices_layout.addWidget(QLabel("本应用使用 MIT 许可证；第三方组件继续适用各自许可证。"))
         buttons = QHBoxLayout()
         self.license_button = QPushButton("查看 LICENSE")
         self.license_button.setObjectName("licenseButton")
+        set_button_role(self.license_button, ButtonRole.QUIET)
         self.third_party_notices_button = QPushButton("查看 THIRD_PARTY_NOTICES")
         self.third_party_notices_button.setObjectName("thirdPartyNoticesButton")
+        set_button_role(self.third_party_notices_button, ButtonRole.QUIET)
         self.third_party_licenses_button = QPushButton("查看第三方许可证目录")
         self.third_party_licenses_button.setObjectName("thirdPartyLicensesButton")
+        set_button_role(self.third_party_licenses_button, ButtonRole.QUIET)
         buttons.addWidget(self.license_button)
         buttons.addWidget(self.third_party_notices_button)
         buttons.addWidget(self.third_party_licenses_button)
         buttons.addStretch(1)
         notices_layout.addLayout(buttons)
-        layout.addWidget(notices)
-        layout.addStretch(1)
+        content_layout.addWidget(notices)
+        content_layout.addStretch(1)
 
         self.license_button.clicked.connect(
             lambda: self._open_resource("LICENSE", "LICENSE")
@@ -186,6 +213,8 @@ class AboutPage(QWidget):
         self._release_url = None
         self.release_page_button.setEnabled(False)
         self.release_page_button.hide()
+        set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+        set_button_role(self.release_page_button, ButtonRole.SECONDARY)
         self.check_update_button.setEnabled(False)
         self._set_update_status("正在检查…", "loading")
 
@@ -213,6 +242,8 @@ class AboutPage(QWidget):
                 thread.deleteLater()
             self._update_thread = None
             self._update_worker = None
+            self.check_update_button.setText("重新检查")
+            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
             self.check_update_button.setEnabled(True)
             self._set_update_status("检查失败，请稍后重试", "error")
 
@@ -230,6 +261,8 @@ class AboutPage(QWidget):
             self._release_url = None
             self.release_page_button.setEnabled(False)
             self.release_page_button.hide()
+            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+            set_button_role(self.release_page_button, ButtonRole.SECONDARY)
             self._set_update_status("检查失败，请稍后重试", "error")
 
         self._update_thread.quit()
@@ -241,6 +274,8 @@ class AboutPage(QWidget):
         self.release_page_button.hide()
 
         if result.status is UpdateCheckStatus.UP_TO_DATE:
+            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+            set_button_role(self.release_page_button, ButtonRole.SECONDARY)
             self._set_update_status("已是最新版本", "success")
         elif (
             result.status is UpdateCheckStatus.UPDATE_AVAILABLE
@@ -249,10 +284,14 @@ class AboutPage(QWidget):
             and result.release_url.strip()
         ):
             self._release_url = result.release_url
+            set_button_role(self.check_update_button, ButtonRole.SECONDARY)
+            set_button_role(self.release_page_button, ButtonRole.PRIMARY)
             self._set_update_status(f"发现新版本 {result.latest_version}", "success")
             self.release_page_button.setEnabled(True)
             self.release_page_button.show()
         else:
+            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+            set_button_role(self.release_page_button, ButtonRole.SECONDARY)
             self._set_update_status("检查失败，请稍后重试", "error")
 
     @Slot()
@@ -260,6 +299,7 @@ class AboutPage(QWidget):
         """Release both owned objects only after the QThread has stopped."""
         self._update_thread = None
         self._update_worker = None
+        self.check_update_button.setText("重新检查")
         self.check_update_button.setEnabled(True)
 
     @Slot()

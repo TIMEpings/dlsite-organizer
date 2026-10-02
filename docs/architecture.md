@@ -43,11 +43,13 @@ item; Settings and About use footer buttons but go through the same route method
 and stack insertion order do not define page identity. Pages retain their workers and state while
 hidden, and `MainWindow.is_busy()` continues to include work on hidden pages.
 
-The full-mode shell owns the light theme under `ui.theme`: semantic colors and typography roles
-live in tokens, `QPalette` supplies standard widget roles, and a limited stylesheet covers the
-sidebar, shared page title roles, legacy named surfaces, line edits, and buttons. `PageHeader` is
-used for the top-level title area on Organizer, Lookup, Rename History, and Settings. About retains
-its existing branded header, and Lightweight remains its own window with its existing layout.
+The full-mode shell owns the light theme under `ui.theme`: semantic colors, typography, and
+presentation-only button roles live in tokens, `QPalette` supplies standard widget roles, and a
+shared stylesheet covers the sidebar, page titles, scrollbars, subtle group separation, and control
+states. `PageHeader` is used on Organizer, Lookup, Rename History, Settings, and About. Lookup,
+Settings, and About use `ConstrainedContent` columns with page-specific maximum widths; Organizer
+and Rename History keep their data areas flexible. Lightweight uses the same palette and shared
+control stylesheet while retaining its native title bar and drop workflow.
 
 `DlsiteSite` builds every section-scoped URL in one place. `source_route_for()` maps the typed
 `WorkCode` to a bounded source route: RJ keeps the configured section, BJ uses `books`, and VJ

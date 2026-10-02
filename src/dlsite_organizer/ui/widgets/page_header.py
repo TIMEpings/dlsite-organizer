@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from dlsite_organizer.ui.theme.tokens import FONT_ROLES, FontRole, Spacing
+from dlsite_organizer.ui.theme.tokens import FONT_ROLES, FontRole, Geometry, Spacing
 
 
 class PageHeader(QWidget):
@@ -22,7 +22,7 @@ class PageHeader(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("pageHeader")
-        self.setMinimumHeight(56)
+        self.setMinimumHeight(Geometry.PAGE_HEADER_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         row = QHBoxLayout(self)

@@ -9,6 +9,7 @@ from typing import cast
 from PySide6.QtCore import QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -36,6 +37,8 @@ from dlsite_organizer.services.quick_rename import (
     QuickRenameStatus,
 )
 from dlsite_organizer.services.undo_service import UndoService
+from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 from dlsite_organizer.ui.widgets.drop_zone import UnifiedDropZone
 from dlsite_organizer.ui.workers.quick_rename_worker import QuickRenameWorker
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
@@ -59,6 +62,9 @@ class LightweightWindow(QMainWindow):
         quick_action_controller: QuickActionController | None = None,
     ) -> None:
         super().__init__(parent)
+        application = QApplication.instance()
+        if isinstance(application, QApplication):
+            apply_light_theme(application)
         self._quick_rename_service = quick_rename_service
         self._undo_service = undo_service
         self._settings_service = settings_service
@@ -123,7 +129,7 @@ class LightweightWindow(QMainWindow):
         actions.addWidget(self.full_mode_button)
         layout.addLayout(actions)
         self.setCentralWidget(central)
-        self.setStyleSheet(_STYLE)
+        self.setStyleSheet(light_stylesheet() + _LIGHTWEIGHT_STYLES)
 
     def start_quick_rename(
         self,
@@ -441,22 +447,19 @@ class LightweightWindow(QMainWindow):
         event.accept()
 
 
-_STYLE = """
-QMainWindow, QWidget { background: #f5f7fb; }
-QWidget { color: #1e293b; font-family: "Segoe UI", "Microsoft YaHei UI"; font-size: 14px; }
-#unifiedDropZone { background: transparent; border: 0; }
-#dropMainArea, #recentOperationArea { background: transparent; }
-#recentOperationLabel { color: #334155; font-size: 12px; font-weight: 600; }
-#recentOperationSeparator { background: transparent; color: #dbe3ef; }
-#dropZoneTitle { background: transparent; color: #23499d; font-size: 16px; font-weight: 600; }
-#dropZoneDescription { background: transparent; color: #64748b; }
-#statusLabel { color: #64748b; min-height: 22px; }
-#statusLabel[state="loading"] { color: #315fc9; }
-#statusLabel[state="success"] { color: #16805b; }
-#statusLabel[state="error"] { color: #c53b47; }
-QPushButton { background: white; border: 1px solid #cbd5e1; border-radius: 7px; padding: 7px 12px; }
-QPushButton:hover { background: #f1f5f9; }
-QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
-#quickOperationList { background: transparent; border: 0; border-radius: 0; padding: 0; }
-#quickOperationList::item { padding: 2px 0; color: #475569; }
+_LIGHTWEIGHT_STYLES = f"""
+#unifiedDropZone {{ background: transparent; border: 0; }}
+#dropMainArea, #recentOperationArea {{ background: transparent; }}
+#recentOperationLabel {{
+  color: {LIGHT_COLORS.text_secondary};
+  font-size: 9.5pt;
+  font-weight: 600;
+}}
+#recentOperationSeparator {{ background: transparent; color: {LIGHT_COLORS.border}; }}
+#quickOperationList {{ background: transparent; border: 0; border-radius: 0; padding: 0; }}
+#quickOperationList::item {{ padding: 2px 0; color: {LIGHT_COLORS.text_secondary}; }}
+#quickOperationList::item:selected {{
+  background: {LIGHT_COLORS.selection};
+  color: {LIGHT_COLORS.text_primary};
+}}
 """
