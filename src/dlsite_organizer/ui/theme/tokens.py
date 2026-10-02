@@ -30,6 +30,8 @@ class Geometry:
     CONTROL_HEIGHT = 34
     NAVIGATION_ITEM_HEIGHT = 40
     SIDEBAR_WIDTH = 184
+    TITLE_BAR_HEIGHT = 40
+    CAPTION_WIDTH = 46
 
 
 class FontRole(StrEnum):

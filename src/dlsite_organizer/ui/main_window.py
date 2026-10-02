@@ -5,12 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import StrEnum
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -22,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer import __version__
-from dlsite_organizer.app.branding import load_branding_pixmap
+from dlsite_organizer.app.branding import load_application_icon
 from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.services.cover import CoverService
@@ -42,6 +41,8 @@ from dlsite_organizer.ui.pages.rename_history_page import RenameHistoryPage
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
 from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
 from dlsite_organizer.ui.widgets.navigation import NavigationItemDelegate
+from dlsite_organizer.ui.widgets.title_bar import TitleBar
+from dlsite_organizer.ui.windows.native_chrome import WindowsChrome
 from dlsite_organizer.ui.workers.update_check_worker import UpdateCheckServiceLike
 
 
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
         rename_history_service: RenameHistoryService | None = None,
     ) -> None:
         super().__init__()
+        self._native_chrome: WindowsChrome | None = None
         application = QApplication.instance()
         if isinstance(application, QApplication):
             apply_light_theme(application)
@@ -91,38 +93,33 @@ class MainWindow(QMainWindow):
         # not mounted in the public application navigation.
         self._candidate_review_queue_service = candidate_review_queue_service
         self.setWindowTitle("DLsite Organizer")
+        self.setWindowIcon(load_application_icon())
         self.resize(1160, 800)
 
         central = QWidget()
         central.setObjectName("applicationSurface")
-        shell = QHBoxLayout(central)
+        frame = QVBoxLayout(central)
+        frame.setContentsMargins(0, 0, 0, 0)
+        frame.setSpacing(0)
+        self.title_bar = TitleBar(central)
+        self.title_bar.minimize_requested.connect(self.showMinimized)
+        self.title_bar.maximize_requested.connect(self._toggle_maximized)
+        self.title_bar.close_requested.connect(self.close)
+        self._native_chrome = WindowsChrome.create(self)
+        # Keep native styles and Qt's ordinary frame on unsupported platforms.
+        self.title_bar.setVisible(self._native_chrome is not None)
+        frame.addWidget(self.title_bar)
+        shell = QHBoxLayout()
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
+        frame.addLayout(shell, 1)
 
         self.navigation = QWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.setFixedWidth(184)
         nav_layout = QVBoxLayout(self.navigation)
-        nav_layout.setContentsMargins(16, 20, 16, 16)
+        nav_layout.setContentsMargins(16, 12, 16, 16)
         nav_layout.setSpacing(12)
-
-        brand = QWidget()
-        brand_row = QHBoxLayout(brand)
-        brand_row.setContentsMargins(0, 0, 0, 0)
-        brand_row.setSpacing(8)
-        self.branding_image = QLabel()
-        self.branding_image.setFixedSize(30, 30)
-        self.branding_image.setAccessibleName("DLsite Organizer 图标")
-        brand_pixmap = load_branding_pixmap(30)
-        if brand_pixmap is not None:
-            self.branding_image.setPixmap(brand_pixmap)
-        else:
-            self.branding_image.hide()
-        brand_row.addWidget(self.branding_image)
-        brand_label = QLabel("DLsite\nOrganizer")
-        brand_label.setObjectName("brandLabel")
-        brand_row.addWidget(brand_label, 1)
-        nav_layout.addWidget(brand)
 
         self.navigation_list = QListWidget()
         self.navigation_list.setObjectName("navigationList")
@@ -197,10 +194,16 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
         self.setStyleSheet(light_stylesheet())
+        # Polish child controls before measuring the legacy page's minimum.
+        # Create/recalculate the HWND before setting the requested client size,
+        # so Qt does not add the old native title/frame margins on first show.
+        self.ensurePolished()
+        if self._native_chrome is not None:
+            self._native_chrome.attach()
         self._update_minimum_size_from_layout()
         self.resize(
-            max(self.width(), self.minimumWidth()),
-            max(self.height(), self.minimumHeight()),
+            max(1160, self.minimumWidth()),
+            max(800, self.minimumHeight()),
         )
         if self._runtime_signals is not None:
             self._runtime_signals.mutation_history_changed.connect(
@@ -280,6 +283,31 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self.refresh_mutation_state()
         self._update_minimum_size_from_layout()
+        if self._native_chrome is not None:
+            self._native_chrome.attach()
+            # Child show/layout events can finalize legacy page hints after
+            # this parent's showEvent. Re-measure once they have been delivered.
+            QTimer.singleShot(0, self._update_minimum_size_from_layout)
+
+    @Slot()
+    def _toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "title_bar"):
+            self.title_bar.set_maximized(self.isMaximized())
+
+    def nativeEvent(self, event_type, message) -> tuple[bool, int]:
+        chrome = self._native_chrome
+        if chrome is not None and event_type == b"windows_generic_MSG":
+            handled, result = chrome.handle(int(message))
+            if handled:
+                return handled, result
+        return False, 0
 
     def _update_minimum_size_from_layout(self) -> None:
         """Honor the assembled shell and legacy Organizer page size hints."""

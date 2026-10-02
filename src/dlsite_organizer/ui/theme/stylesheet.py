@@ -23,7 +23,9 @@ QMainWindow, QStackedWidget {{ background: {colors.background}; }}
   background: {colors.sidebar};
   border-right: 1px solid {colors.border};
 }}
-#brandLabel {{ color: {colors.text_primary}; font-size: 11pt; font-weight: 600; }}
+#windowTitle {{ color: {colors.text_primary}; font-size: 10pt; }}
+#systemMenuIcon {{ background: transparent; border: 0; padding: 0; }}
+#systemMenuIcon:hover {{ background: {colors.surface_secondary}; }}
 #navigationList {{ background: transparent; border: 0; }}
 #navigationList::item {{
   min-height: {Geometry.NAVIGATION_ITEM_HEIGHT}px;

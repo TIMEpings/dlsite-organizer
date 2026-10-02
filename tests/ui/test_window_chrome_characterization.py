@@ -18,7 +18,12 @@ def window():
     window.show()
     app.processEvents()
     yield window
-    window.set_close_handler(lambda _window, event: event.accept())
+
+    def accept_close(_window: object, event: object) -> None:
+        assert isinstance(event, QCloseEvent)
+        event.accept()
+
+    window.set_close_handler(accept_close)
     window.close()
 
 
