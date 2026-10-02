@@ -53,7 +53,7 @@ def test_production_view_has_no_cell_widgets_and_survives_navigation(qapp, tmp_p
         assert isinstance(model, OrganizerPreviewModel)
         assert model.state is page.state
         assert not page.table.isSortingEnabled()
-        assert not page.table.acceptDrops() and not page.table.viewport().acceptDrops()
+        assert page.table.acceptDrops() and page.table.viewport().acceptDrops()
         assert len(page.table.findChildren(QWidget)) == widget_count
         index = page.preview_model.index(count - 1, 0)
         page.table.setCurrentIndex(index)
@@ -137,12 +137,12 @@ def test_drop_zone_event_appends_without_table_consuming_drop(qapp, tmp_path):
                                 Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         QCoreApplication.sendEvent(page.drop_zone, enter)
         assert enter.isAccepted()
-        assert page.input_panel.property("dropActive") is True
+        assert page.drop_overlay.isVisible()
         drop = QDropEvent(QPointF(20, 20), Qt.DropAction.CopyAction, mime,
                           Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         QCoreApplication.sendEvent(page.drop_zone, drop)
         assert drop.isAccepted()
-        assert page.input_panel.property("dropActive") is False
+        assert not page.drop_overlay.isVisible()
         _wait_for_scan_idle(qapp, page)
         assert page.preview is not None
         assert [plan.source_path for plan in page.preview.plans] == [first, second]

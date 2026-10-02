@@ -213,8 +213,6 @@ class OrganizerStatusDelegate(QStyledItemDelegate):
         foreground = option.palette.color(
             QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text
         )
-        if selected:
-            mark_color = foreground
         painter.save()
         painter.setClipRect(option.rect)
         mark_rect = QRect(rect.left(), rect.center().y() - 8, 18, 18)

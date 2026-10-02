@@ -210,6 +210,11 @@ def test_context_paths_keep_full_selection_and_copy_without_global_widget_change
     page.set_preview(preview)
     page.table.setCurrentIndex(page.preview_model.index(0, 0))
     page.set_root_path(tmp_path / "next-scan")
+    page.resize(1160, 900)
+    page.show()
+    page.activateWindow()
+    settle(qapp)
+    page.detail_toggle.setChecked(True)
     previous_clipboard = qapp.clipboard().text()
     try:
         assert page.state.committed_preview_root == root
@@ -221,6 +226,8 @@ def test_context_paths_keep_full_selection_and_copy_without_global_widget_change
         ):
             assert isinstance(display, OrganizerPathDisplay)
             assert display.path_input.isReadOnly() and not display.path_input.hasFrame()
+            display.path_input.setFocus()
+            settle(qapp)
             display.path_input.selectAll()
             QTest.keyClick(display.path_input, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
             assert qapp.clipboard().text() == display.text()

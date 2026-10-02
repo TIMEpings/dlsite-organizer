@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QEvent, QModelIndex, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -59,9 +59,11 @@ from dlsite_organizer.ui.state.organizer_state import (
 from dlsite_organizer.ui.state.organizer_state import (
     PreviewStaleReason as PreviewStaleReason,
 )
+from dlsite_organizer.ui.theme.icons import execution_check_icon
 from dlsite_organizer.ui.theme.stylesheet import set_button_role
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, ButtonRole
 from dlsite_organizer.ui.widgets.compact_drop_area import CompactDirectoryDropArea
+from dlsite_organizer.ui.widgets.drop_zone import local_directory_paths
 from dlsite_organizer.ui.widgets.organizer_review import (
     OrganizerElidedLabel,
     OrganizerPathDisplay,
@@ -101,6 +103,7 @@ class OrganizerPage(QWidget):
         self.preview_model = OrganizerPreviewModel(self.state, self)
         self._next_scan_mode = ScanMode.REPLACE
         self._build_ui()
+        self._install_workspace_drop_routing()
 
         self.browse_button.clicked.connect(self.choose_root)
         # QPushButton.clicked carries a checked: bool argument.  Keep that
@@ -161,7 +164,22 @@ class OrganizerPage(QWidget):
         self.scan_button = QPushButton("扫描并预览")
         self.scan_button.setAccessibleName("扫描并预览下次扫描目录")
         set_button_role(self.scan_button, ButtonRole.SECONDARY)
+        # Property selector specificity masked the existing global hover surface.
+        secondary_style = f"""
+            QPushButton[visualRole="secondary"]:enabled:hover {{
+              background: {LIGHT_COLORS.surface_secondary};
+            }}
+            QPushButton[visualRole="secondary"]:enabled:pressed {{
+              background: {LIGHT_COLORS.selection};
+            }}
+            QPushButton[visualRole="secondary"]:focus {{
+              border-color: {LIGHT_COLORS.focus};
+            }}
+        """
+        self.scan_button.setStyleSheet(secondary_style)
         self.cancel_button = QPushButton("取消扫描")
+        set_button_role(self.cancel_button, ButtonRole.SECONDARY)
+        self.cancel_button.setStyleSheet(secondary_style)
         self.cancel_button.setAccessibleName("取消扫描")
         self.cancel_button.setEnabled(False)
         self.cancel_button.hide()
@@ -197,7 +215,39 @@ class OrganizerPage(QWidget):
         root_context_row.addWidget(self.preview_root_name)
         root_context_row.addWidget(self.preview_root_display, 1)
         context_layout.addLayout(root_context_row)
-        context_layout.addWidget(self.summary_label)
+        summary_row = QHBoxLayout()
+        summary_row.setContentsMargins(0, 0, 0, 0)
+        summary_row.addWidget(self.summary_label, 1)
+        self.bulk_toolbar = QWidget(self.preview_context)
+        bulk_layout = QHBoxLayout(self.bulk_toolbar)
+        bulk_layout.setContentsMargins(0, 0, 0, 0)
+        bulk_layout.setSpacing(2)
+        self.bulk_buttons: dict[str, QPushButton] = {}
+        for action, label in (
+            ("select", "全选所有可执行项"),
+            ("invert", "反选所有可执行项"),
+            ("clear", "清除所有执行勾选"),
+        ):
+            button = QPushButton(self.bulk_toolbar)
+            button.setFixedSize(28, 28)
+            button.setIcon(execution_check_icon(action))
+            button.setIconSize(QSize(18, 18))
+            button.setToolTip(label)
+            button.setAccessibleName(label)
+            button.setAccessibleDescription("仅改变执行勾选，保留高亮与当前行。")
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            set_button_role(button, ButtonRole.QUIET)
+            button.setStyleSheet(f"""
+                QPushButton {{ min-height: 0; padding: 0; }}
+                QPushButton:focus {{ border: 1px solid {LIGHT_COLORS.focus}; }}
+            """)
+            button.clicked.connect(
+                lambda _checked=False, action=action: self.preview_model.bulk_check(action)
+            )
+            self.bulk_buttons[action] = button
+            bulk_layout.addWidget(button)
+        summary_row.addWidget(self.bulk_toolbar)
+        context_layout.addLayout(summary_row)
         self.input_root_difference_label = OrganizerElidedLabel()
         self.input_root_difference_label.setObjectName("organizerRootDifference")
         self.input_root_difference_label.hide()
@@ -210,18 +260,22 @@ class OrganizerPage(QWidget):
         self.empty_state = QWidget(self)
         self.empty_state.setObjectName("organizerEmptyState")
         empty_layout = QVBoxLayout(self.empty_state)
-        empty_layout.setContentsMargins(4, 7, 4, 7)
-        empty_layout.setSpacing(2)
+        empty_layout.setContentsMargins(20, 28, 20, 28)
+        empty_layout.setSpacing(8)
+        empty_layout.addStretch(1)
         self.empty_title_label = QLabel("尚未生成预览")
         self.empty_title_label.setObjectName("sectionLabel")
         self.empty_description_label = QLabel(
-            "选择下次扫描目录并扫描，或拖入作品目录以追加预览。"
+            "选择上方目录并扫描，或拖入作品目录以生成预览。"
         )
         self.empty_description_label.setObjectName("pageDescription")
         self.empty_description_label.setWordWrap(True)
         empty_layout.addWidget(self.empty_title_label)
         empty_layout.addWidget(self.empty_description_label)
-        layout.addWidget(self.empty_state)
+        empty_layout.addStretch(1)
+        self.empty_title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_description_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.empty_state, 1)
 
         self.table = QTableView()
         self._column_layout_timer = QTimer(self)
@@ -403,6 +457,10 @@ class OrganizerPage(QWidget):
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.setSpacing(4)
 
+        self.preview_actions = QWidget(self.footer)
+        preview_action_layout = QVBoxLayout(self.preview_actions)
+        preview_action_layout.setContentsMargins(0, 0, 0, 0)
+        preview_action_layout.setSpacing(4)
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(6)
@@ -430,8 +488,9 @@ class OrganizerPage(QWidget):
         action_row.addWidget(self.clear_button)
         action_row.addStretch(1)
         action_row.addWidget(self.execute_button)
-        footer_layout.addWidget(self.action_hint_label)
-        footer_layout.addLayout(action_row)
+        preview_action_layout.addWidget(self.action_hint_label)
+        preview_action_layout.addLayout(action_row)
+        footer_layout.addWidget(self.preview_actions)
 
         self.status_label = QLabel("请选择根目录开始扫描。")
         self.status_label.setObjectName("statusLabel")
@@ -444,13 +503,17 @@ class OrganizerPage(QWidget):
         footer_layout.addWidget(self.progress_label)
         footer_layout.addWidget(self.status_label)
 
+        self.undo_region = QWidget(self.footer)
+        undo_layout = QVBoxLayout(self.undo_region)
+        undo_layout.setContentsMargins(0, 0, 0, 0)
+        undo_layout.setSpacing(4)
         recent_row = QHBoxLayout()
         recent_row.setContentsMargins(0, 0, 0, 0)
         recent_row.setSpacing(6)
         separator = QFrame()
         separator.setFixedHeight(1)
         separator.setStyleSheet(f"background: {LIGHT_COLORS.border}; border: 0;")
-        footer_layout.addWidget(separator)
+        undo_layout.addWidget(separator)
         self.recent_transaction_label = OrganizerElidedLabel("最近可撤销：无")
         self.recent_transaction_label.setObjectName("pageDescription")
         self.recent_transaction_label.setSizePolicy(
@@ -468,7 +531,8 @@ class OrganizerPage(QWidget):
         recent_row.addWidget(self.recent_transaction_label, 1)
         recent_row.addWidget(self.view_transaction_button)
         recent_row.addWidget(self.undo_button)
-        footer_layout.addLayout(recent_row)
+        undo_layout.addLayout(recent_row)
+        footer_layout.addWidget(self.undo_region)
         layout.addWidget(self.footer)
 
         self._feedback_timer = QTimer(self)
@@ -478,6 +542,7 @@ class OrganizerPage(QWidget):
         self._detail_user_touched = False
         self._compact_layout = False
         self._journal_unavailable = False
+        self._undo_pending = False
         self._journal_error_message = ""
         self._operation_message = ""
         self._resize_table_columns()
@@ -763,6 +828,7 @@ class OrganizerPage(QWidget):
         self.execute_button.setText(f"执行重命名（{self.state.checked_ready_count} 项）")
         self.execute_button.setEnabled(self.state.can_execute)
         self._update_action_hint()
+        self._update_bulk_controls()
         self._refresh_status_banner()
 
     @Slot(object)
@@ -1005,6 +1071,7 @@ class OrganizerPage(QWidget):
         self._update_execute_button()
 
     def _refresh_recent_transaction(self) -> None:
+        self._undo_pending = False
         self._journal_unavailable = False
         self._journal_error_message = ""
         self.state.unresolved_transaction_id = None
@@ -1021,6 +1088,7 @@ class OrganizerPage(QWidget):
             self.view_transaction_button.hide()
             self.recent_transaction_label.setText("最近可撤销：撤销服务不可用")
             self._refresh_status_banner()
+            self._update_empty_state()
             return
         try:
             transaction_service = self._undo_service or self._execution_service
@@ -1041,6 +1109,7 @@ class OrganizerPage(QWidget):
                     f"状态：{unresolved.display_status.value}"
                 )
                 self._refresh_status_banner()
+                self._update_empty_state()
                 return
             self.view_transaction_button.hide()
             transaction = (
@@ -1054,23 +1123,27 @@ class OrganizerPage(QWidget):
             self._journal_error_message = f"读取重命名记录失败：{exc}"
             self.recent_transaction_label.setText("最近可撤销：journal 暂不可用")
             self._refresh_status_banner()
+            self._update_empty_state()
             return
         if self._journal_unavailable:
             self.undo_button.setEnabled(False)
             self.view_transaction_button.hide()
             self.recent_transaction_label.setText("最近可撤销：journal 暂不可用")
             self._refresh_status_banner()
+            self._update_empty_state()
             return
         if transaction is None:
             self.undo_button.setEnabled(False)
             self.recent_transaction_label.setText("最近可撤销：无")
             self.recent_transaction_label.setToolTip("")
             self._refresh_status_banner()
+            self._update_empty_state()
             return
         pending = sum(
             operation.status.name == "SUCCESS" and operation.undo_status.name != "SUCCESS"
             for operation in transaction.operations
         )
+        self._undo_pending = pending > 0
         self.undo_button.setEnabled(self._thread is None and pending > 0)
         self.view_transaction_button.hide()
         if pending:
@@ -1084,6 +1157,7 @@ class OrganizerPage(QWidget):
             )
         self.recent_transaction_label.setToolTip(transaction.transaction_id)
         self._refresh_status_banner()
+        self._update_empty_state()
 
     def _clear_preview(self) -> None:
         self._clear_highlight()
@@ -1158,6 +1232,15 @@ class OrganizerPage(QWidget):
         # Clearing is also the safe escape hatch for a stale preview.
         self.clear_button.setEnabled(not self.is_busy() and has_rows)
         self._update_action_labels()
+        self._update_bulk_controls()
+        self._update_empty_state()
+
+    def _update_bulk_controls(self) -> None:
+        editable = self.state.checks_editable and any(
+            plan.status is RenamePlanStatus.READY for plan in self.state.plans
+        )
+        for button in self.bulk_buttons.values():
+            button.setEnabled(editable)
 
     def _update_summary(self, preview: OrganizerPreview | None) -> None:
         if preview is None:
@@ -1205,6 +1288,17 @@ class OrganizerPage(QWidget):
 
     def _update_empty_state(self) -> None:
         has_rows = bool(self.state.plans)
+        has_preview = self.state.preview is not None
+        self.preview_context.setVisible(has_preview)
+        self.preview_actions.setVisible(has_preview)
+        self.bulk_toolbar.setVisible(has_rows)
+        self.undo_region.setVisible(
+            has_preview or self._undo_pending
+            or self.state.unresolved_transaction_id is not None or self._journal_unavailable
+        )
+        self.input_hint_label.setVisible(has_preview and not self.is_busy())
+        if not has_rows:
+            self.detail_panel.hide()
         self.table.setVisible(has_rows)
         self.empty_state.setVisible(not has_rows)
         if has_rows:
@@ -1212,7 +1306,7 @@ class OrganizerPage(QWidget):
         if self.state.preview is None:
             self.empty_title_label.setText("尚未生成预览")
             self.empty_description_label.setText(
-                "选择下次扫描目录并扫描，或拖入作品目录以追加预览。"
+                "选择上方目录并扫描，或拖入作品目录以生成预览。"
             )
         elif self.state.stale:
             self.empty_title_label.setText("当前预览没有可检查的行")
@@ -1308,7 +1402,60 @@ class OrganizerPage(QWidget):
         if not self._column_layout_timer.isActive():
             self._column_layout_timer.start(0)
 
+    def _install_workspace_drop_routing(self) -> None:
+        """One event owner across Organizer children and scroll viewports."""
+        self.drop_overlay = QLabel(self)
+        self.drop_overlay.setObjectName("organizerDropOverlay")
+        self.drop_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drop_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.drop_overlay.setStyleSheet(f"""
+            QLabel#organizerDropOverlay {{
+              background: rgba(237, 245, 255, 225);
+              color: {LIGHT_COLORS.text_primary};
+              border: 1px solid {LIGHT_COLORS.focus};
+              border-radius: 7px;
+              font-weight: 600;
+            }}
+        """)
+        self.drop_overlay.hide()
+        for target in (self, *self.findChildren(QWidget)):
+            if target is self.drop_overlay:
+                continue
+            target.setAcceptDrops(True)
+            target.installEventFilter(self)
+
+    def _show_drop_overlay(self, active: bool) -> None:
+        if active:
+            self.drop_overlay.setText(
+                "松开以追加到当前预览" if self.state.plans else "松开以添加作品目录"
+            )
+            self.drop_overlay.setGeometry(QRect(
+                20, self.input_panel.y(), max(0, self.width() - 40),
+                max(0, self.height() - self.input_panel.y() - 16),
+            ))
+            self.drop_overlay.raise_()
+        self.drop_overlay.setVisible(active)
+
     def eventFilter(self, watched, event) -> bool:
+        kind = event.type()
+        if hasattr(self, "drop_overlay"):
+            if kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
+                paths = local_directory_paths(event.mimeData())
+                accepted = bool(paths)
+                self._show_drop_overlay(accepted and kind != QEvent.Type.Drop)
+                if accepted:
+                    event.acceptProposedAction()
+                    if kind == QEvent.Type.Drop:
+                        self._handle_drop_paths(paths)
+                else:
+                    event.ignore()
+                return True
+            if kind == QEvent.Type.DragLeave:
+                self._show_drop_overlay(False)
+                event.accept()
+                return True
+            if kind == QEvent.Type.Hide and watched is self:
+                self._show_drop_overlay(False)
         if hasattr(self, "table") and watched is self.table.viewport() and event.type() in (
             QEvent.Type.Resize, QEvent.Type.Show,
         ):
@@ -1392,7 +1539,7 @@ class OrganizerPage(QWidget):
         self.progress_label.setText(message)
         self.progress_label.setVisible(bool(message))
         if not message and not self.is_busy():
-            self.input_hint_label.show()
+            self.input_hint_label.setVisible(self.state.preview is not None)
 
     def _set_feedback(self, message: str, state: str = "success") -> None:
         self._feedback_timer.stop()
