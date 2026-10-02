@@ -1,0 +1,256 @@
+"""Explicit Organizer presentation state; services retain all business authority."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from pathlib import Path
+from typing import Protocol
+
+from dlsite_organizer.domain.organizer import RenamePlan, RenamePlanStatus
+from dlsite_organizer.domain.rename_execution import RenameExecutionResult, UndoResult
+from dlsite_organizer.services.drop_input import normalized_path_identity
+from dlsite_organizer.services.organizer import OrganizerPreview, WorkLookup
+
+
+class ScanMode(StrEnum):
+    REPLACE = "replace"
+    APPEND = "append"
+
+
+class BusyOperation(StrEnum):
+    SCAN = "scan"
+    EXECUTE = "execute"
+    UNDO = "undo"
+
+
+class PreviewStaleReason(StrEnum):
+    SETTINGS_CHANGED = "settings_changed"
+    FILESYSTEM_CHANGED = "filesystem_changed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class OrganizerState:
+    """One ordered service result plus identity-based presentation projections.
+
+    Only the model's transitions should change collections/checks while attached
+    to a view, so Qt notifications bracket changes. Page/controller owns lifecycle
+    fields and supplies current service generation and mutation-gate snapshots.
+    """
+
+    input_root: str = ""
+    preview: OrganizerPreview | None = field(default=None, init=False)
+    row_keys: tuple[str, ...] = field(default=(), init=False)
+    _checked: set[str] = field(default_factory=set, init=False, repr=False)
+    highlighted_keys: frozenset[str] = field(default_factory=frozenset, init=False)
+    current_key: str | None = field(default=None, init=False)
+    request_id: int = 0
+    preview_revision: int = 0
+    settings_generation: int = 0
+    scan_mode: ScanMode = ScanMode.REPLACE
+    busy: BusyOperation | None = None
+    cancel_requested: bool = False
+    stale_reason: PreviewStaleReason | None = field(default=None, init=False)
+    executor_available: bool = False
+    mutation_blocked: bool = True
+    unresolved_transaction_id: str | None = None
+    last_execution_result: RenameExecutionResult | None = None
+    last_undo_result: UndoResult | None = None
+
+    @property
+    def plans(self) -> tuple[RenamePlan, ...]:
+        return self.preview.plans if self.preview is not None else ()
+
+    @property
+    def committed_preview_root(self) -> Path | None:
+        return self.preview.root_path if self.preview is not None else None
+
+    @property
+    def stale(self) -> bool:
+        return self.stale_reason is not None
+
+    @property
+    def preview_current(self) -> bool:
+        return (
+            self.preview is not None
+            and not self.stale
+            and not self.preview.cancelled
+            and self.preview.settings_generation == self.settings_generation
+        )
+
+    @property
+    def checks_editable(self) -> bool:
+        return self.preview_current and self.busy is None
+
+    @property
+    def checked_ready_count(self) -> int:
+        # Collection transitions ensure only READY identities can be checked.
+        return len(self._checked) if self.preview_current else 0
+
+    @property
+    def can_execute(self) -> bool:
+        return (
+            self.checks_editable
+            and bool(self.committed_preview_root)
+            and self.checked_ready_count > 0
+            and self.executor_available
+            and not self.mutation_blocked
+        )
+
+    def checked(self, row: int) -> bool:
+        return self.row_keys[row] in self._checked
+
+    def checked_ready_plans(self) -> tuple[RenamePlan, ...]:
+        if not self.preview_current:
+            return ()
+        return tuple(
+            plan for key, plan in zip(self.row_keys, self.plans, strict=True)
+            if key in self._checked
+        )
+
+    def begin_scan(self, mode: ScanMode) -> None:
+        self.request_id += 1
+        self.scan_mode = mode
+        self.cancel_requested = False
+        self.busy = BusyOperation.SCAN
+
+    def owns_result(self, request_id: int, preview_revision: int) -> bool:
+        return request_id == self.request_id and preview_revision == self.preview_revision
+
+    def finish_operation(self) -> None:
+        self.busy = None
+        self.scan_mode = ScanMode.REPLACE
+
+    def replace_preview(self, preview: OrganizerPreview) -> None:
+        keys = tuple(normalized_path_identity(plan.source_path) for plan in preview.plans)
+        self.preview = preview
+        self.row_keys = keys
+        self._checked = {
+            key for key, plan in zip(keys, preview.plans, strict=True)
+            if plan.status is RenamePlanStatus.READY
+        }
+        self._commit_validity()
+        self.clear_highlight()
+
+    def append_preview(self, preview: OrganizerPreview) -> None:
+        """Commit a pre-merged ordered preview, preserving old READY checks only."""
+        keys = tuple(normalized_path_identity(plan.source_path) for plan in preview.plans)
+        self.preview = preview
+        self.row_keys = keys
+        self._checked.intersection_update(
+            key for key, plan in zip(keys, preview.plans, strict=True)
+            if plan.status is RenamePlanStatus.READY
+        )
+        self._commit_validity()
+        self.clear_highlight()
+
+    def _commit_validity(self) -> None:
+        self.preview_revision += 1
+        self.stale_reason = None
+        assert self.preview is not None
+        if self.preview.settings_generation != self.settings_generation:
+            self.mark_stale(PreviewStaleReason.SETTINGS_CHANGED)
+        elif self.preview.cancelled:
+            self.mark_stale(PreviewStaleReason.CANCELLED)
+
+    def set_checked(self, row: int, checked: bool) -> bool:
+        if not self.checks_editable or self.plans[row].status is not RenamePlanStatus.READY:
+            return False
+        key = self.row_keys[row]
+        if checked:
+            self._checked.add(key)
+        else:
+            self._checked.discard(key)
+        return True
+
+    def project_highlight(self, rows: Sequence[int], current: int | None) -> None:
+        self.highlighted_keys = frozenset(
+            self.row_keys[row] for row in rows if 0 <= row < len(self.row_keys)
+        )
+        self.current_key = (
+            self.row_keys[current] if current is not None and 0 <= current < len(self.row_keys)
+            else None
+        )
+
+    def clear_highlight(self) -> None:
+        self.highlighted_keys = frozenset()
+        self.current_key = None
+
+    def remove_rows(self, first: int, last: int) -> None:
+        assert self.preview is not None
+        self._checked.difference_update(self.row_keys[first:last + 1])
+        self.row_keys = self.row_keys[:first] + self.row_keys[last + 1:]
+        self.preview = replace(
+            self.preview, plans=self.plans[:first] + self.plans[last + 1:]
+        )
+        self.clear_highlight()
+
+    def mark_stale(self, reason: PreviewStaleReason) -> None:
+        self.preview_revision += 1
+        self.stale_reason = reason if self.plans or self.busy is BusyOperation.SCAN else None
+
+    def clear_preview(self) -> None:
+        self.preview_revision += 1
+        self.preview = None
+        self.row_keys = ()
+        self._checked.clear()
+        self.stale_reason = None
+        self.clear_highlight()
+
+
+class _PathItem(Protocol):
+    @property
+    def source_path(self) -> Path: ...
+
+
+def merge_previews(current: OrganizerPreview, incoming: OrganizerPreview) -> OrganizerPreview:
+    """Merge service outputs without re-planning or changing service semantics."""
+    if current.settings_generation != incoming.settings_generation:
+        raise ValueError("Cannot merge previews from different settings generations")
+    if normalized_path_identity(current.root_path) != normalized_path_identity(incoming.root_path):
+        raise ValueError("Cannot merge previews from different roots")
+    return replace(
+        current,
+        scan=replace(
+            current.scan,
+            candidates=_merge_path_items(current.scan.candidates, incoming.scan.candidates),
+            skipped=_merge_path_items(current.scan.skipped, incoming.scan.skipped),
+            cancelled=False,
+        ),
+        lookups=_merge_lookup_items(current.lookups, incoming.lookups),
+        plans=_merge_path_items(current.plans, incoming.plans),
+        cancelled=False,
+    )
+
+
+def _merge_path_items[PathItemT: _PathItem](
+    existing: Sequence[PathItemT], incoming: Sequence[PathItemT]
+) -> tuple[PathItemT, ...]:
+    merged = list(existing)
+    positions = {normalized_path_identity(item.source_path): i for i, item in enumerate(merged)}
+    for item in incoming:
+        key = normalized_path_identity(item.source_path)
+        index = positions.get(key)
+        if index is None:
+            positions[key] = len(merged)
+            merged.append(item)
+        else:
+            merged[index] = item
+    return tuple(merged)
+
+
+def _merge_lookup_items(
+    existing: Sequence[WorkLookup], incoming: Sequence[WorkLookup]
+) -> tuple[WorkLookup, ...]:
+    merged = list(existing)
+    positions = {item.work_code: i for i, item in enumerate(merged)}
+    for item in incoming:
+        index = positions.get(item.work_code)
+        if index is None:
+            positions[item.work_code] = len(merged)
+            merged.append(item)
+        else:
+            merged[index] = item
+    return tuple(merged)

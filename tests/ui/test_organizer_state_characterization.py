@@ -61,6 +61,7 @@ def test_replace_order_defaults_and_input_root_is_not_committed_root(
     page.set_preview(preview)
     page.set_root_path(tmp_path / "other")
     assert page.preview is preview
+    assert page.preview is not None
     assert page.preview.root_path == tmp_path
     assert [plan.source_path for plan in page.preview.plans] == [sources[2], sources[0], sources[1]]
     assert [checked(page, row) for row in range(3)] == [True, False, True]
