@@ -100,12 +100,20 @@ def test_about_page_exposes_public_identity_and_resource_actions(qapp: QApplicat
 def test_about_update_check_initial_state_does_not_access_network(qapp: QApplication) -> None:
     service = FakeUpdateService()
     page = AboutPage(update_check_service=service)
+    page.show()
+    qapp.processEvents()
 
     assert page.update_current_version_value.text() == f"v{__version__}"
     assert page.check_update_button.isEnabled()
+    assert page.check_update_button.text() == "检查更新"
+    assert page.check_update_button.property("visualRole") == "primary"
     assert page.update_status_label.text() == "尚未检查更新"
     assert page.release_page_button.isHidden()
     assert not page.release_page_button.isEnabled()
+    assert abs(
+        page.check_update_button.mapTo(page, page.check_update_button.rect().center()).y()
+        - page.update_status_label.mapTo(page, page.update_status_label.rect().center()).y()
+    ) <= 8
     assert service.calls == 0
     page.close()
 
@@ -136,6 +144,8 @@ def test_about_update_check_runs_in_worker_and_blocks_duplicate_clicks(
         service.release.set()
         _wait_until(qapp, lambda: not page.is_busy())
         assert page.check_update_button.isEnabled()
+        assert page.check_update_button.text() == "重新检查"
+        assert page.check_update_button.property("visualRole") == "primary"
         assert page.update_status_label.text() == "已是最新版本"
         assert page.release_page_button.isHidden()
         assert not page.release_page_button.isEnabled()
@@ -174,6 +184,9 @@ def test_about_update_available_shows_and_opens_exact_validated_release_url(
         assert page.update_status_label.text() == "发现新版本 v1.1.0"
         assert page.release_page_button.isVisible()
         assert page.release_page_button.isEnabled()
+        assert page.check_update_button.text() == "重新检查"
+        assert page.check_update_button.property("visualRole") == "secondary"
+        assert page.release_page_button.property("visualRole") == "primary"
         assert opened == []
 
         page.release_page_button.click()

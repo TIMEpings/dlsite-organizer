@@ -32,10 +32,13 @@ def test_theme_tokens_cover_the_shared_shell_roles() -> None:
         32,
     )
     assert Shape.CONTROL_RADIUS == 7
+    assert Shape.SOFT_RADIUS == 8
     assert Shape.PANEL_RADIUS == 10
+    assert Shape.SCROLLBAR_RADIUS == 4
     assert Geometry.CONTROL_HEIGHT == 34
     assert Geometry.NAVIGATION_ITEM_HEIGHT == 40
     assert Geometry.SIDEBAR_WIDTH == 184
+    assert Geometry.PAGE_HEADER_HEIGHT == 52
     assert set(FONT_ROLES) == set(FontRole)
     assert {
         "background",

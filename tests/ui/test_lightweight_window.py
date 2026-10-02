@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QThread, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage, QWheelEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget
 
 from dlsite_organizer.app.quick_action_controller import (
@@ -319,6 +320,54 @@ def test_recent_operation_list_elides_long_text_and_delegates_drag_events(
         assert captured == [(folder,)]
     finally:
         zone.close()
+
+
+def test_lightweight_recent_list_keeps_a_styled_scrollbar_for_many_cjk_entries(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    window = _window(tmp_path)
+    window.show()
+    window.operation_list.clear()
+    for index in range(12):
+        window.operation_list.add_full_text(
+            f"RJ01609020  ✓ 已重命名  {index}  " + ("很长的目录名称-" * 12)
+        )
+    qapp.processEvents()
+
+    try:
+        scrollbar = window.operation_list.verticalScrollBar()
+        assert scrollbar.maximum() > 0
+        assert scrollbar.isVisible()
+        assert "QScrollBar::handle:vertical:hover" in window.styleSheet()
+        assert "width: 9px" in window.styleSheet()
+
+        before = scrollbar.value()
+        window.operation_list.setFocus()
+        window.operation_list.setCurrentRow(0)
+        for _ in range(window.operation_list.count() - 1):
+            QTest.keyClick(window.operation_list, Qt.Key.Key_Down)
+        qapp.processEvents()
+        assert scrollbar.value() > before
+
+        scrollbar.setValue(scrollbar.minimum())
+        viewport = window.operation_list.viewport()
+        point = viewport.rect().center()
+        wheel = QWheelEvent(
+            QPointF(point),
+            QPointF(viewport.mapToGlobal(point)),
+            QPoint(0, 0),
+            QPoint(0, -120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.ScrollUpdate,
+            False,
+        )
+        qapp.sendEvent(viewport, wheel)
+        qapp.processEvents()
+        assert scrollbar.value() > scrollbar.minimum()
+        assert window.operation_list.item(0).toolTip().startswith("RJ01609020")
+    finally:
+        window.close()
 
 
 def test_drop_zone_without_branding_still_paints(
