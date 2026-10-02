@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import ntpath
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from copy import copy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 
 # Windows Explorer and many Win32 APIs become risky before MAX_PATH itself.
 WINDOWS_PATH_WARNING_THRESHOLD = 240
+
+
+@dataclass(frozen=True, slots=True)
+class RenamePlanningRequest:
+    """One item to plan in a shared-root Organizer batch."""
+
+    source_path: Path | str
+    work_code: str
+    work: Work
+    formatted_name: str | None = None
 
 
 class RenamePlanner:
@@ -66,6 +76,71 @@ class RenamePlanner:
         and let this planner apply its configured NamingService.
         """
         root = _resolved_path(root_path)
+        return self._plan(
+            root,
+            source_path,
+            work_code,
+            work,
+            formatted_name=formatted_name,
+            sibling_index_loader=lambda: _build_sibling_index(
+                root,
+                case_insensitive=self._case_insensitive,
+            ),
+        )
+
+    def plan_batch(
+        self,
+        root_path: Path | str,
+        requests: Iterable[RenamePlanningRequest],
+    ) -> tuple[RenamePlan, ...]:
+        """Plan one logical batch under a shared root using one sibling snapshot.
+
+        The index is created lazily at the same point where ``plan`` would
+        inspect siblings and exists only for this call.  Organizer previews
+        and Quick Rename each operate under one root, so requests intentionally
+        share that root.  Call :meth:`finalize` with the complete set of rows
+        to retain same-target batch conflict handling.
+        """
+        root = _resolved_path(root_path)
+        sibling_index: dict[str, tuple[Path, ...]] | OSError | None = None
+
+        def load_sibling_index() -> dict[str, tuple[Path, ...]]:
+            nonlocal sibling_index
+            if sibling_index is None:
+                try:
+                    sibling_index = _build_sibling_index(
+                        root,
+                        case_insensitive=self._case_insensitive,
+                    )
+                except OSError as exc:
+                    sibling_index = exc
+            if isinstance(sibling_index, OSError):
+                raise sibling_index
+            assert sibling_index is not None
+            return sibling_index
+
+        return tuple(
+            self._plan(
+                root,
+                request.source_path,
+                request.work_code,
+                request.work,
+                formatted_name=request.formatted_name,
+                sibling_index_loader=load_sibling_index,
+            )
+            for request in requests
+        )
+
+    def _plan(
+        self,
+        root: Path,
+        source_path: Path | str,
+        work_code: str,
+        work: Work,
+        *,
+        formatted_name: str | None,
+        sibling_index_loader: Callable[[], dict[str, tuple[Path, ...]]],
+    ) -> RenamePlan:
         source = Path(source_path)
         current_name = source.name
         try:
@@ -136,7 +211,7 @@ class RenamePlanner:
 
         warnings = _path_warnings(target, self._path_warning_threshold)
         try:
-            existing_children = tuple(root.iterdir())
+            sibling_index = sibling_index_loader()
         except OSError as exc:
             logger.warning("Cannot inspect rename target under %s: %s", root, exc)
             return RenamePlan(
@@ -152,11 +227,10 @@ class RenamePlanner:
                 work_codes=(normalized_code,),
             )
 
-        matching_children = [
-            child
-            for child in existing_children
-            if _same_name(child.name, proposed, case_insensitive=self._case_insensitive)
-        ]
+        matching_children = sibling_index.get(
+            _name_key(proposed, case_insensitive=self._case_insensitive),
+            (),
+        )
         source_identity = any(
             _same_path(child, source, case_insensitive=self._case_insensitive)
             for child in matching_children
@@ -292,7 +366,26 @@ def _same_path(left: Path, right: Path, *, case_insensitive: bool) -> bool:
 
 
 def _same_name(left: str, right: str, *, case_insensitive: bool) -> bool:
-    return left.casefold() == right.casefold() if case_insensitive else left == right
+    return _name_key(left, case_insensitive=case_insensitive) == _name_key(
+        right,
+        case_insensitive=case_insensitive,
+    )
+
+
+def _name_key(value: str, *, case_insensitive: bool) -> str:
+    return value.casefold() if case_insensitive else value
+
+
+def _build_sibling_index(
+    root: Path,
+    *,
+    case_insensitive: bool,
+) -> dict[str, tuple[Path, ...]]:
+    children_by_name: dict[str, list[Path]] = {}
+    for child in root.iterdir():
+        key = _name_key(child.name, case_insensitive=case_insensitive)
+        children_by_name.setdefault(key, []).append(child)
+    return {key: tuple(children) for key, children in children_by_name.items()}
 
 
 def _is_safe_name_component(value: str) -> bool:

@@ -38,6 +38,7 @@ from dlsite_organizer.services.organizer import (
 from dlsite_organizer.services.rename_planner import (
     WINDOWS_PATH_WARNING_THRESHOLD,
     RenamePlanner,
+    RenamePlanningRequest,
 )
 from dlsite_organizer.services.translation_relations import (
     TranslationAnalysis,
@@ -74,6 +75,7 @@ __all__ = [
     "OrganizerPreview",
     "OrganizerService",
     "RenamePlanner",
+    "RenamePlanningRequest",
     "SemVer",
     "TranslationAnalysis",
     "TranslationAnalysisStatus",

@@ -24,7 +24,10 @@ from dlsite_organizer.services.lookup import (
     LookupResult,
     LookupService,
 )
-from dlsite_organizer.services.rename_planner import RenamePlanner
+from dlsite_organizer.services.rename_planner import (
+    RenamePlanner,
+    RenamePlanningRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +256,10 @@ class OrganizerService:
                 )
 
         lookups = tuple(lookup_by_code[work_code] for work_code in work_codes)
-        plans: list[RenamePlan] = []
+        plans: list[RenamePlan | None] = []
+        planning_requests: list[RenamePlanningRequest] = []
+        planning_slots: list[int] = []
+        planning_stale_fallback: list[bool] = []
         for candidate in scan.candidates:
             if candidate.status is ScanCandidateStatus.AMBIGUOUS_WORK_CODE:
                 plans.append(self._planner.plan_scan_issue(scan.root_path, candidate))
@@ -266,22 +272,19 @@ class OrganizerService:
             assert work_code is not None
             lookup = lookup_by_code[work_code]
             if lookup.status is WorkLookupStatus.SUCCESS and lookup.result is not None:
-                plan = self._planner.plan(
-                    scan.root_path,
-                    candidate.source_path,
-                    work_code,
-                    lookup.result.work,
-                    formatted_name=lookup.result.formatted_name,
-                )
-                if lookup.result.freshness is LookupFreshness.CACHE_STALE_FALLBACK:
-                    plan = replace(
-                        plan,
-                        warnings=(
-                            *plan.warnings,
-                            "使用旧缓存 metadata：本次未能取得新的 DLsite 响应。",
-                        ),
+                planning_slots.append(len(plans))
+                plans.append(None)
+                planning_requests.append(
+                    RenamePlanningRequest(
+                        source_path=candidate.source_path,
+                        work_code=work_code,
+                        work=lookup.result.work,
+                        formatted_name=lookup.result.formatted_name,
                     )
-                plans.append(plan)
+                )
+                planning_stale_fallback.append(
+                    lookup.result.freshness is LookupFreshness.CACHE_STALE_FALLBACK
+                )
             else:
                 status = (
                     RenamePlanStatus.CANCELLED
@@ -302,7 +305,26 @@ class OrganizerService:
                     )
                 )
 
-        finalized = self._planner.finalize(plans)
+        if planning_requests:
+            planned = self._planner.plan_batch(scan.root_path, planning_requests)
+            for slot, plan, stale_fallback in zip(
+                planning_slots,
+                planned,
+                planning_stale_fallback,
+                strict=True,
+            ):
+                if stale_fallback:
+                    plan = replace(
+                        plan,
+                        warnings=(
+                            *plan.warnings,
+                            "使用旧缓存 metadata：本次未能取得新的 DLsite 响应。",
+                        ),
+                    )
+                plans[slot] = plan
+
+        assert all(plan is not None for plan in plans)
+        finalized = self._planner.finalize(plan for plan in plans if plan is not None)
         logger.info(
             "Organizer preview ready for %s: %d plans, %d skipped, %d lookup failures",
             scan.root_path,

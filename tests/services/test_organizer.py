@@ -88,6 +88,32 @@ def test_organizer_maps_metadata_and_deduplicates_batch_requests(tmp_path: Path)
     ]
 
 
+def test_organizer_batch_keeps_duplicate_target_conflicts_and_order(tmp_path: Path) -> None:
+    (tmp_path / "A RJ01609020").mkdir()
+    (tmp_path / "B RJ01636949").mkdir()
+
+    class DuplicateTargetLookup:
+        def lookup(self, raw_workno: str) -> LookupResult:
+            work = Work(workno=raw_workno, title=raw_workno)
+            return LookupResult(work=work, formatted_name="shared target")
+
+    preview = OrganizerService(DuplicateTargetLookup()).preview(tmp_path)
+
+    assert [plan.work_code for plan in preview.plans] == ["RJ01609020", "RJ01636949"]
+    assert [plan.status for plan in preview.plans] == [
+        RenamePlanStatus.CONFLICT,
+        RenamePlanStatus.CONFLICT,
+    ]
+    assert [plan.error for plan in preview.plans] == [
+        "目标目录与本轮其他计划重复。",
+        "目标目录与本轮其他计划重复。",
+    ]
+    assert all(
+        plan.warnings == ("本轮扫描中的多个目录计划使用同一个目标目录。",)
+        for plan in preview.plans
+    )
+
+
 def test_organizer_preview_reuses_the_same_rich_work_and_naming_fields(tmp_path: Path) -> None:
     (tmp_path / "source RJ01609020").mkdir()
     rich_work = Work(
