@@ -10,12 +10,13 @@ from PySide6.QtCore import (
     QPoint,
     QPointF,
     Qt,
+    QTimer,
     QUrl,
 )
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QPainter, QPixmap
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem, QWidget
-from tests.ui.test_organizer_page import FakeLookupService, _wait_for_scan_idle
+from tests.ui.test_organizer_page import FakeLookupService, _wait_for, _wait_for_scan_idle
 from tests.ui.test_organizer_preview_model import synthetic_preview
 
 from dlsite_organizer.domain.organizer import RenamePlanStatus
@@ -91,7 +92,7 @@ def test_bulk_preserves_nonready_highlight_current_and_coalesces(qapp, tmp_path,
     checks = QSignalSpy(page.preview_model.checked_changed)
     resets = QSignalSpy(page.preview_model.modelReset)
     try:
-        page.bulk_buttons[action].click()
+        page.bulk_actions[action].trigger()
         assert tuple(page.state.checked(i) for i in range(2)) == expected
         assert not page.state.checked(2) and not page.state.checked(3)
         assert page.state.highlighted_keys == highlight and page.state.current_key == current
@@ -122,12 +123,14 @@ def test_bulk_gates_and_accessibility(qapp, tmp_path, blocked):
     before = tuple(page.state.checked(i) for i in range(len(page.state.plans)))
     spy = QSignalSpy(page.preview_model.checked_changed)
     try:
-        for action, button in page.bulk_buttons.items():
-            assert not button.isEnabled()
-            assert button.toolTip() == button.accessibleName()
-            assert "执行" in button.accessibleName()
-            assert button.focusPolicy() == Qt.FocusPolicy.StrongFocus
-            assert button.width() == button.height() == 28
+        button = page.bulk_menu_button
+        assert not button.isEnabled()
+        assert button.toolTip() == button.accessibleName()
+        assert "执行" in button.accessibleName()
+        assert button.focusPolicy() == Qt.FocusPolicy.StrongFocus
+        assert button.width() == button.height() == 30
+        for action, menu_action in page.bulk_actions.items():
+            assert not menu_action.isEnabled()
             page.preview_model.bulk_check(action)
         assert before == tuple(page.state.checked(i) for i in range(len(page.state.plans)))
         assert spy.count() == 0
@@ -148,10 +151,20 @@ def test_scan_cancel_roles_and_keyboard_bulk_activation(qapp, tmp_path):
         page._set_loading(True)
         assert page.cancel_button.isVisible() and not page.scan_button.isVisible()
         page._set_loading(False)
-        button = page.bulk_buttons["clear"]
+        button = page.bulk_menu_button
         button.setFocus()
+        def clear_from_menu():
+            assert page.bulk_menu.isVisible()
+            QTest.keyClick(page.bulk_menu, Qt.Key.Key_Home)
+            QTest.keyClick(page.bulk_menu, Qt.Key.Key_Down)
+            QTest.keyClick(page.bulk_menu, Qt.Key.Key_Down)
+            QTest.keyClick(page.bulk_menu, Qt.Key.Key_Return)
+        QTimer.singleShot(20, clear_from_menu)
         QTest.keyClick(button, Qt.Key.Key_Space)
-        assert page.state.checked_ready_count == 0
+        _wait_for(qapp, lambda: page.state.checked_ready_count == 0)
+        QTest.keyClick(button, Qt.Key.Key_Return)
+        _wait_for(qapp, page.bulk_menu.isVisible)
+        QTest.keyClick(page.bulk_menu, Qt.Key.Key_Escape)
         QTest.keyClick(button, Qt.Key.Key_Tab)
         assert qapp.focusWidget() is not button
     finally:
@@ -246,8 +259,10 @@ def test_semantic_paint_color_survives_selected_current_focus(
         delegate.paint(painter, option, page.preview_model.index(0, 1))
         kind, color = delegate._mark(plan)
         assert colors[0] == (kind, color.name())
-        if status != RenamePlanStatus.CONFLICT:
+        if status is RenamePlanStatus.READY:
             assert colors[1][0] == "warning"
+        else:
+            assert len(colors) == 1
     finally:
         painter.end()
         page.close()

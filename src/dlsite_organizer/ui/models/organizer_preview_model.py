@@ -70,7 +70,7 @@ class OrganizerPreviewModel(QAbstractTableModel):
             if column == 0:
                 return None
             if column == 1:
-                return plan_status_label(plan.status)
+                return self.status_label(row)
             if column == 2:
                 code = plan.work_code or "、".join(plan.work_codes) or "—"
                 return f"{code} · {plan.work.title}" if plan.work is not None else code
@@ -93,7 +93,7 @@ class OrganizerPreviewModel(QAbstractTableModel):
                 return str(plan.source_path)
             return str(plan.target_path) if plan.target_path is not None else plan.proposed_name
         if role == Qt.ItemDataRole.AccessibleTextRole and column in (0, 1):
-            return f"{plan_status_label(plan.status)}。原因：{plan_diagnostics(plan)}"
+            return f"{self.status_label(row)}。原因：{plan_diagnostics(plan)}"
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if column == 0:
                 return Qt.AlignmentFlag.AlignCenter
@@ -156,10 +156,21 @@ class OrganizerPreviewModel(QAbstractTableModel):
                                   [Qt.ItemDataRole.CheckStateRole])
             self.checked_changed.emit()
 
-    def replace_preview(self, preview: OrganizerPreview) -> None:
+    def status_label(self, row: int) -> str:
+        return ("已完成" if self.state.completed(row)
+                else plan_status_label(self.state.plans[row].status))
+
+    def replace_preview(self, preview: OrganizerPreview, *, reconcile: bool = False) -> None:
         self.beginResetModel()
-        self.state.replace_preview(preview)
+        self.state.replace_preview(preview, reconcile=reconcile)
         self.endResetModel()
+
+    def reevaluate_preview(self, preview: OrganizerPreview) -> None:
+        """Accept service replanning while preserving surviving READY checks."""
+        self.state.append_preview(preview)
+        if self.rowCount():
+            self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, 4), [])
+        self.checked_changed.emit()
 
     def append_preview(self, incoming: OrganizerPreview) -> None:
         if self.state.preview is None:
@@ -252,8 +263,8 @@ def plan_diagnostics(plan: RenamePlan) -> str:
 
 
 def plan_presentation(plan: RenamePlan) -> StatusPresentation:
-    if plan.status in {RenamePlanStatus.READY, RenamePlanStatus.UNCHANGED}:
+    if plan.status is RenamePlanStatus.READY:
         return StatusPresentation.WARNING if plan.warnings else StatusPresentation.NORMAL
-    if plan.status is RenamePlanStatus.CANCELLED:
-        return StatusPresentation.WARNING
+    if plan.status is RenamePlanStatus.UNCHANGED:
+        return StatusPresentation.NORMAL
     return StatusPresentation.BLOCKED

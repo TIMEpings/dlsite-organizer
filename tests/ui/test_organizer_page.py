@@ -445,9 +445,9 @@ def test_organizer_page_shows_recent_transaction_and_disables_undo_after_success
     execution = executor.execute(tmp_path, page.selected_ready_plans(), confirmed=True)
 
     page._show_execution_result(execution)
-
-    assert page.preview_stale
-    assert page.preview_stale_reason is PreviewStaleReason.FILESYSTEM_CHANGED
+    _wait_for_scan_idle(qapp, page)
+    assert not page.preview_stale
+    assert page.state.completed(0)
     assert page.undo_button.isEnabled()
     assert '可撤销：1' in page.recent_transaction_label.text()
 
@@ -683,7 +683,7 @@ def test_preview_root_remains_committed_when_next_scan_root_changes(
     page.close()
 
 
-def test_summary_counts_overlap_warnings_and_actions_use_state_counts(
+def test_summary_counts_executable_warnings_and_actions_use_state_counts(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     for code in ("RJ01609020", "RJ01636949", "RJ01637033"):
@@ -702,7 +702,7 @@ def test_summary_counts_overlap_warnings_and_actions_use_state_counts(
     assert "可执行 2" in page.summary_label.text()
     assert "无需重命名 1" in page.summary_label.text()
     assert "不可执行 0" in page.summary_label.text()
-    assert "含警告 2" in page.summary_label.text()
+    assert "含警告 1" in page.summary_label.text()
     assert page.execute_button.text() == "执行重命名（2 项）"
     page.table.selectRow(1)
     assert page.remove_button.text() == "从预览移除（1）"

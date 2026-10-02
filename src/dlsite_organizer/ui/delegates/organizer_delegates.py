@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
 from dlsite_organizer.domain.organizer import RenamePlan, RenamePlanStatus
 from dlsite_organizer.ui.models.organizer_preview_model import (
     OrganizerPreviewModel,
-    plan_status_label,
 )
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 
@@ -28,7 +27,9 @@ def paint_status_mark(painter: QPainter, rect: QRect, kind: str, color: QColor) 
     painter.setPen(QPen(color, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                         Qt.PenJoinStyle.RoundJoin))
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    if kind == "ready":
+    if kind in ("ready", "completed"):
+        if kind == "completed":
+            painter.drawEllipse(QPointF(0, 0), 7, 7)
         painter.drawPolyline(QPolygonF([QPointF(-5, 0), QPointF(-1, 4), QPointF(6, -4)]))
     elif kind == "unchanged":
         painter.drawLine(QPointF(-5, -2), QPointF(5, -2))
@@ -206,7 +207,9 @@ class OrganizerStatusDelegate(QStyledItemDelegate):
         self._paint_item_background(painter, option)
 
         mark, mark_color = self._mark(plan)
-        status = plan_status_label(plan.status)
+        if model.state.completed(index.row()):
+            mark, mark_color = "completed", QColor(LIGHT_COLORS.success)
+        status = model.status_label(index.row())
         has_warning = self.additional_warning_marker(plan)
         rect = option.rect.adjusted(8, 0, -5, 0)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
@@ -247,9 +250,7 @@ class OrganizerStatusDelegate(QStyledItemDelegate):
 
     @staticmethod
     def additional_warning_marker(plan: RenamePlan) -> bool:
-        return bool(plan.warnings) and plan.status in (
-            RenamePlanStatus.READY, RenamePlanStatus.UNCHANGED,
-        )
+        return bool(plan.warnings) and plan.status is RenamePlanStatus.READY
 
     @staticmethod
     def _paint_item_background(painter: QPainter, option: QStyleOptionViewItem) -> None:

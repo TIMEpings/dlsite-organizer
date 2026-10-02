@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Windows Explorer and many Win32 APIs become risky before MAX_PATH itself.
 WINDOWS_PATH_WARNING_THRESHOLD = 240
+BATCH_CONFLICT_WARNING = "本轮扫描中的多个目录计划使用同一个目标目录。"
+TARGET_INSPECTION_WARNING = "无法确认目标目录是否已存在，因此不会标记为 READY。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,7 +224,7 @@ class RenamePlanner:
                 proposed_name=proposed,
                 target_path=target,
                 status=RenamePlanStatus.CONFLICT,
-                warnings=(*warnings, "无法确认目标目录是否已存在，因此不会标记为 READY。"),
+                warnings=(*warnings, TARGET_INSPECTION_WARNING),
                 error="无法检查目标目录是否已存在。",
                 work_codes=(normalized_code,),
             )
@@ -303,7 +305,7 @@ class RenamePlanner:
                 continue
             for index in indexes:
                 plan = ordered[index]
-                warning = "本轮扫描中的多个目录计划使用同一个目标目录。"
+                warning = BATCH_CONFLICT_WARNING
                 ordered[index] = replace(
                     plan,
                     status=RenamePlanStatus.CONFLICT,
@@ -311,6 +313,33 @@ class RenamePlanner:
                     error=plan.error or "目标目录与本轮其他计划重复。",
                 )
         return tuple(ordered)
+
+    def reevaluate(self, root_path: Path, plans: Iterable[RenamePlan]) -> tuple[RenamePlan, ...]:
+        """Recheck surviving conflicts against fresh siblings, without metadata lookup.
+
+        Finalize is intentionally one-way. Rebuild affected CONFLICT rows using
+        captured work/name, then finalize the entire surviving batch. Other rows
+        retain their inputs and checks. Occupancy/Windows aliases use fresh sibling
+        truth for every conflict being reconsidered; execution still revalidates
+        the complete selected batch independently.
+        """
+        ordered = list(plans)
+        slots = []
+        requests = []
+        for index, plan in enumerate(ordered):
+            if (plan.status is RenamePlanStatus.CONFLICT
+                    and plan.work is not None and plan.work_code and plan.proposed_name):
+                slots.append(index)
+                requests.append(RenamePlanningRequest(
+                    plan.source_path, plan.work_code, plan.work, plan.proposed_name))
+        for slot, replanned in zip(slots, self.plan_batch(root_path, requests), strict=True):
+            # Preserve metadata cautions; replace obsolete planner diagnostics.
+            warnings = tuple(w for w in ordered[slot].warnings if w not in {
+                BATCH_CONFLICT_WARNING, TARGET_INSPECTION_WARNING,
+            })
+            ordered[slot] = replace(replanned, warnings=tuple(dict.fromkeys(
+                (*replanned.warnings, *warnings))))
+        return self.finalize(ordered)
 
     @staticmethod
     def _invalid_target_plan(

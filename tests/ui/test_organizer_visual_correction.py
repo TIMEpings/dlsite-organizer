@@ -189,7 +189,8 @@ def test_status_warning_vocabulary_and_concise_tooltips(qapp, tmp_path, status, 
     try:
         mark, _ = OrganizerStatusDelegate._mark(plan)
         assert mark == (status.value if normal else "blocked")
-        assert OrganizerStatusDelegate.additional_warning_marker(plan) == bool(normal and warnings)
+        assert OrganizerStatusDelegate.additional_warning_marker(plan) == bool(
+            status is RenamePlanStatus.READY and warnings)
         tip = page.preview_model.index(0, 1).data(Qt.ItemDataRole.ToolTipRole)
         if not warnings and normal:
             assert tip is None
@@ -218,7 +219,7 @@ def test_context_paths_keep_full_selection_and_copy_without_global_widget_change
     previous_clipboard = qapp.clipboard().text()
     try:
         assert page.state.committed_preview_root == root
-        assert page.preview_root_name.text() == root.name
+        assert not hasattr(page, "preview_root_name")
         assert page.preview_root_display.text() == str(root)
         assert page.root_input.text() != page.preview_root_display.text()
         for display in (
@@ -268,7 +269,7 @@ def test_compact_layout_preserves_table_actions_and_summary_data(qapp, tmp_path)
             "", "ready", "blocked", "warning",
         ]
         assert "无需重命名 100" in summary.toolTip() and "扫描跳过 3" in summary.toolTip()
-        assert "重叠" in summary.accessibleDescription()
+        assert "互斥" in summary.accessibleDescription()
         # Users can still expand details in compact mode without a periodic timer collapsing it.
         page.detail_toggle.setChecked(True)
         settle(qapp)

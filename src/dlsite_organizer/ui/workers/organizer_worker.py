@@ -30,6 +30,7 @@ class OrganizerWorker(QObject):
     progress = Signal(int, int, str)
     result_ready = Signal(object)
     failed = Signal(str)
+    request_failed = Signal(int, int, str)
     finished = Signal()
 
     def __init__(
@@ -83,7 +84,7 @@ class OrganizerWorker(QObject):
                 preview.cancelled,
             )
         except FolderScanFailure as exc:
-            self.failed.emit(exc.user_message)
+            self._report_failure(exc.user_message)
             logger.debug(
                 "organizer worker error emitted thread=%s kind=%s",
                 thread.objectName() or "<unnamed>",
@@ -91,7 +92,7 @@ class OrganizerWorker(QObject):
             )
         except Exception:
             logger.exception("Unexpected exception escaped organizer services")
-            self.failed.emit("扫描时发生意外错误，详细信息已写入日志。")
+            self._report_failure("扫描时发生意外错误，详细信息已写入日志。")
         finally:
             self.finished.emit()
             logger.debug(
@@ -103,6 +104,10 @@ class OrganizerWorker(QObject):
         """Request cooperative cancellation; an in-flight HTTP call may finish first."""
         logger.debug("organizer worker cancellation requested")
         self._cancel_event.set()
+
+    def _report_failure(self, message: str) -> None:
+        self.request_failed.emit(self._request_id, self._preview_revision, message)
+        self.failed.emit(message)
 
     @Slot(int, int, str)
     def _report_progress(self, completed: int, total: int, work_code: str) -> None:

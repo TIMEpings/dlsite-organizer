@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Protocol
 
 from dlsite_organizer.domain.organizer import RenamePlan, RenamePlanStatus
-from dlsite_organizer.domain.rename_execution import RenameExecutionResult, UndoResult
+from dlsite_organizer.domain.rename_execution import (
+    ExecutionStatus,
+    RenameExecutionResult,
+    TransactionStatus,
+    UndoResult,
+)
 from dlsite_organizer.services.drop_input import normalized_path_identity
 from dlsite_organizer.services.organizer import OrganizerPreview, WorkLookup
 
@@ -18,6 +23,7 @@ from dlsite_organizer.services.organizer import OrganizerPreview, WorkLookup
 class ScanMode(StrEnum):
     REPLACE = "replace"
     APPEND = "append"
+    RECONCILE = "reconcile"
 
 
 class BusyOperation(StrEnum):
@@ -30,6 +36,7 @@ class PreviewStaleReason(StrEnum):
     SETTINGS_CHANGED = "settings_changed"
     FILESYSTEM_CHANGED = "filesystem_changed"
     CANCELLED = "cancelled"
+    REFRESH_FAILED = "refresh_failed"
 
 
 @dataclass
@@ -59,6 +66,33 @@ class OrganizerState:
     unresolved_transaction_id: str | None = None
     last_execution_result: RenameExecutionResult | None = None
     last_undo_result: UndoResult | None = None
+    completed_targets: set[str] = field(default_factory=set, init=False)
+    reconciliation_root: Path | None = field(default=None, init=False)
+    reconciliation_pending: bool = field(default=False, init=False)
+
+    def completed(self, row: int) -> bool:
+        return (self.plans[row].status is RenamePlanStatus.UNCHANGED
+                and self.row_keys[row] in self.completed_targets)
+
+    def prepare_reconciliation(self, result: RenameExecutionResult) -> bool:
+        """Capture only finalized, confirmed mutation facts in this review root."""
+        transaction = result.transaction
+        root = self.committed_preview_root
+        if (transaction is None or transaction.unresolved or root is None
+                or result.status not in {TransactionStatus.COMPLETED, TransactionStatus.PARTIAL,
+                                         TransactionStatus.FAILED}
+                or transaction.status is not result.status
+                or transaction.operations != result.operations
+                or normalized_path_identity(root) != normalized_path_identity(transaction.root)
+                or any(op.status in {ExecutionStatus.PENDING, ExecutionStatus.RECOVERY_REQUIRED}
+                       for op in result.operations)):
+            return False
+        self.completed_targets.update(normalized_path_identity(op.target_path)
+                                      for op in result.operations
+                                      if op.status is ExecutionStatus.SUCCESS)
+        self.reconciliation_root = root
+        self.reconciliation_pending = True
+        return True
 
     @property
     def plans(self) -> tuple[RenamePlan, ...]:
@@ -83,7 +117,8 @@ class OrganizerState:
 
     @property
     def checks_editable(self) -> bool:
-        return self.preview_current and self.busy is None
+        return (self.preview_current and self.busy is None
+                and self.unresolved_transaction_id is None)
 
     @property
     def checked_ready_count(self) -> int:
@@ -124,16 +159,21 @@ class OrganizerState:
         self.busy = None
         self.scan_mode = ScanMode.REPLACE
 
-    def replace_preview(self, preview: OrganizerPreview) -> None:
+    def replace_preview(self, preview: OrganizerPreview, *, reconcile: bool = False) -> None:
+        if not reconcile:
+            self._clear_review_session()
         keys = preview_row_keys(preview)
         self.preview = preview
         self.row_keys = keys
         self._checked = {
             key for key, plan in zip(keys, preview.plans, strict=True)
-            if plan.status is RenamePlanStatus.READY
+            if plan.status is RenamePlanStatus.READY and not reconcile
         }
         self._commit_validity()
         self.clear_highlight()
+        if reconcile:
+            self.reconciliation_pending = False
+            self.reconciliation_root = None
 
     def append_preview(self, preview: OrganizerPreview) -> None:
         """Commit a pre-merged ordered preview, preserving old READY checks only."""
@@ -190,7 +230,9 @@ class OrganizerState:
 
     def mark_stale(self, reason: PreviewStaleReason) -> None:
         self.preview_revision += 1
-        self.stale_reason = reason if self.plans or self.busy is BusyOperation.SCAN else None
+        self.stale_reason = (
+            reason if self.plans or self.busy is BusyOperation.SCAN
+            or self.reconciliation_root is not None else None)
 
     def clear_preview(self) -> None:
         self.preview_revision += 1
@@ -199,6 +241,12 @@ class OrganizerState:
         self._checked.clear()
         self.stale_reason = None
         self.clear_highlight()
+        self._clear_review_session()
+
+    def _clear_review_session(self) -> None:
+        self.completed_targets.clear()
+        self.reconciliation_root = None
+        self.reconciliation_pending = False
 
 
 class _PathItem(Protocol):

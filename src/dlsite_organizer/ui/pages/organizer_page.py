@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtGui import QAction, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -49,7 +50,6 @@ from dlsite_organizer.ui.delegates.organizer_delegates import (
 from dlsite_organizer.ui.models.organizer_preview_model import (
     OrganizerPreviewModel,
     plan_diagnostics,
-    plan_status_label,
 )
 from dlsite_organizer.ui.state.organizer_state import (
     BusyOperation,
@@ -65,6 +65,7 @@ from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, ButtonRole
 from dlsite_organizer.ui.widgets.compact_drop_area import CompactDirectoryDropArea
 from dlsite_organizer.ui.widgets.drop_zone import local_directory_paths
 from dlsite_organizer.ui.widgets.organizer_review import (
+    OrganizerBulkMenuButton,
     OrganizerElidedLabel,
     OrganizerPathDisplay,
     OrganizerSummary,
@@ -146,7 +147,10 @@ class OrganizerPage(QWidget):
         input_layout.setSpacing(3)
 
         root_label = QLabel("下次扫描目录")
+        self.root_label = root_label
         root_label.setObjectName("sectionLabel")
+        root_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        root_label.setMinimumWidth(root_label.sizeHint().width() + 8)
         self.root_input = QLineEdit()
         root_label.setBuddy(self.root_input)
         self.root_input.setAccessibleName("下次扫描目录")
@@ -203,16 +207,12 @@ class OrganizerPage(QWidget):
         root_context_row.setSpacing(7)
         current_root_label = QLabel("当前预览")
         current_root_label.setObjectName("sectionLabel")
-        self.preview_root_name = OrganizerElidedLabel()
-        self.preview_root_name.setObjectName("sectionLabel")
-        self.preview_root_name.setMaximumWidth(220)
         self.preview_root_display = OrganizerPathDisplay(copy_button=False)
         self.preview_root_display.setAccessibleName("当前预览目录")
         self.summary_label = OrganizerSummary()
         self.summary_label.setObjectName("organizerSummary")
         self.summary_label.setAccessibleName("预览项目统计")
         root_context_row.addWidget(current_root_label)
-        root_context_row.addWidget(self.preview_root_name)
         root_context_row.addWidget(self.preview_root_display, 1)
         context_layout.addLayout(root_context_row)
         summary_row = QHBoxLayout()
@@ -222,30 +222,34 @@ class OrganizerPage(QWidget):
         bulk_layout = QHBoxLayout(self.bulk_toolbar)
         bulk_layout.setContentsMargins(0, 0, 0, 0)
         bulk_layout.setSpacing(2)
-        self.bulk_buttons: dict[str, QPushButton] = {}
+        self.bulk_menu_button = OrganizerBulkMenuButton(self.bulk_toolbar)
+        self.bulk_menu_button.setFixedSize(30, 30)
+        self.bulk_menu_button.setIcon(execution_check_icon("select"))
+        self.bulk_menu_button.setIconSize(QSize(18, 18))
+        self.bulk_menu_button.setToolTip("批量设置执行勾选")
+        self.bulk_menu_button.setAccessibleName("批量设置执行勾选")
+        self.bulk_menu_button.setAccessibleDescription("打开菜单，仅设置可执行项目的执行勾选。")
+        self.bulk_menu_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        set_button_role(self.bulk_menu_button, ButtonRole.QUIET)
+        self.bulk_menu_button.setStyleSheet(f"""
+            QPushButton {{ min-height: 0; padding: 0; }}
+            QPushButton:focus {{ border: 1px solid {LIGHT_COLORS.focus}; }}
+            QPushButton::menu-indicator {{ width: 5px; height: 5px; }}
+        """)
+        self.bulk_menu = QMenu(self.bulk_menu_button)
+        self.bulk_actions: dict[str, QAction] = {}
         for action, label in (
             ("select", "全选所有可执行项"),
             ("invert", "反选所有可执行项"),
             ("clear", "清除所有执行勾选"),
         ):
-            button = QPushButton(self.bulk_toolbar)
-            button.setFixedSize(28, 28)
-            button.setIcon(execution_check_icon(action))
-            button.setIconSize(QSize(18, 18))
-            button.setToolTip(label)
-            button.setAccessibleName(label)
-            button.setAccessibleDescription("仅改变执行勾选，保留高亮与当前行。")
-            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-            set_button_role(button, ButtonRole.QUIET)
-            button.setStyleSheet(f"""
-                QPushButton {{ min-height: 0; padding: 0; }}
-                QPushButton:focus {{ border: 1px solid {LIGHT_COLORS.focus}; }}
-            """)
-            button.clicked.connect(
+            menu_action = self.bulk_menu.addAction(label)
+            menu_action.triggered.connect(
                 lambda _checked=False, action=action: self.preview_model.bulk_check(action)
             )
-            self.bulk_buttons[action] = button
-            bulk_layout.addWidget(button)
+            self.bulk_actions[action] = menu_action
+        self.bulk_menu_button.setMenu(self.bulk_menu)
+        bulk_layout.addWidget(self.bulk_menu_button)
         summary_row.addWidget(self.bulk_toolbar)
         context_layout.addLayout(summary_row)
         self.input_root_difference_label = OrganizerElidedLabel()
@@ -256,6 +260,11 @@ class OrganizerPage(QWidget):
 
         self.status_banner = StatusBanner(self)
         layout.addWidget(self.status_banner)
+        self.retry_refresh_button = QPushButton("重新刷新")
+        self.retry_refresh_button.setAccessibleName("重新刷新当前预览目录")
+        self.retry_refresh_button.clicked.connect(self.retry_refresh)
+        self.retry_refresh_button.hide()
+        layout.addWidget(self.retry_refresh_button, 0, Qt.AlignmentFlag.AlignLeft)
 
         self.empty_state = QWidget(self)
         self.empty_state.setObjectName("organizerEmptyState")
@@ -569,18 +578,25 @@ class OrganizerPage(QWidget):
     @Slot()
     def start_scan(self, selected_paths: Sequence[Path | str] | None = None) -> None:
         """Start one background organizer run."""
+        mode = self._next_scan_mode
+        self._next_scan_mode = ScanMode.REPLACE
+        self._start_scan(self.state.input_root.strip(), mode, selected_paths)
+
+    def _start_scan(self, root: str, mode: ScanMode,
+                    selected_paths: Sequence[Path | str] | None = None) -> None:
         if self._thread is not None:
             return
-        root = self.state.input_root.strip()
         if not root:
             self._set_feedback("请先选择下次扫描目录。", "error")
             return
 
         self.state.settings_generation = self._organizer_service.settings_generation
-        self.state.begin_scan(self._next_scan_mode)
-        self._next_scan_mode = ScanMode.REPLACE
+        self.state.begin_scan(mode)
         self._clear_feedback()
-        self._set_operation_progress("正在扫描目录…")
+        self._set_operation_progress(
+            f"重命名完成 {self.state.last_execution_result.success_count} 项，正在刷新预览…"
+            if mode is ScanMode.RECONCILE and self.state.last_execution_result is not None
+            else "正在扫描目录…")
         self._set_loading(True)
 
         thread: QThread | None = None
@@ -596,7 +612,7 @@ class OrganizerPage(QWidget):
             thread.started.connect(worker.run)
             worker.progress.connect(self._show_progress)
             worker.result_ready.connect(self._show_preview)
-            worker.failed.connect(self._show_error)
+            worker.request_failed.connect(self._show_scan_error)
             worker.finished.connect(thread.quit)
             worker.finished.connect(worker.deleteLater)
             thread.finished.connect(thread.deleteLater)
@@ -624,7 +640,6 @@ class OrganizerPage(QWidget):
                 thread.deleteLater()
             self._thread = None
             self._worker = None
-            self.state.scan_mode = ScanMode.REPLACE
             self._show_error("无法启动扫描，请稍后重试。")
             self._set_operation_progress("")
             self._set_loading(False)
@@ -654,7 +669,9 @@ class OrganizerPage(QWidget):
         if self.state.preview is not None and has_existing_preview and normalized_path_identity(
             self.state.preview.root_path
         ) != normalized_path_identity(selection.root_path):
-            self._show_error("追加预览必须来自当前预览的同一作品根目录。")
+            self._show_error(
+                f"当前预览属于：{self.state.preview.root_path}\n"
+                "无法将其他根目录下的作品加入同一批预览。请先清空预览，或重新扫描对应根目录。")
             return
         self.set_root_path(selection.root_path)
         # Keep start_scan compatible with existing callers while making this
@@ -678,7 +695,8 @@ class OrganizerPage(QWidget):
 
     @Slot(int, int, str)
     def _show_progress(self, completed: int, total: int, work_code: str) -> None:
-        self._set_operation_progress(f"正在查询 {completed + 1} / {total}：{work_code}")
+        prefix = "正在刷新预览" if self.state.scan_mode is ScanMode.RECONCILE else "正在查询"
+        self._set_operation_progress(f"{prefix} {completed + 1} / {total}：{work_code}")
 
     @Slot(object)
     def _show_preview(self, value: object) -> None:
@@ -693,6 +711,9 @@ class OrganizerPage(QWidget):
         if self.state.cancel_requested:
             preview = replace(preview, cancelled=True)
         if preview.cancelled:
+            if self.state.scan_mode is ScanMode.RECONCILE:
+                self._show_error("预览刷新已取消。")
+                return
             if self.state.scan_mode is ScanMode.APPEND:
                 self._show_error("追加预览已取消；当前预览保持不变。")
                 return
@@ -720,7 +741,23 @@ class OrganizerPage(QWidget):
             self._update_preview_controls()
             self._set_feedback("追加预览完成；未修改本地文件。", "success")
         else:
-            self._commit_preview(preview)
+            self._commit_preview(preview, reconcile=self.state.scan_mode is ScanMode.RECONCILE)
+
+        if self.state.scan_mode is ScanMode.RECONCILE:
+            unmatched = self.state.completed_targets.difference(self.state.row_keys)
+            if unmatched:
+                logger.warning("Completed rename targets absent from refreshed preview: %s",
+                               sorted(unmatched))
+            result = self.state.last_execution_result
+            count = result.success_count if result is not None else 0
+            message = f"已完成 {count} 项，预览已刷新。"
+            if result is not None and result.status.name in {"PARTIAL", "FAILED"}:
+                message += (f" 本次失败 {result.failed_count} 项，"
+                            f"未执行 {result.not_executed_count} 项。")
+            self._set_feedback(message, "success")
+            self._set_operation_progress("")
+            self._update_summary(preview)
+            return
 
         if (
             self.state.scan_mode is not ScanMode.APPEND
@@ -858,11 +895,33 @@ class OrganizerPage(QWidget):
         else:
             self._show_error(result.error or "重命名未执行。")
         self._refresh_recent_transaction()
+        if (not self._journal_unavailable and self.state.unresolved_transaction_id is None
+                and self.state.prepare_reconciliation(result)):
+            self._set_feedback(
+                f"重命名完成 {result.success_count} 项，正在刷新预览…", "success")
+            if self._thread is None:
+                self.retry_refresh()
+
+    @Slot()
+    def retry_refresh(self) -> None:
+        """Reuse the ordinary scanner and ownership gates on the committed root."""
+        root = self.state.reconciliation_root
+        if self._thread is not None or root is None:
+            return
+        self._refresh_recent_transaction()
+        if self._journal_unavailable or self.state.unresolved_transaction_id is not None:
+            return
+        self.state.reconciliation_pending = True
+        self._start_scan(str(root), ScanMode.RECONCILE)
 
     @Slot(object)
     def _show_undo_result(self, value: object) -> None:
         result = cast(UndoResult, value)
         self.state.last_undo_result = result
+        # Undo retains its existing invalidation contract. A failed forward
+        # refresh must not describe the now-undone transaction or schedule work.
+        self.state.reconciliation_root = None
+        self.state.reconciliation_pending = False
         self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         if result.status.name == "UNDONE":
             self._set_feedback(
@@ -990,9 +1049,19 @@ class OrganizerPage(QWidget):
 
     @Slot(str)
     def _show_error(self, message: str) -> None:
+        if self.state.scan_mode is ScanMode.RECONCILE:
+            self.state.reconciliation_pending = False
+            self._invalidate_preview(PreviewStaleReason.REFRESH_FAILED)
+            self._set_feedback(message, "error")
+            return
         if self._worker is not None and self.state.preview is not None:
             message = f"{message} 当前预览保持不变。"
         self._set_feedback(message, "error")
+
+    @Slot(int, int, str)
+    def _show_scan_error(self, request_id: int, revision: int, message: str) -> None:
+        if self.state.owns_result(request_id, revision):
+            self._show_error(message)
 
     @Slot(str)
     def _show_action_error(self, message: str) -> None:
@@ -1006,6 +1075,12 @@ class OrganizerPage(QWidget):
         logger.debug("organizer scan thread finished; clearing UI busy state")
         self._thread = None
         self._worker = None
+        if (self.state.scan_mode is ScanMode.RECONCILE
+                and self.state.reconciliation_root is not None):
+            # Covers errors, cancellation and rejected settings/revision results.
+            self.state.reconciliation_pending = False
+            if self.state.stale_reason is not PreviewStaleReason.SETTINGS_CHANGED:
+                self.preview_model.mark_stale(PreviewStaleReason.REFRESH_FAILED)
         self.state.finish_operation()
         self._set_loading(False)
         self.cancel_button.setText("取消扫描")
@@ -1022,6 +1097,8 @@ class OrganizerPage(QWidget):
         self._set_operation_progress("")
         self._update_execute_button()
         self._refresh_recent_transaction()
+        if self.state.reconciliation_pending:
+            self.retry_refresh()
 
     def _set_action_loading(self, loading: bool) -> None:
         self.preview_model.refresh_editability()
@@ -1056,6 +1133,7 @@ class OrganizerPage(QWidget):
         self.table.setEnabled(not loading)
         self.input_hint_label.setVisible(not loading and not self._operation_message)
         self._update_preview_controls()
+        self._refresh_status_banner()
         if loading:
             self.execute_button.setEnabled(False)
             self.undo_button.setEnabled(False)
@@ -1186,6 +1264,15 @@ class OrganizerPage(QWidget):
             return
         self._clear_highlight()
         self.preview_model.remove_rows(rows)
+        assert self.state.preview is not None
+        try:
+            replanned = self._organizer_service.reevaluate_preview(self.state.preview)
+        except Exception:
+            logger.exception("Could not re-evaluate surviving Organizer plans")
+            self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
+            self._show_error("项目已移除，但剩余计划无法重新检查；请重新扫描。")
+            return
+        self.preview_model.reevaluate_preview(replanned)
         self._set_feedback(f"已从当前预览移除 {len(rows)} 项；未修改本地文件。", "success")
         assert self.state.preview is not None
         self._update_summary(self.state.preview)
@@ -1208,12 +1295,12 @@ class OrganizerPage(QWidget):
         self._set_feedback("预览已清空；未修改本地文件。", "success")
         self._update_execute_button()
 
-    def _commit_preview(self, preview: OrganizerPreview) -> None:
+    def _commit_preview(self, preview: OrganizerPreview, *, reconcile: bool = False) -> None:
         self.state.settings_generation = self._organizer_service.settings_generation
         if not self.state.input_root.strip():
             self.set_root_path(preview.root_path)
         self._clear_highlight()
-        self.preview_model.replace_preview(preview)
+        self.preview_model.replace_preview(preview, reconcile=reconcile)
         self.table.setEnabled(not self.is_busy())
         self._update_preview_context()
         self._update_summary(preview)
@@ -1236,11 +1323,12 @@ class OrganizerPage(QWidget):
         self._update_empty_state()
 
     def _update_bulk_controls(self) -> None:
-        editable = self.state.checks_editable and any(
+        editable = self.state.checks_editable and not self._journal_unavailable and any(
             plan.status is RenamePlanStatus.READY for plan in self.state.plans
         )
-        for button in self.bulk_buttons.values():
-            button.setEnabled(editable)
+        self.bulk_menu_button.setEnabled(editable)
+        for action in self.bulk_actions.values():
+            action.setEnabled(editable)
 
     def _update_summary(self, preview: OrganizerPreview | None) -> None:
         if preview is None:
@@ -1250,9 +1338,13 @@ class OrganizerPage(QWidget):
         unchanged = preview.count(RenamePlanStatus.UNCHANGED)
         total = len(preview.plans)
         non_executable = total - ready - unchanged
-        warning = sum(bool(plan.warnings) for plan in preview.plans)
+        completed = sum(self.state.completed(row) for row in range(len(preview.plans)))
+        unchanged -= completed
+        warning = sum(bool(plan.warnings) and plan.status is RenamePlanStatus.READY
+                      for plan in preview.plans)
         skipped = preview.skipped_count
-        self.summary_label.set_counts(total, ready, non_executable, warning, unchanged, skipped)
+        self.summary_label.set_counts(total, ready, non_executable, warning, unchanged, skipped,
+                                      completed=completed)
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
@@ -1260,7 +1352,6 @@ class OrganizerPage(QWidget):
 
     def _update_preview_context(self) -> None:
         root = self.state.committed_preview_root
-        self.preview_root_name.setText(root.name if root is not None else "")
         self.preview_root_display.set_path(str(root) if root is not None else "")
         self.preview_root_display.setToolTip(str(root) if root is not None else "")
         self._update_root_difference()
@@ -1345,8 +1436,8 @@ class OrganizerPage(QWidget):
         metadata = f"作品编号：{codes}"
         if maker:
             metadata += f" · 社团：{maker}"
-        status = plan_status_label(plan.status)
-        if plan.warnings:
+        status = self.preview_model.status_label(row)
+        if plan.warnings and plan.status is RenamePlanStatus.READY:
             status += f" · 另有 {len(plan.warnings)} 条警告"
         self.detail_summary_label.setText(f"当前行：{code} · {status}")
         self.detail_title_label.setText(title)
@@ -1507,6 +1598,10 @@ class OrganizerPage(QWidget):
 
     def _refresh_status_banner(self) -> None:
         unresolved = self.state.unresolved_transaction_id
+        retry = (self.state.reconciliation_root is not None and not self.is_busy()
+                 and unresolved is None and not self._journal_unavailable)
+        self.retry_refresh_button.setVisible(retry)
+        self.retry_refresh_button.setEnabled(retry)
         if unresolved is not None:
             self.status_banner.show_status(
                 BannerState.BLOCKED,
@@ -1520,7 +1615,19 @@ class OrganizerPage(QWidget):
                 "重命名记录不可用",
                 f"{message}为保证可恢复性，执行和撤销已暂停。",
             )
+        elif (self.state.reconciliation_root is not None and self.is_busy()
+              and self.state.scan_mode is ScanMode.RECONCILE):
+            result = self.state.last_execution_result
+            count = result.success_count if result is not None else 0
+            self.status_banner.show_status(
+                BannerState.INFO, f"重命名完成 {count} 项，正在刷新预览…",
+                "当前列表为执行前的预览，仅供等待刷新；执行勾选与重命名暂不可用。")
         elif self.state.stale:
+            if self.state.reconciliation_root is not None:
+                self.status_banner.show_status(
+                    BannerState.STALE, "重命名已完成，但预览刷新失败。",
+                    "当前列表可能已过期，请重新刷新。行仍可检查，但不能勾选或执行。")
+                return
             if self.state.stale_reason is PreviewStaleReason.SETTINGS_CHANGED:
                 title = "当前预览因设置变化已失效"
                 message = "行仍可查看和复制，但不能勾选或执行。请重新扫描，或清空预览。"

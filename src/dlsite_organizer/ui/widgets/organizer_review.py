@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QLabel, QSizePolicy
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QKeyEvent, QPainter
+from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy
 
 from dlsite_organizer.ui.delegates.organizer_delegates import paint_status_mark
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 from dlsite_organizer.ui.widgets.path_display import PathDisplay
+
+
+class OrganizerBulkMenuButton(QPushButton):
+    """A native menu button with explicit Enter activation outside dialogs."""
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        menu = self.menu()
+        if self.isEnabled() and menu is not None and event.key() in (
+            Qt.Key.Key_Return, Qt.Key.Key_Enter,
+        ):
+            menu.popup(self.mapToGlobal(QPoint(0, self.height())))
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class OrganizerPathDisplay(PathDisplay):
@@ -77,18 +91,21 @@ class OrganizerSummary(QLabel):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_counts(self, total: int, ready: int, blocked: int, warning: int,
-                   unchanged: int, skipped: int) -> None:
+                   unchanged: int, skipped: int, *, completed: int = 0) -> None:
         self._items = (
             ("", f"{total} 项", LIGHT_COLORS.text_primary),
+            *((("completed", f"本轮已完成 {completed}", LIGHT_COLORS.success),)
+              if completed else ()),
             ("ready", f"可执行 {ready}", LIGHT_COLORS.success),
             ("blocked", f"不可执行 {blocked}", LIGHT_COLORS.blocked),
             ("warning", f"警告 {warning}", LIGHT_COLORS.warning),
             ("unchanged", f"无需重命名 {unchanged}", LIGHT_COLORS.text_muted),
             ("", f"扫描跳过 {skipped}", LIGHT_COLORS.text_muted),
         )
-        self.setText(f"共 {total} 项 · 可执行 {ready} · 不可执行 {blocked} · 含警告 {warning} · "
+        self.setText(f"共 {total} 项 · 本轮已完成 {completed} · 可执行 {ready} · "
+                     f"不可执行 {blocked} · 含警告 {warning} · "
                      f"无需重命名 {unchanged} · 扫描跳过 {skipped}")
-        self.setToolTip(self.text() + "\n警告可与任一状态重叠，不参与项目总数的互斥分组。")
+        self.setToolTip(self.text() + "\n警告仅统计仍可执行、但建议检查的项目；与不可执行互斥。")
         self.setAccessibleDescription(self.toolTip())
         self.update()
 
