@@ -51,6 +51,11 @@ No generic application state framework or speculative summary fields are needed.
 
 Row identity is exactly `normalized_path_identity(source_path)`: resolved local
 path with Windows case normalization, matching existing drop/upsert semantics.
+For service-produced direct non-link children, canonicalization resolves the shared
+parent once and joins each normalized child name. Scanner already excludes child
+links/reparse points; possible DOS short-name aliases, trailing dot/space names and
+non-direct paths fall back to the original resolver. This prevents repeated Windows
+path probes during bulk presentation construction without new planner/safety rules.
 Indexes locate rows but never identify them. Plans remain domain results, including
 structured statuses, warnings, errors, Work and lookup provenance.
 

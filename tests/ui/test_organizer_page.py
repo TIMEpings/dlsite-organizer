@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QTableWidgetItem
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 from tests.services.test_lookup_cache import (
     MutableClock,
     SequencedProvider,
@@ -118,11 +118,11 @@ def test_organizer_page_scan_button_empty_root_completes_and_clears_busy(
         page.scan_button.click()
         _wait_for_scan_idle(qapp, page)
 
-        assert page._preview is not None
-        assert page._preview.scan.candidates == ()
-        assert page._preview.plans == ()
+        assert page.preview is not None
+        assert page.preview.scan.candidates == ()
+        assert page.preview.plans == ()
         assert lookup.calls == []
-        assert page.table.rowCount() == 0
+        assert page.preview_model.rowCount() == 0
         assert page.status_label.text() == "未发现可整理的作品文件夹；未修改本地文件。"
         assert not page.is_busy()
         assert page.scan_button.isEnabled()
@@ -154,10 +154,10 @@ def test_organizer_page_scan_button_uses_fresh_cache_without_provider_call(
         _wait_for_scan_idle(qapp, page)
 
         assert provider.calls == []
-        assert page._preview is not None
-        assert len(page._preview.plans) == 1
-        assert page._preview.plans[0].status is RenamePlanStatus.READY
-        assert page.table.rowCount() == 1
+        assert page.preview is not None
+        assert len(page.preview.plans) == 1
+        assert page.preview.plans[0].status is RenamePlanStatus.READY
+        assert page.preview_model.rowCount() == 1
     finally:
         page.close()
         database.dispose()
@@ -202,8 +202,8 @@ def test_organizer_page_cancel_is_cooperative_and_leaves_idle_state(
         lookup.release.set()
         _wait_for_scan_idle(qapp, page)
 
-        assert page._preview is not None
-        assert page._preview.cancelled
+        assert page.preview is not None
+        assert page.preview.cancelled
         assert lookup.calls == ["RJ01609020"]
         assert page.status_label.text().startswith("扫描已取消")
     finally:
@@ -232,8 +232,8 @@ def test_organizer_page_cancel_then_rescan_succeeds(
         page.scan_button.click()
         _wait_for_scan_idle(qapp, page)
 
-        assert page._preview is not None
-        assert not page._preview.cancelled
+        assert page.preview is not None
+        assert not page.preview.cancelled
         assert lookup.calls == ["RJ01609020", "RJ01609020", "RJ01636949"]
     finally:
         lookup.release.set()
@@ -285,22 +285,17 @@ def test_organizer_page_initializes_and_renders_preview(qapp: QApplication, tmp_
     page.set_preview(preview)
 
     assert page.root_input.text() == str(tmp_path)
-    assert page.table.rowCount() == 1
-    headers = []
-    for index in range(page.table.columnCount()):
-        header = page.table.horizontalHeaderItem(index)
-        assert header is not None
-        headers.append(header.text())
-    assert headers == ["状态", "当前目录名", "作品编号", "社团", "标题", "目标目录名"]
+    assert page.preview_model.rowCount() == 1
+    headers = [page.preview_model.headerData(index, Qt.Orientation.Horizontal)
+               for index in range(page.preview_model.columnCount())]
+    assert headers == ["执行", "状态", "作品", "当前名称", "目标名称"]
     assert "详情" not in headers
-    status_item = cast(QTableWidgetItem, page.table.item(0, 0))
-    current_item = cast(QTableWidgetItem, page.table.item(0, 1))
-    code_item = cast(QTableWidgetItem, page.table.item(0, 2))
-    proposed_item = cast(QTableWidgetItem, page.table.item(0, 5))
-    assert status_item.text() == "可执行"
-    assert current_item.text() == "old RJ01609020"
-    assert code_item.text() == "RJ01609020"
-    assert proposed_item.text() == "[Circle][RJ01609020] Preview Title"
+    assert page.preview_model.data(page.preview_model.index(0, 1)) == "可执行"
+    assert page.preview_model.data(page.preview_model.index(0, 3)) == "old RJ01609020"
+    assert "RJ01609020" in page.preview_model.data(page.preview_model.index(0, 2))
+    assert page.preview_model.data(page.preview_model.index(0, 4)) == (
+        "[Circle][RJ01609020] Preview Title"
+    )
     assert "可执行 1" in page.summary_label.text()
     assert page.status_label.text() == "预览生成完成；未修改本地文件。"
     assert sorted(path.name for path in tmp_path.iterdir()) == before
@@ -340,10 +335,10 @@ def test_organizer_page_selects_ready_rows_and_disables_non_ready_rows(
 
     assert page.selected_ready_count() == 1
     assert page.execute_button.isEnabled()
-    ready_item = cast(QTableWidgetItem, page.table.item(0, 0))
-    assert ready_item.checkState().name == 'Checked'
+    ready_item = page.preview_model.index(0, 0)
+    assert ready_item.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
 
-    ready_item.setCheckState(ready_item.checkState().Unchecked)
+    page.preview_model.setData(ready_item, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
     assert page.selected_ready_count() == 0
     assert not page.execute_button.isEnabled()
 
@@ -352,8 +347,8 @@ def test_organizer_page_selects_ready_rows_and_disables_non_ready_rows(
         plans=(replace(preview.plans[0], status=RenamePlanStatus.CONFLICT),),
     )
     page.set_preview(non_ready_preview)
-    non_ready_item = cast(QTableWidgetItem, page.table.item(0, 0))
-    assert not (non_ready_item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    non_ready_item = page.preview_model.index(0, 0)
+    assert not (page.preview_model.flags(non_ready_item) & Qt.ItemFlag.ItemIsUserCheckable)
     assert not page.execute_button.isEnabled()
     page.close()
 
@@ -483,18 +478,18 @@ def test_organizer_page_shows_stale_metadata_warning_but_not_fresh_cache_warning
         OrganizerService(FreshnessLookupService(LookupFreshness.CACHE_STALE_FALLBACK))
     )
     stale_page.set_preview(stale_page._organizer_service.preview(tmp_path))
-    stale_details = cast(QTableWidgetItem, stale_page.table.item(0, 0))
-    assert stale_page._preview is not None
-    assert stale_page._preview.plans[0].status is RenamePlanStatus.READY
-    assert "使用旧缓存 metadata" in stale_details.toolTip()
+    stale_details = stale_page.preview_model.index(0, 1)
+    assert stale_page.preview is not None
+    assert stale_page.preview.plans[0].status is RenamePlanStatus.READY
+    assert "使用旧缓存 metadata" in stale_details.data(Qt.ItemDataRole.ToolTipRole)
     stale_page.close()
 
     fresh_page = OrganizerPage(
         OrganizerService(FreshnessLookupService(LookupFreshness.CACHE_FRESH))
     )
     fresh_page.set_preview(fresh_page._organizer_service.preview(tmp_path))
-    fresh_status = cast(QTableWidgetItem, fresh_page.table.item(0, 0))
-    assert "使用旧缓存 metadata" not in fresh_status.toolTip()
+    fresh_status = fresh_page.preview_model.index(0, 1)
+    assert "使用旧缓存 metadata" not in fresh_status.data(Qt.ItemDataRole.ToolTipRole)
     fresh_page.close()
 
 
@@ -562,24 +557,24 @@ def test_organizer_status_cells_distinguish_normal_warning_and_blocked_states(
     page = OrganizerPage(service)
     page.set_preview(replace(preview, plans=(preview.plans[0], warning, blocked)))
 
-    normal_item = cast(QTableWidgetItem, page.table.item(0, 0))
-    warning_item = cast(QTableWidgetItem, page.table.item(1, 0))
-    blocked_item = cast(QTableWidgetItem, page.table.item(2, 0))
+    normal_item = page.preview_model.index(0, 1)
+    warning_item = page.preview_model.index(1, 1)
+    blocked_item = page.preview_model.index(2, 1)
 
-    assert normal_item.text() == "可执行"
-    assert normal_item.icon().isNull()
-    assert warning_item.icon().isNull() is False
-    assert warning_item.font().bold()
-    assert warning_item.text() == "可执行"
-    assert "悬停查看原因" not in warning_item.text()
-    assert "目标路径长度" in warning_item.toolTip()
-    assert "悬停查看具体原因" in warning_item.toolTip()
+    assert normal_item.data(Qt.ItemDataRole.DisplayRole) == "可执行"
+    assert normal_item.data(Qt.ItemDataRole.DecorationRole) is None
+    assert warning_item.data(Qt.ItemDataRole.DecorationRole).isNull() is False
+    assert warning_item.data(Qt.ItemDataRole.FontRole).bold()
+    assert warning_item.data(Qt.ItemDataRole.DisplayRole) == "可执行"
+    assert "悬停查看原因" not in warning_item.data(Qt.ItemDataRole.DisplayRole)
+    assert "目标路径长度" in warning_item.data(Qt.ItemDataRole.ToolTipRole)
+    assert "悬停查看具体原因" in warning_item.data(Qt.ItemDataRole.ToolTipRole)
     assert "目标路径长度" in str(warning_item.data(Qt.ItemDataRole.AccessibleTextRole))
-    assert blocked_item.icon().isNull() is False
-    assert blocked_item.font().bold()
-    assert blocked_item.text() == "冲突"
-    assert "悬停查看原因" not in blocked_item.text()
-    assert "目标目录已存在" in blocked_item.toolTip()
+    assert blocked_item.data(Qt.ItemDataRole.DecorationRole).isNull() is False
+    assert blocked_item.data(Qt.ItemDataRole.FontRole).bold()
+    assert blocked_item.data(Qt.ItemDataRole.DisplayRole) == "冲突"
+    assert "悬停查看原因" not in blocked_item.data(Qt.ItemDataRole.DisplayRole)
+    assert "目标目录已存在" in blocked_item.data(Qt.ItemDataRole.ToolTipRole)
     page.close()
 
 
@@ -630,7 +625,7 @@ def test_remove_selected_supports_multiple_rows(qapp: QApplication, tmp_path: Pa
 
     page.remove_selected()
 
-    assert page.table.rowCount() == 1
+    assert page.preview_model.rowCount() == 1
     assert page.preview is not None
     assert [plan.current_name for plan in page.preview.plans] == ["old RJ01636949"]
     page.close()
@@ -649,7 +644,7 @@ def test_clear_preview_is_immediate_preview_only_and_keeps_root(
     page.clear_button.click()
 
     assert page.preview is None
-    assert page.table.rowCount() == 0
+    assert page.preview_model.rowCount() == 0
     assert not page.execute_button.isEnabled()
     assert not page.remove_button.isEnabled()
     assert not page.clear_button.isEnabled()
@@ -679,7 +674,7 @@ def test_full_mode_drop_appends_and_redrop_upserts_without_reordering(
     _wait_for_scan_idle(qapp, page)
     assert page.preview is not None
     assert [plan.source_path for plan in page.preview.plans] == sources
-    assert page.table.rowCount() == 3
+    assert page.preview_model.rowCount() == 3
     page.close()
 
 

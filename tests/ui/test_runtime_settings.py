@@ -14,7 +14,8 @@ from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.ui.main_window import MainWindow
-from dlsite_organizer.ui.pages.organizer_page import OrganizerPage, _merge_previews, _ScanMode
+from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
+from dlsite_organizer.ui.state.organizer_state import ScanMode, merge_previews
 from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorkerResult
 
 
@@ -141,23 +142,23 @@ def test_late_delivery_cannot_replace_current_preview(
     page = OrganizerPage(organizer)
     preview = organizer.preview(tmp_path)
     page.set_preview(preview)
-    late = OrganizerWorkerResult(page._scan_request_id, page._preview_revision, preview)
+    late = OrganizerWorkerResult(page.state.request_id, page.state.preview_revision, preview)
     try:
         if change == "request":
-            page._scan_request_id += 1
+            page.state.request_id += 1
         elif change == "replacement":
             persistence.save(settings.model_copy(update={"naming_template": "NEW-{workno}"}))
             page.set_preview(organizer.preview(tmp_path))
-            page._scan_mode = _ScanMode.APPEND
+            page.state.scan_mode = ScanMode.APPEND
             assert page.preview is not None and page.preview.settings_generation == 1
         else:
             page.invalidate_preview()
         current = page.preview
-        revision = page._preview_revision
+        revision = page.state.preview_revision
         stale = page.preview_stale
         page._show_preview(late)
         assert page.preview is current
-        assert page._preview_revision == revision
+        assert page.state.preview_revision == revision
         assert page.preview_stale == stale
     finally:
         page.close()
@@ -177,7 +178,7 @@ def test_queued_success_after_cancellation_is_non_executable(
     assert not result.preview.cancelled
     try:
         # Completion was already emitted before Cancel was processed by Qt.
-        page._scan_cancelled = True
+        page.state.cancel_requested = True
         page._show_preview(result)
         page._update_execute_button()
         assert page.preview is not None and page.preview.cancelled
@@ -203,13 +204,13 @@ def test_append_rejects_existing_rows_from_other_settings_generation(
     page.set_preview(previous)
     persistence.save(settings.model_copy(update={"naming_template": "NEW-{workno}"}))
     incoming = organizer.preview_paths(tmp_path, (second,))
-    page._scan_mode = _ScanMode.APPEND
+    page.state.scan_mode = ScanMode.APPEND
     try:
-        page._show_preview(OrganizerWorkerResult(0, page._preview_revision, incoming))
+        page._show_preview(OrganizerWorkerResult(0, page.state.preview_revision, incoming))
         assert page.preview is previous
         assert page.preview_stale
         assert not page.selected_ready_plans()
         with pytest.raises(ValueError, match="different settings generations"):
-            _merge_previews(previous, incoming)
+            merge_previews(previous, incoming)
     finally:
         page.close()

@@ -77,7 +77,7 @@ def test_public_destinations_round_trip_and_reuse_the_same_page_instances(
     )
     page_ids = tuple(id(page) for page in pages)
     preview_before = window.organizer_page.preview
-    revision_before = window.organizer_page._preview_revision
+    revision_before = window.organizer_page.state.preview_revision
 
     try:
         assert window.pages.currentWidget() is window.organizer_page
@@ -94,7 +94,7 @@ def test_public_destinations_round_trip_and_reuse_the_same_page_instances(
 
         assert tuple(id(page) for page in pages) == page_ids
         assert window.organizer_page.preview is preview_before
-        assert window.organizer_page._preview_revision == revision_before
+        assert window.organizer_page.state.preview_revision == revision_before
         assert provider.received_workno is None
         assert not window.organizer_page.is_busy()
         assert not window.lookup_page.is_busy()

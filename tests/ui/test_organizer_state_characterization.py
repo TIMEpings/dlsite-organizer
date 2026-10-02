@@ -2,11 +2,10 @@
 
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtWidgets import QApplication, QTableWidgetItem
+from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 from tests.ui.test_navigation_characterization import _select_navigation_label
 from tests.ui.test_organizer_page import (
@@ -21,7 +20,8 @@ from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
 from dlsite_organizer.ui.main_window import MainWindow
-from dlsite_organizer.ui.pages.organizer_page import OrganizerPage, _ScanMode
+from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
+from dlsite_organizer.ui.state.organizer_state import ScanMode
 from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorkerResult
 
 
@@ -32,12 +32,16 @@ def qapp() -> QApplication:
 
 
 def check(page: OrganizerPage, row: int, checked: bool) -> None:
-    item = cast(QTableWidgetItem, page.table.item(row, 0))
-    item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+    assert page.preview_model.setData(
+        page.preview_model.index(row, 0),
+        Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
+        Qt.ItemDataRole.CheckStateRole,
+    )
 
 
 def checked(page: OrganizerPage, row: int) -> bool:
-    return cast(QTableWidgetItem, page.table.item(row, 0)).checkState() == Qt.CheckState.Checked
+    return page.preview_model.data(page.preview_model.index(row, 0),
+        Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
 
 
 @pytest.fixture
@@ -79,15 +83,15 @@ def test_append_upserts_in_place_and_preserves_checks_with_new_rows_unchecked(
     incoming = service.preview_paths(tmp_path, (sources[0], sources[1], sources[2]))
     incoming = replace(incoming, plans=(replace(incoming.plans[0], proposed_name="updated"),
         incoming.plans[1], incoming.plans[2]))
-    page._scan_mode = _ScanMode.APPEND
-    page._show_preview(OrganizerWorkerResult(0, page._preview_revision, incoming))
+    page.state.scan_mode = ScanMode.APPEND
+    page._show_preview(OrganizerWorkerResult(0, page.state.preview_revision, incoming))
     assert page.preview is not None
     assert [plan.source_path for plan in page.preview.plans] == [*sources[1::-1], sources[2]]
     assert page.preview.plans[1].proposed_name == "updated"
     assert [checked(page, row) for row in range(3)] == [False, True, False]
     blocked = replace(incoming, plans=(replace(incoming.plans[0],
         status=RenamePlanStatus.CONFLICT),))
-    page._show_preview(OrganizerWorkerResult(0, page._preview_revision, blocked))
+    page._show_preview(OrganizerWorkerResult(0, page.state.preview_revision, blocked))
     assert not checked(page, 1)
     assert not page.selected_ready_plans()
     page.close()
@@ -141,7 +145,7 @@ def test_cancelled_replace_with_previous_preview_preserves_root_and_checks(
     check(page, 1, False)
     old = page.preview
     incoming = replace(service.preview(tmp_path), cancelled=True)
-    page._show_preview(OrganizerWorkerResult(0, page._preview_revision, incoming))
+    page._show_preview(OrganizerWorkerResult(0, page.state.preview_revision, incoming))
     assert page.preview is old and not page.preview_stale
     assert [checked(page, row) for row in range(2)] == [True, False]
     page.close()
@@ -159,11 +163,11 @@ def test_navigation_retains_check_highlight_current_and_hidden_worker_commits_on
     page.set_preview(OrganizerService(FakeLookupService()).preview(tmp_path))
     check(page, 1, False)
     page.table.selectRow(1)
-    revision = page._preview_revision
+    revision = page.state.preview_revision
     current = page.table.currentIndex()
     _select_navigation_label(window, "查询")
     _select_navigation_label(window, "整理")
-    assert page._preview_revision == revision
+    assert page.state.preview_revision == revision
     assert page.table.currentIndex() == current
     assert not checked(page, 1)
     assert page.table.selectionModel().selectedRows()[0].row() == 1
@@ -177,10 +181,10 @@ def test_navigation_retains_check_highlight_current_and_hidden_worker_commits_on
         assert lookup.entered.wait(2)
         thread = page._thread
         _select_navigation_label(window, "查询")
-        assert page._thread is thread and page._preview_revision == revision
+        assert page._thread is thread and page.state.preview_revision == revision
         lookup.release.set()
         _wait_for_scan_idle(qapp, page)
-        assert len(delivered) == 1 and page._preview_revision == revision + 1
+        assert len(delivered) == 1 and page.state.preview_revision == revision + 1
         _select_navigation_label(window, "整理")
         assert window.organizer_page is page
         assert [checked(page, row) for row in range(4)] == [True] * 4

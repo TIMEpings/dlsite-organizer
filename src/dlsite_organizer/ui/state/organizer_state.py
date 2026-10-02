@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import ntpath
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
@@ -124,7 +125,7 @@ class OrganizerState:
         self.scan_mode = ScanMode.REPLACE
 
     def replace_preview(self, preview: OrganizerPreview) -> None:
-        keys = tuple(normalized_path_identity(plan.source_path) for plan in preview.plans)
+        keys = preview_row_keys(preview)
         self.preview = preview
         self.row_keys = keys
         self._checked = {
@@ -136,7 +137,7 @@ class OrganizerState:
 
     def append_preview(self, preview: OrganizerPreview) -> None:
         """Commit a pre-merged ordered preview, preserving old READY checks only."""
-        keys = tuple(normalized_path_identity(plan.source_path) for plan in preview.plans)
+        keys = preview_row_keys(preview)
         self.preview = preview
         self.row_keys = keys
         self._checked.intersection_update(
@@ -205,33 +206,66 @@ class _PathItem(Protocol):
     def source_path(self) -> Path: ...
 
 
+def _source_identity(root: Path, root_key: str, source: Path) -> str:
+    """Batch canonicalization for scanner-produced direct, non-link children.
+
+    OrganizerService plans/candidates already exclude child links/reparse points.
+    Resolve the shared parent once, then normalize the single child component.
+    Unusual paths and possible DOS short-name aliases retain the legacy resolver.
+    This identifies presentation rows; it does not validate mutation safety.
+    """
+    if (
+        root.is_absolute() and source.parent == root
+        and source.name not in ("", ".", "..")
+        and "~" not in source.name and not source.name.endswith((".", " "))
+    ):
+        return ntpath.join(root_key, ntpath.normcase(source.name))
+    return normalized_path_identity(source)
+
+
+def preview_row_keys(preview: OrganizerPreview) -> tuple[str, ...]:
+    root_key = normalized_path_identity(preview.root_path)
+    return tuple(
+        _source_identity(preview.root_path, root_key, plan.source_path) for plan in preview.plans
+    )
+
+
 def merge_previews(current: OrganizerPreview, incoming: OrganizerPreview) -> OrganizerPreview:
     """Merge service outputs without re-planning or changing service semantics."""
     if current.settings_generation != incoming.settings_generation:
         raise ValueError("Cannot merge previews from different settings generations")
-    if normalized_path_identity(current.root_path) != normalized_path_identity(incoming.root_path):
+    root_key = normalized_path_identity(current.root_path)
+    if root_key != normalized_path_identity(incoming.root_path):
         raise ValueError("Cannot merge previews from different roots")
+    # Both spellings of the parent have the scanner's non-link child contract.
+    def identity(source: Path) -> str:
+        root = incoming.root_path if source.parent == incoming.root_path else current.root_path
+        return _source_identity(root, root_key, source)
+
     return replace(
         current,
         scan=replace(
             current.scan,
-            candidates=_merge_path_items(current.scan.candidates, incoming.scan.candidates),
+            candidates=_merge_path_items(
+                current.scan.candidates, incoming.scan.candidates, identity=identity
+            ),
             skipped=_merge_path_items(current.scan.skipped, incoming.scan.skipped),
             cancelled=False,
         ),
         lookups=_merge_lookup_items(current.lookups, incoming.lookups),
-        plans=_merge_path_items(current.plans, incoming.plans),
+        plans=_merge_path_items(current.plans, incoming.plans, identity=identity),
         cancelled=False,
     )
 
 
 def _merge_path_items[PathItemT: _PathItem](
-    existing: Sequence[PathItemT], incoming: Sequence[PathItemT]
+    existing: Sequence[PathItemT], incoming: Sequence[PathItemT],
+    *, identity: Callable[[Path], str] = normalized_path_identity,
 ) -> tuple[PathItemT, ...]:
     merged = list(existing)
-    positions = {normalized_path_identity(item.source_path): i for i, item in enumerate(merged)}
+    positions = {identity(item.source_path): i for i, item in enumerate(merged)}
     for item in incoming:
-        key = normalized_path_identity(item.source_path)
+        key = identity(item.source_path)
         index = positions.get(key)
         if index is None:
             positions[key] = len(merged)

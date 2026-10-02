@@ -78,7 +78,7 @@ def test_main_window_exposes_organizer_page_without_running_filesystem_work(
     ] == ["整理", "查询", "重命名历史"]
     assert window.about_button.text() == f"关于 · v{__version__}"
     assert window.pages.currentWidget() is window.organizer_page
-    assert window.organizer_page.table.rowCount() == 0
+    assert window.organizer_page.preview_model.rowCount() == 0
     assert not window.organizer_page.is_busy()
     assert window.current_page is MainPage.ORGANIZER
     assert window.about_page.version_value.text() == f"v{__version__}"

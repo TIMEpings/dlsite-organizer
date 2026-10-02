@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from dlsite_organizer.domain.organizer import RenamePlan, RenamePlanStatus, ScanResult
 from dlsite_organizer.domain.work import Work
+from dlsite_organizer.services.drop_input import normalized_path_identity
 from dlsite_organizer.services.organizer import OrganizerPreview
 from dlsite_organizer.ui.models.organizer_preview_model import OrganizerPreviewModel
 from dlsite_organizer.ui.state.organizer_state import (
@@ -195,3 +196,30 @@ def test_sparse_bulk_removal_is_one_coherent_reset(qapp, tmp_path):
     assert state.plans[0].current_name == "old-1"
     assert state.plans[-1].current_name == "old-4999"
     assert state.checked_ready_count == 2500
+
+
+def test_row_identity_matches_canonical_resolver_for_service_paths_and_fallbacks(qapp, tmp_path):
+    preview = synthetic_preview(tmp_path, 1)
+    ordinary = [tmp_path / name for name in ("作品中文", "Unicode 日本語", "OLD~1", "MixedCase")]
+    other = tmp_path / "other" / "source"
+    other.mkdir(parents=True)
+    for path in ordinary:
+        path.mkdir()
+    paths = [*ordinary, other, Path(str(ordinary[-1]).upper())]
+    plans = tuple(replace(preview.plans[0], source_path=path) for path in paths)
+    state = OrganizerState()
+    model = OrganizerPreviewModel(state)
+    model.replace_preview(replace(preview, plans=plans))
+    assert state.row_keys == tuple(normalized_path_identity(path) for path in paths)
+
+
+def test_append_generation_and_root_mismatch_leave_state_untouched(qapp, tmp_path):
+    state = OrganizerState()
+    model = OrganizerPreviewModel(state)
+    preview = synthetic_preview(tmp_path, 2)
+    model.replace_preview(preview)
+    for incoming in (replace(preview, settings_generation=1),
+                     replace(preview, root_path=tmp_path / "other")):
+        with pytest.raises(ValueError):
+            model.append_preview(incoming)
+        assert state.preview is preview and state.checked_ready_count == 2

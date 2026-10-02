@@ -156,8 +156,8 @@ def test_quick_rename_then_full_mode_undo_needs_no_restart(
 
         assert source.is_dir()
         assert not target.exists()
-        assert full.organizer_page._last_undo_result is not None
-        assert full.organizer_page._last_undo_result.status is TransactionStatus.UNDONE
+        assert full.organizer_page.state.last_undo_result is not None
+        assert full.organizer_page.state.last_undo_result.status is TransactionStatus.UNDONE
         assert full.organizer_page.preview is None
         assert not full.organizer_page.preview_stale
         assert full.organizer_page.preview_stale_reason is None
@@ -258,7 +258,7 @@ def test_full_mode_rename_then_lightweight_undo_is_immediately_available(
         organizer.execute_rename()
         _wait_for(qapp, lambda: not organizer.is_busy())
 
-        execution = organizer._last_execution_result
+        execution = organizer.state.last_execution_result
         assert execution is not None
         assert execution.status is TransactionStatus.COMPLETED
         assert execution.operations[0].target_path.is_dir()

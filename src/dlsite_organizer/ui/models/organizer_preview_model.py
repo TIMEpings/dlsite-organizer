@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from enum import StrEnum
+from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt, Signal
 from PySide6.QtGui import QFont
@@ -55,7 +57,7 @@ class OrganizerPreviewModel(QAbstractTableModel):
             return self.COLUMNS[section] if 0 <= section < len(self.COLUMNS) else None
         return super().headerData(section, orientation, role)
 
-    def data(self, index, role: int = Qt.ItemDataRole.DisplayRole):
+    def data(self, index, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not self._valid(index):
             return None
         row, column = index.row(), index.column()
@@ -176,7 +178,6 @@ class OrganizerPreviewModel(QAbstractTableModel):
         if len(ranges) > 32:
             assert self.state.preview is not None
             removed = set(selected)
-            from dataclasses import replace
             preview = replace(self.state.preview, plans=tuple(
                 plan for row, plan in enumerate(self.state.plans) if row not in removed
             ))
