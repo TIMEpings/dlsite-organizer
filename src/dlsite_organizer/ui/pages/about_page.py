@@ -27,7 +27,10 @@ from dlsite_organizer.services.update_checker import (
     UpdateCheckStatus,
 )
 from dlsite_organizer.ui.theme import ButtonRole, set_button_role
-from dlsite_organizer.ui.widgets.constrained_content import ConstrainedContent
+from dlsite_organizer.ui.widgets.constrained_content import (
+    ConstrainedContent,
+    ContentAlignment,
+)
 from dlsite_organizer.ui.widgets.page_header import PageHeader
 from dlsite_organizer.ui.workers.update_check_worker import (
     UpdateCheckServiceLike,
@@ -64,9 +67,11 @@ class AboutPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-
-        content = ConstrainedContent(880)
+        content = ConstrainedContent(
+            880,
+            alignment=ContentAlignment.CENTERED_INFORMATIONAL,
+        )
+        scroll.setAlignment(content.alignment.value | Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
         content_layout = content.content_layout

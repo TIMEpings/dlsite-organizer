@@ -47,7 +47,10 @@ from dlsite_organizer.services.naming import (
     NamingTemplateError,
 )
 from dlsite_organizer.ui.theme import ButtonRole, set_button_role
-from dlsite_organizer.ui.widgets.constrained_content import ConstrainedContent
+from dlsite_organizer.ui.widgets.constrained_content import (
+    ConstrainedContent,
+    ContentAlignment,
+)
 from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
@@ -94,8 +97,11 @@ class SettingsPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        content = ConstrainedContent(1080)
+        content = ConstrainedContent(
+            1080,
+            alignment=ContentAlignment.LEFT_BOUNDED_WORKSPACE,
+        )
+        scroll.setAlignment(content.alignment.value | Qt.AlignmentFlag.AlignTop)
         content_layout = content.content_layout
         content_layout.setContentsMargins(0, 4, 8, 4)
         content_layout.setSpacing(12)

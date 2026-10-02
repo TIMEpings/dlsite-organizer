@@ -32,7 +32,10 @@ from dlsite_organizer.services.translation_relations import (
 )
 from dlsite_organizer.ui.theme import ButtonRole, set_button_role
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
-from dlsite_organizer.ui.widgets.constrained_content import ConstrainedContent
+from dlsite_organizer.ui.widgets.constrained_content import (
+    ConstrainedContent,
+    ContentAlignment,
+)
 from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
@@ -69,8 +72,11 @@ class LookupPage(QWidget):
         scroll_area.setObjectName("lookupScrollArea")
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         scroll_area.setWidgetResizable(True)
-        scroll_area.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        content = ConstrainedContent(1120)
+        content = ConstrainedContent(
+            1120,
+            alignment=ContentAlignment.LEFT_BOUNDED_WORKSPACE,
+        )
+        scroll_area.setAlignment(content.alignment.value | Qt.AlignmentFlag.AlignTop)
         layout = content.content_layout
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(18)

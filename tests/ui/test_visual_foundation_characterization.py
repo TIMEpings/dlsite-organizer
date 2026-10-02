@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import Qt, qInstallMessageHandler
-from PySide6.QtWidgets import QApplication, QLabel, QSplitter
+from PySide6.QtCore import QPoint, Qt, qInstallMessageHandler
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.services.cover import CoverService
@@ -10,6 +10,10 @@ from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.ui.main_window import MainPage, MainWindow
 from dlsite_organizer.ui.theme.tokens import FONT_ROLES, FontRole, Geometry
+from dlsite_organizer.ui.widgets.constrained_content import (
+    ConstrainedContent,
+    ContentAlignment,
+)
 from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
@@ -102,33 +106,62 @@ def test_page_header_uses_compact_centralized_typography(qapp: QApplication) -> 
     header.close()
 
 
-def test_form_and_read_pages_share_bounded_content_while_data_pages_remain_flexible(
-    qapp: QApplication,
-) -> None:
-    from dlsite_organizer.ui.widgets.constrained_content import ConstrainedContent
+def test_page_content_alignment_policy_and_page_header_axes(qapp: QApplication) -> None:
+    expected = {
+        MainPage.LOOKUP: (
+            1120,
+            ContentAlignment.LEFT_BOUNDED_WORKSPACE,
+        ),
+        MainPage.SETTINGS: (
+            1080,
+            ContentAlignment.LEFT_BOUNDED_WORKSPACE,
+        ),
+        MainPage.ABOUT: (
+            880,
+            ContentAlignment.CENTERED_INFORMATIONAL,
+        ),
+    }
 
     window = _window()
     window.show()
     qapp.processEvents()
 
     try:
-        bounded = {
-            MainPage.LOOKUP: window.lookup_page,
-            MainPage.SETTINGS: window.settings_page,
-            MainPage.ABOUT: window.about_page,
-        }
-        for width in (1160, 1460, 1700):
+        for width in (1160, 1460, 1600):
             window.resize(width, 1000)
             qapp.processEvents()
-            for route, page in bounded.items():
+            for route, (max_width, alignment) in expected.items():
                 window.navigate_to(route)
                 qapp.processEvents()
+                page = window._pages_by_identity[route]
                 container = page.findChild(ConstrainedContent, "constrainedContent")
                 assert container is not None
-                assert 800 <= container.maximumWidth() <= 1200
+                assert container.maximumWidth() == max_width
+                assert container.alignment is alignment
                 assert container.width() <= page.width()
-                if width >= 1460:
-                    assert page.width() > container.width()
+
+                scroll = page.findChild(QScrollArea)
+                assert scroll is not None
+                viewport = scroll.viewport()
+                content_origin = container.mapTo(viewport, QPoint(0, 0))
+                if alignment is ContentAlignment.LEFT_BOUNDED_WORKSPACE:
+                    assert abs(content_origin.x()) <= 1
+                    if width >= 1460:
+                        assert container.width() < viewport.width()
+                    header = page.findChild(PageHeader, "pageHeader")
+                    assert header is not None
+                    header_left = header.mapTo(page, QPoint(0, 0)).x()
+                    body = (
+                        window.lookup_page.code_input
+                        if route is MainPage.LOOKUP
+                        else window.settings_page.quick_access_box
+                    )
+                    body_left = body.mapTo(page, QPoint(0, 0)).x()
+                    assert abs(header_left - body_left) <= 2
+                else:
+                    assert abs(
+                        2 * content_origin.x() + container.width() - viewport.width()
+                    ) <= 1
 
         assert window.organizer_page.findChild(ConstrainedContent) is None
         assert window.rename_history_page.findChild(ConstrainedContent) is None
@@ -140,6 +173,39 @@ def test_form_and_read_pages_share_bounded_content_while_data_pages_remain_flexi
         assert splitter is not None and splitter.width() > 650
     finally:
         window.close()
+
+
+def test_constrained_content_alignment_layout_is_safe_in_isolation(
+    qapp: QApplication,
+) -> None:
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    left_content = ConstrainedContent(
+        360,
+        alignment=ContentAlignment.LEFT_BOUNDED_WORKSPACE,
+    )
+    centered_content = ConstrainedContent(
+        360,
+        alignment=ContentAlignment.CENTERED_INFORMATIONAL,
+    )
+    assert left_content.content_layout is not None
+    assert centered_content.content_layout is not None
+
+    scroll.resize(600, 320)
+    scroll.setAlignment(left_content.alignment.value | Qt.AlignmentFlag.AlignTop)
+    scroll.setWidget(left_content)
+    scroll.show()
+    qapp.processEvents()
+    assert left_content.width() == 360
+    assert left_content.mapTo(scroll.viewport(), QPoint(0, 0)).x() == 0
+
+    scroll.takeWidget()
+    scroll.setAlignment(centered_content.alignment.value | Qt.AlignmentFlag.AlignTop)
+    scroll.setWidget(centered_content)
+    qapp.processEvents()
+    centered_origin = centered_content.mapTo(scroll.viewport(), QPoint(0, 0)).x()
+    assert abs(2 * centered_origin + centered_content.width() - scroll.viewport().width()) <= 1
+    scroll.close()
 
 
 def test_theme_styles_scrollbars_group_boxes_and_button_roles(qapp: QApplication) -> None:
