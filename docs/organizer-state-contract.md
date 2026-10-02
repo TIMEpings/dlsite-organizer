@@ -94,7 +94,8 @@ the final mutation authority.
 - The compact input field is the next scan root. Editing it never changes
   `OrganizerState.committed_preview_root` and never marks the existing preview stale.
 - The current preview root and summary are rendered from `OrganizerState.preview`.
-  Warning counts overlap the status totals and are not a partition.
+  Warning counts are a subset of executable READY rows and exclude blocked,
+  ordinary UNCHANGED and completed rows. Raw diagnostics remain in the plans.
 - The production table remains `QTableView + OrganizerPreviewModel`, with five
   unsorted columns. Structured delegates paint work identity/title and status marks;
   no per-row or per-cell widgets are created.
@@ -109,3 +110,52 @@ the final mutation authority.
   transient and cannot replace the persistent banner.
 - Remove and clear operate only on the in-memory preview. Execute is the only primary
   mutation action, and its count comes from checked READY identities in state.
+
+## Phase 6.3 reconciliation contract
+
+Remove first uses the existing model row notifications. The page then calls
+`OrganizerService.reevaluate_preview`: the planner rebuilds affected CONFLICT rows
+from their captured Work/code/proposed name using one fresh, lazy sibling index,
+then finalizes all surviving proposals. It performs no metadata lookup. READY,
+UNCHANGED and other diagnostic rows retain their captured inputs; execution still
+revalidates the entire checked batch against current filesystem truth. Model/state
+only accept the service output, preserving previously checked READY identities.
+Newly unblocked rows start unchecked. An unexpected replanning failure leaves the
+remaining preview stale rather than executable.
+
+Finalized forward results may request reconciliation only with a matching committed
+root, a non-unresolved transaction and matching finalized operation snapshots.
+COMPLETED/PARTIAL/FAILED results qualify; preflight/no-transaction rejection and
+pending/recovery-required operations do not. Journal health/unresolved gates are
+checked before dispatch. Only confirmed SUCCESS operation target paths enter the
+session-local `completed_targets` set, using `normalized_path_identity` (resolved
+local path plus Windows case normalization). It is never a domain status or DB fact.
+
+After the action thread finishes, RECONCILE mode uses the same OrganizerWorker and
+service snapshot/scanner/lookup/planner pipeline as manual scanning, with a new
+request ID and the current preview revision. Results still require matching
+request/revision and settings generation. Worker failures carry request/revision
+to a GUI-thread slot too; obsolete failure delivery cannot invalidate a newer
+preview. Busy policy prevents starting a second scan while the worker is alive.
+The root is the executed committed preview root, independent of editable input.
+
+Accepted reconciliation replaces the preview from actual filesystem results and
+clears all execution checks. A row presents as Completed only if its canonical
+current source identity belongs to the success-target set AND its new domain plan
+is UNCHANGED. A changed READY or blocked plan retains its real planner presentation.
+Unmatched targets are logged, never materialized into rows. Matching and summary
+derivation use set membership and linear passes, with no per-row widgets or cache.
+
+The overlay survives navigation, same-root append and subsequent executions. Manual
+replacement commits and Clear Preview reset it and the retry context. A new state
+starts empty. Ordinary Replace defaults (READY checked) and Append defaults (new
+READY unchecked, old checks retained) remain unchanged. Clear leaves journal/Undo
+truth and last mutation summaries intact.
+
+Failed/cancelled/rejected reconciliation retains the old preview read-only, keeps
+the mutation result, and exposes Retry Refresh on the original committed root.
+Settings-generation rejection retains its stale reason and follows the same retry
+ownership rules. Recovery and journal failure take precedence over refresh banners
+and retries. Undo remains journal-driven and keeps the previous invalidation-only
+behavior; an Undo result clears any failed forward-refresh retry context and does
+not schedule a new scan. No executor/Undo/journal safety semantics are changed.
