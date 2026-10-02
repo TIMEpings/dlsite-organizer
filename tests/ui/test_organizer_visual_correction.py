@@ -4,19 +4,23 @@ from dataclasses import replace
 
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
+from PySide6.QtTest import QSignalSpy, QTest
+from PySide6.QtWidgets import QApplication, QMessageBox, QStyle, QStyleOptionViewItem
 from tests.ui.test_organizer_page import FakeLookupService, _wait_for_scan_idle
 from tests.ui.test_organizer_preview_model import synthetic_preview
 
 from dlsite_organizer.domain.organizer import RenamePlanStatus
+from dlsite_organizer.persistence.database import Database
+from dlsite_organizer.persistence.rename_journal import TransactionJournal
 from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.ui.delegates.organizer_delegates import (
     OrganizerCheckDelegate,
     OrganizerStatusDelegate,
 )
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.state.organizer_state import BusyOperation
+from dlsite_organizer.ui.widgets.organizer_review import OrganizerPathDisplay
 
 
 @pytest.fixture
@@ -26,8 +30,9 @@ def qapp():
 
 
 def settle(app):
-    # Drain the layout and the one-shot callback posted by viewport resize.
-    for _ in range(3):
+    # Layout, viewport, scrollbar visibility and its final one-shot are separate
+    # posted events. Drain those bounded phases without requiring a manual resize.
+    for _ in range(6):
         app.processEvents()
 
 
@@ -196,3 +201,98 @@ def test_status_warning_vocabulary_and_concise_tooltips(qapp, tmp_path, status, 
         assert page.state.plans[0] is plan
     finally:
         page.close()
+
+
+def test_context_paths_keep_full_selection_and_copy_without_global_widget_changes(qapp, tmp_path):
+    page = OrganizerPage(OrganizerService(FakeLookupService()))
+    root = tmp_path / ("作品库" * 40)
+    preview = synthetic_preview(root, 2)
+    page.set_preview(preview)
+    page.table.setCurrentIndex(page.preview_model.index(0, 0))
+    page.set_root_path(tmp_path / "next-scan")
+    previous_clipboard = qapp.clipboard().text()
+    try:
+        assert page.state.committed_preview_root == root
+        assert page.preview_root_name.text() == root.name
+        assert page.preview_root_display.text() == str(root)
+        assert page.root_input.text() != page.preview_root_display.text()
+        for display in (
+            page.preview_root_display, page.detail_source_path, page.detail_target_path,
+        ):
+            assert isinstance(display, OrganizerPathDisplay)
+            assert display.path_input.isReadOnly() and not display.path_input.hasFrame()
+            display.path_input.selectAll()
+            QTest.keyClick(display.path_input, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+            assert qapp.clipboard().text() == display.text()
+            if display.copy_button is not None:
+                display.copy_button.click()
+                assert qapp.clipboard().text() == display.text()
+        assert page.detail_diagnostics.toPlainText() == "无警告或阻止原因。"
+        assert page.detail_diagnostics.document().documentMargin() == 0
+    finally:
+        qapp.clipboard().setText(previous_clipboard)
+        page.close()
+
+
+def test_compact_layout_preserves_table_actions_and_summary_data(qapp, tmp_path):
+    page = OrganizerPage(OrganizerService(FakeLookupService()))
+    preview = synthetic_preview(tmp_path, 8)
+    page.resize(1160, 900)
+    page.set_preview(preview)
+    page.show()
+    try:
+        settle(qapp)
+        assert not page._compact_layout and page.detail_toggle.isChecked()
+        page.detail_toggle.setChecked(False)
+        page.detail_toggle.setChecked(True)
+        page.resize(760, 640)
+        settle(qapp)
+        assert page._compact_layout and not page.detail_toggle.isChecked()
+        assert page.table.viewport().height() >= 180
+        assert not page.table.geometry().intersects(page.footer.geometry())
+        assert not page.action_hint_label.wordWrap()
+        assert page.execute_button.isVisible()
+        assert page.remove_button.property("visualRole") == "quiet"
+        assert page.undo_button.property("visualRole") == "quiet"
+        assert_fills_viewport(page)
+        summary = page.summary_label
+        summary.set_counts(1000, 500, 400, 100, 100, 3)
+        assert [kind for kind, _, _ in summary.visible_items()][:4] == [
+            "", "ready", "blocked", "warning",
+        ]
+        assert "无需重命名 100" in summary.toolTip() and "扫描跳过 3" in summary.toolTip()
+        assert "重叠" in summary.accessibleDescription()
+        # Users can still expand details in compact mode without a periodic timer collapsing it.
+        page.detail_toggle.setChecked(True)
+        settle(qapp)
+        assert page.detail_toggle.isChecked()
+        assert not page._column_layout_timer.isActive()
+    finally:
+        page.close()
+
+
+def test_enter_never_activates_enabled_execute_button(qapp, tmp_path, monkeypatch):
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    page = OrganizerPage(OrganizerService(FakeLookupService()),
+                         execution_service=RenameExecutor(TransactionJournal(database)))
+    confirmations = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: (
+        confirmations.append(args) or QMessageBox.StandardButton.No
+    ))
+    page.set_preview(synthetic_preview(tmp_path, 2))
+    page.resize(1160, 800)
+    page.show()
+    try:
+        settle(qapp)
+        assert page.execute_button.isEnabled()
+        clicked = QSignalSpy(page.execute_button.clicked)
+        page.table.setCurrentIndex(page.preview_model.index(0, 0))
+        page.table.setFocus()
+        QTest.keyClick(page.table, Qt.Key.Key_Return)
+        QTest.keyClick(page.table, Qt.Key.Key_Enter)
+        assert clicked.count() == 0 and not confirmations
+        assert not page.is_busy() and page.state.checked_ready_count == 2
+    finally:
+        page.close()
+        database.dispose()

@@ -62,8 +62,12 @@ from dlsite_organizer.ui.state.organizer_state import (
 from dlsite_organizer.ui.theme.stylesheet import set_button_role
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, ButtonRole
 from dlsite_organizer.ui.widgets.compact_drop_area import CompactDirectoryDropArea
+from dlsite_organizer.ui.widgets.organizer_review import (
+    OrganizerElidedLabel,
+    OrganizerPathDisplay,
+    OrganizerSummary,
+)
 from dlsite_organizer.ui.widgets.page_header import PageHeader
-from dlsite_organizer.ui.widgets.path_display import PathDisplay
 from dlsite_organizer.ui.widgets.status_banner import BannerState, StatusBanner
 from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorker, OrganizerWorkerResult
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
@@ -181,19 +185,21 @@ class OrganizerPage(QWidget):
         root_context_row.setSpacing(7)
         current_root_label = QLabel("当前预览")
         current_root_label.setObjectName("sectionLabel")
-        self.preview_root_display = PathDisplay(copy_button=False)
+        self.preview_root_name = OrganizerElidedLabel()
+        self.preview_root_name.setObjectName("sectionLabel")
+        self.preview_root_name.setMaximumWidth(220)
+        self.preview_root_display = OrganizerPathDisplay(copy_button=False)
         self.preview_root_display.setAccessibleName("当前预览目录")
-        self.summary_label = QLabel("尚未生成预览")
+        self.summary_label = OrganizerSummary()
         self.summary_label.setObjectName("organizerSummary")
-        self.summary_label.setWordWrap(True)
         self.summary_label.setAccessibleName("预览项目统计")
         root_context_row.addWidget(current_root_label)
+        root_context_row.addWidget(self.preview_root_name)
         root_context_row.addWidget(self.preview_root_display, 1)
-        root_context_row.addWidget(self.summary_label, 2)
         context_layout.addLayout(root_context_row)
-        self.input_root_difference_label = QLabel()
+        context_layout.addWidget(self.summary_label)
+        self.input_root_difference_label = OrganizerElidedLabel()
         self.input_root_difference_label.setObjectName("organizerRootDifference")
-        self.input_root_difference_label.setWordWrap(True)
         self.input_root_difference_label.hide()
         context_layout.addWidget(self.input_root_difference_label)
         layout.addWidget(self.preview_context)
@@ -286,8 +292,9 @@ class OrganizerPage(QWidget):
             f"""
             QFrame#organizerDetailPane {{
               background: {LIGHT_COLORS.surface};
-              border: 1px solid {LIGHT_COLORS.border};
-              border-radius: 7px;
+              border: 0;
+              border-top: 1px solid {LIGHT_COLORS.border};
+              border-radius: 0;
             }}
             """
         )
@@ -324,7 +331,7 @@ class OrganizerPage(QWidget):
             }}
             """
         )
-        self.detail_summary_label = QLabel("尚未选择行")
+        self.detail_summary_label = OrganizerElidedLabel("尚未选择行")
         self.detail_summary_label.setObjectName("pageDescription")
         self.detail_summary_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -337,12 +344,10 @@ class OrganizerPage(QWidget):
         detail_content_layout = QVBoxLayout(self.detail_content)
         detail_content_layout.setContentsMargins(2, 0, 2, 0)
         detail_content_layout.setSpacing(1)
-        self.detail_title_label = QLabel()
+        self.detail_title_label = OrganizerElidedLabel()
         self.detail_title_label.setObjectName("sectionLabel")
-        self.detail_title_label.setWordWrap(True)
-        self.detail_metadata_label = QLabel()
+        self.detail_metadata_label = OrganizerElidedLabel()
         self.detail_metadata_label.setObjectName("pageDescription")
-        self.detail_metadata_label.setWordWrap(True)
         detail_content_layout.addWidget(self.detail_title_label)
         detail_content_layout.addWidget(self.detail_metadata_label)
 
@@ -351,7 +356,7 @@ class OrganizerPage(QWidget):
         source_row.setSpacing(6)
         source_label = QLabel("来源路径")
         source_label.setObjectName("pageDescription")
-        self.detail_source_path = PathDisplay(copy_button=True, compact=True)
+        self.detail_source_path = OrganizerPathDisplay()
         source_label.setBuddy(self.detail_source_path.path_input)
         source_row.addWidget(source_label)
         source_row.addWidget(self.detail_source_path, 1)
@@ -362,7 +367,7 @@ class OrganizerPage(QWidget):
         target_row.setSpacing(6)
         target_label = QLabel("目标路径")
         target_label.setObjectName("pageDescription")
-        self.detail_target_path = PathDisplay(copy_button=True, compact=True)
+        self.detail_target_path = OrganizerPathDisplay()
         target_label.setBuddy(self.detail_target_path.path_input)
         target_row.addWidget(target_label)
         target_row.addWidget(self.detail_target_path, 1)
@@ -371,13 +376,17 @@ class OrganizerPage(QWidget):
         self.detail_diagnostics = QPlainTextEdit()
         self.detail_diagnostics.setObjectName("organizerDetailDiagnostics")
         self.detail_diagnostics.setReadOnly(True)
-        self.detail_diagnostics.setFixedHeight(34)
+        self.detail_diagnostics.document().setDocumentMargin(0)
+        self.detail_diagnostics.setFixedHeight(24)
         self.detail_diagnostics.setStyleSheet(
-            """
-            QPlainTextEdit#organizerDetailDiagnostics {
-              min-height: 24px;
-              padding: 1px 4px;
-            }
+            f"""
+            QPlainTextEdit#organizerDetailDiagnostics {{
+              background: transparent;
+              border: 0;
+              color: {LIGHT_COLORS.text_secondary};
+              min-height: 20px;
+              padding: 1px 0;
+            }}
             """
         )
         self.detail_diagnostics.setPlaceholderText("无警告或阻止原因")
@@ -414,15 +423,14 @@ class OrganizerPage(QWidget):
         self.execute_button.setAutoDefault(False)
         set_button_role(self.execute_button, ButtonRole.PRIMARY)
         self.execute_button.setEnabled(False)
-        self.action_hint_label = QLabel("请勾选要执行的可执行项目。")
+        self.action_hint_label = OrganizerElidedLabel("请勾选要执行的可执行项目。")
         self.action_hint_label.setObjectName("pageDescription")
-        self.action_hint_label.setWordWrap(True)
-        action_row.addWidget(self.highlight_count_label)
+        self.highlight_count_label.hide()  # The Remove count already presents highlighted rows.
         action_row.addWidget(self.remove_button)
         action_row.addWidget(self.clear_button)
         action_row.addStretch(1)
-        action_row.addWidget(self.action_hint_label, 0)
         action_row.addWidget(self.execute_button)
+        footer_layout.addWidget(self.action_hint_label)
         footer_layout.addLayout(action_row)
 
         self.status_label = QLabel("请选择根目录开始扫描。")
@@ -439,9 +447,12 @@ class OrganizerPage(QWidget):
         recent_row = QHBoxLayout()
         recent_row.setContentsMargins(0, 0, 0, 0)
         recent_row.setSpacing(6)
-        self.recent_transaction_label = QLabel("最近可撤销：无")
+        separator = QFrame()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background: {LIGHT_COLORS.border}; border: 0;")
+        footer_layout.addWidget(separator)
+        self.recent_transaction_label = OrganizerElidedLabel("最近可撤销：无")
         self.recent_transaction_label.setObjectName("pageDescription")
-        self.recent_transaction_label.setWordWrap(True)
         self.recent_transaction_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -465,6 +476,7 @@ class OrganizerPage(QWidget):
         self._feedback_timer.setInterval(6500)
         self._feedback_timer.timeout.connect(self._clear_feedback)
         self._detail_user_touched = False
+        self._compact_layout = False
         self._journal_unavailable = False
         self._journal_error_message = ""
         self._operation_message = ""
@@ -1149,7 +1161,7 @@ class OrganizerPage(QWidget):
 
     def _update_summary(self, preview: OrganizerPreview | None) -> None:
         if preview is None:
-            self.summary_label.setText("尚未生成预览")
+            self.summary_label.clear_counts()
             return
         ready = preview.count(RenamePlanStatus.READY)
         unchanged = preview.count(RenamePlanStatus.UNCHANGED)
@@ -1157,11 +1169,7 @@ class OrganizerPage(QWidget):
         non_executable = total - ready - unchanged
         warning = sum(bool(plan.warnings) for plan in preview.plans)
         skipped = preview.skipped_count
-        self.summary_label.setText(
-            f"共 {total} 项 · 可执行 {ready} · 无需重命名 {unchanged} · "
-            f"不可执行 {non_executable} · 含警告 {warning}"
-            + (f" · 扫描跳过 {skipped}" if skipped else "")
-        )
+        self.summary_label.set_counts(total, ready, non_executable, warning, unchanged, skipped)
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
@@ -1169,6 +1177,7 @@ class OrganizerPage(QWidget):
 
     def _update_preview_context(self) -> None:
         root = self.state.committed_preview_root
+        self.preview_root_name.setText(root.name if root is not None else "")
         self.preview_root_display.set_path(str(root) if root is not None else "")
         self.preview_root_display.setToolTip(str(root) if root is not None else "")
         self._update_root_difference()
@@ -1244,7 +1253,7 @@ class OrganizerPage(QWidget):
             metadata += f" · 社团：{maker}"
         status = plan_status_label(plan.status)
         if plan.warnings:
-            status += " · 含警告"
+            status += f" · 另有 {len(plan.warnings)} 条警告"
         self.detail_summary_label.setText(f"当前行：{code} · {status}")
         self.detail_title_label.setText(title)
         self.detail_title_label.setToolTip(title)
@@ -1254,7 +1263,9 @@ class OrganizerPage(QWidget):
             plan.proposed_name or "未生成目标路径"
         )
         self.detail_target_path.set_path(target)
-        self.detail_diagnostics.setPlainText(plan_diagnostics(plan) or "无警告或阻止原因。")
+        diagnostics = plan_diagnostics(plan)
+        self.detail_diagnostics.setPlainText(diagnostics or "无警告或阻止原因。")
+        self.detail_diagnostics.setFixedHeight(56 if diagnostics else 24)
 
     def _detail_expanded_changed(self, expanded: bool) -> None:
         self._detail_user_touched = True
@@ -1268,6 +1279,7 @@ class OrganizerPage(QWidget):
         self.detail_toggle.setAccessibleDescription(
             "折叠当前行详情" if expanded else "展开当前行详情"
         )
+        self._schedule_column_layout()
 
     def _set_detail_expanded(self, expanded: bool) -> None:
         if self.detail_toggle.isChecked() == expanded:
@@ -1282,7 +1294,7 @@ class OrganizerPage(QWidget):
             return
         width = max(1, self.table.viewport().width())
         check_width = 44
-        status_width = min(150, max(116, round(width * 0.13)))
+        status_width = min(164, max(144, round(width * 0.15)))
         work_width = min(250, max(180, round(width * 0.22)))
         remaining = max(2, width - check_width - status_width - work_width)
         current_width = max(1, round(remaining * 0.46))
@@ -1309,10 +1321,14 @@ class OrganizerPage(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._schedule_column_layout()
-        if not self._detail_user_touched:
-            # Keep the table usable at compact heights while restoring the
-            # expanded review pane when the page has normal vertical room.
-            self._set_detail_expanded(self.height() > 700)
+        # At the native 1160 x 800 window the page has about 760 px of height.
+        # An expanded diagnostic pane left only 3-4 rows visible in Windows UAT.
+        compact = self.width() < 880 or self.height() < 780
+        if compact != self._compact_layout:
+            self._compact_layout = compact
+            if compact or not self._detail_user_touched:
+                self._set_detail_expanded(not compact)
+            self._update_action_hint()
 
     def _update_action_labels(self) -> None:
         highlighted = len(self.state.highlighted_keys)
@@ -1338,7 +1354,8 @@ class OrganizerPage(QWidget):
         elif not self.state.executor_available:
             message = "重命名执行服务当前不可用。"
         else:
-            message = "执行前会再次确认并检查目标路径。"
+            message = ("执行前再次确认并检查路径。" if self._compact_layout
+                       else "执行前会再次确认并检查目标路径。")
         self.action_hint_label.setText(message)
 
     def _refresh_status_banner(self) -> None:

@@ -22,10 +22,12 @@ from dlsite_organizer.domain.work import Work
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
-from dlsite_organizer.services.organizer import OrganizerPreview
+from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerService
 from dlsite_organizer.ui.main_window import MainWindow
 from dlsite_organizer.ui.models.organizer_preview_model import OrganizerPreviewModel
+from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.state.organizer_state import OrganizerState
+from dlsite_organizer.ui.theme import apply_light_theme
 
 
 def make_preview(count: int) -> OrganizerPreview:
@@ -81,6 +83,48 @@ def benchmark(app: QApplication, count: int) -> dict[str, object]:
             "cell_widgets": 0, "samples": 5, "qt_platform": app.platformName()}
 
 
+def benchmark_page(app: QApplication, count: int) -> dict[str, object]:
+    """Measure the actual Organizer delegates/layout/detail, not just a bare table."""
+    apply_light_theme(app)
+    preview = make_preview(count)
+    samples: dict[str, list[float]] = {
+        "accepted_preview_ms": [], "first_presentation_ms": [],
+        "single_check_ms": [], "detail_update_ms": [],
+    }
+    for _ in range(5):
+        page = OrganizerPage(OrganizerService(LookupService(OfflineProvider(), NamingService())))
+        page.resize(1160, 800)
+        page.show()
+        for _ in range(6):
+            app.processEvents()
+        baseline_widgets = len(page.table.findChildren(QWidget))
+        started = perf_counter()
+        page.set_preview(preview)
+        samples["accepted_preview_ms"].append((perf_counter() - started) * 1000)
+        started = perf_counter()
+        for _ in range(6):
+            app.processEvents()
+        page.table.viewport().grab()
+        samples["first_presentation_ms"].append((perf_counter() - started) * 1000)
+        assert len(page.table.findChildren(QWidget)) == baseline_widgets
+        assert abs(sum(page.table.columnWidth(i) for i in range(5))
+                   - page.table.viewport().width()) <= 2
+        index = page.preview_model.index(count // 2, 0)
+        started = perf_counter()
+        page.preview_model.setData(index, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        samples["single_check_ms"].append((perf_counter() - started) * 1000)
+        # Current-row projection/diagnostics are independent of total plan count.
+        page.state.project_highlight((), count // 2)
+        started = perf_counter()
+        page._refresh_detail(count // 2)
+        samples["detail_update_ms"].append((perf_counter() - started) * 1000)
+        page.close()
+        page.deleteLater()
+        app.processEvents()
+    return {"rows": count, **{name: round(median(values), 3) for name, values in samples.items()},
+            "cell_widgets": 0, "samples": 5, "qt_platform": app.platformName()}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interactive", type=int, choices=(1000, 5000))
@@ -95,7 +139,10 @@ def main() -> int:
         ))
         window.show()
         return app.exec()
-    print(json.dumps([benchmark(app, count) for count in (1000, 5000)], indent=2))
+    print(json.dumps({
+        "bare_table": [benchmark(app, count) for count in (1000, 5000)],
+        "organizer_page": [benchmark_page(app, count) for count in (1000, 5000)],
+    }, indent=2))
     return 0
 
 
