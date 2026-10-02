@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QModelIndex, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QModelIndex, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -42,6 +42,7 @@ from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerServi
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.delegates.organizer_delegates import (
+    OrganizerCheckDelegate,
     OrganizerStatusDelegate,
     OrganizerWorkDelegate,
 )
@@ -217,7 +218,14 @@ class OrganizerPage(QWidget):
         layout.addWidget(self.empty_state)
 
         self.table = QTableView()
+        self._column_layout_timer = QTimer(self)
+        self._column_layout_timer.setSingleShot(True)
+        self._column_layout_timer.timeout.connect(self._resize_table_columns)
+        self.table.viewport().installEventFilter(self)
         self.table.setModel(self.preview_model)
+        self.preview_model.modelReset.connect(self._schedule_column_layout)
+        self.preview_model.rowsInserted.connect(self._schedule_column_layout)
+        self.preview_model.rowsRemoved.connect(self._schedule_column_layout)
         # Keep a useful width hint while the empty state hides the table.
         self.table.setMinimumWidth(680)
         self.table.setSortingEnabled(False)
@@ -242,7 +250,8 @@ class OrganizerPage(QWidget):
         header.setSectionsClickable(False)
         header.setSortIndicatorShown(False)
         for column in range(self.preview_model.columnCount()):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+        self.table.setItemDelegateForColumn(0, OrganizerCheckDelegate(self.table))
         self.table.setItemDelegateForColumn(1, OrganizerStatusDelegate(self.table))
         self.table.setItemDelegateForColumn(2, OrganizerWorkDelegate(self.table))
         self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -259,9 +268,6 @@ class OrganizerPage(QWidget):
               selection-color: {LIGHT_COLORS.text_primary};
             }}
             QTableView#organizerTable::item {{ padding: 2px 3px; }}
-            QTableView#organizerTable::item:focus {{
-              border: 1px solid {LIGHT_COLORS.focus};
-            }}
             QHeaderView::section {{
               background: {LIGHT_COLORS.surface_secondary};
               color: {LIGHT_COLORS.text_secondary};
@@ -1286,9 +1292,23 @@ class OrganizerPage(QWidget):
         ):
             self.table.setColumnWidth(column, section_width)
 
+    def _schedule_column_layout(self, *_args) -> None:
+        if not self._column_layout_timer.isActive():
+            self._column_layout_timer.start(0)
+
+    def eventFilter(self, watched, event) -> bool:
+        if hasattr(self, "table") and watched is self.table.viewport() and event.type() in (
+            QEvent.Type.Resize, QEvent.Type.Show,
+        ):
+            # The page can keep its size while an empty/hidden table gains its
+            # final geometry or a scrollbar appears. Read that actual viewport
+            # after Qt's layout, coalescing signals into one constant-time pass.
+            self._schedule_column_layout()
+        return super().eventFilter(watched, event)
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._resize_table_columns()
+        self._schedule_column_layout()
         if not self._detail_user_touched:
             # Keep the table usable at compact heights while restoring the
             # expanded review pane when the page has normal vertical room.

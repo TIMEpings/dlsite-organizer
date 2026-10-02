@@ -8,8 +8,6 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
-    QStyle,
-    QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableView,
     QTableWidget,
@@ -23,6 +21,7 @@ from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.ui.delegates.organizer_delegates import OrganizerCheckDelegate
 from dlsite_organizer.ui.main_window import MainPage, MainWindow
 from dlsite_organizer.ui.models.organizer_preview_model import OrganizerPreviewModel
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
@@ -95,16 +94,14 @@ def test_mouse_checkbox_space_and_selection_click_are_independent(qapp, tmp_path
         qapp.processEvents()
         view = page.table
         index = page.preview_model.index(0, 0)
-        # Ask the installed standard delegate/style for its checkbox hit rectangle.
+        # Use the installed execution delegate: painted and clickable geometry coincide.
         option = QStyleOptionViewItem()
         option.initFrom(view)
         option.rect = view.visualRect(index)
-        delegate = view.itemDelegate()
-        assert isinstance(delegate, QStyledItemDelegate)
+        delegate = view.itemDelegateForColumn(0)
+        assert isinstance(delegate, OrganizerCheckDelegate)
         delegate.initStyleOption(option, index)
-        indicator = view.style().subElementRect(
-            QStyle.SubElement.SE_ItemViewItemCheckIndicator, option, view
-        )
+        indicator = delegate.indicator_rect(option)
         assert indicator.isValid()
         QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=indicator.center())
         assert not page.state.checked(0)

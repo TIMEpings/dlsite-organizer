@@ -494,7 +494,7 @@ def test_organizer_page_shows_stale_metadata_warning_but_not_fresh_cache_warning
     )
     fresh_page.set_preview(fresh_page._organizer_service.preview(tmp_path))
     fresh_status = fresh_page.preview_model.index(0, 1)
-    assert "使用旧缓存 metadata" not in fresh_status.data(Qt.ItemDataRole.ToolTipRole)
+    assert fresh_status.data(Qt.ItemDataRole.ToolTipRole) is None
     fresh_page.close()
 
 
@@ -573,7 +573,7 @@ def test_organizer_status_cells_distinguish_normal_warning_and_blocked_states(
     assert warning_item.data(Qt.ItemDataRole.DisplayRole) == "可执行"
     assert "悬停查看原因" not in warning_item.data(Qt.ItemDataRole.DisplayRole)
     assert "目标路径长度" in warning_item.data(Qt.ItemDataRole.ToolTipRole)
-    assert "悬停查看具体原因" in warning_item.data(Qt.ItemDataRole.ToolTipRole)
+    assert "悬停查看具体原因" not in warning_item.data(Qt.ItemDataRole.ToolTipRole)
     assert "目标路径长度" in str(warning_item.data(Qt.ItemDataRole.AccessibleTextRole))
     assert blocked_item.data(Qt.ItemDataRole.DecorationRole).isNull() is False
     assert blocked_item.data(Qt.ItemDataRole.FontRole).bold()

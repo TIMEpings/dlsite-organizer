@@ -80,10 +80,8 @@ class OrganizerPreviewModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ToolTipRole:
             if column in (0, 1):
                 detail = plan_diagnostics(plan)
-                return (
-                    f"{plan_status_label(plan.status)}\n原因：{detail}\n\n悬停查看具体原因。"
-                    if detail else plan_status_label(plan.status)
-                )
+                # Concise diagnostics only; the detail pane keeps the full text.
+                return "\n".join(detail.splitlines()[:3])[:300] if detail else None
             if column == 2:
                 code = plan.work_code or "、".join(plan.work_codes) or "—"
                 work = plan.work
