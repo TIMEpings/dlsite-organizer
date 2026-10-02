@@ -54,7 +54,7 @@ class AboutPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(36, 28, 36, 28)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
         header = QHBoxLayout()

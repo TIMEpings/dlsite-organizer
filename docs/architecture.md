@@ -34,6 +34,21 @@ coordinates validation, provider access, error translation, and naming without k
 The UI owns thread lifecycle and presentation only; `LookupWorker` invokes services and emits
 values, and never manipulates widgets or implements parsing policy.
 
+## Full-mode shell and presentation theme
+
+`MainWindow` constructs Organizer, Lookup, Rename History, Settings, and About once. Its
+`MainPage` identities map directly to those page objects, and routing selects the mapped widget
+with `QStackedWidget.setCurrentWidget()`. The primary sidebar list stores page identity in each
+item; Settings and About use footer buttons but go through the same route method. Visible row order
+and stack insertion order do not define page identity. Pages retain their workers and state while
+hidden, and `MainWindow.is_busy()` continues to include work on hidden pages.
+
+The full-mode shell owns the light theme under `ui.theme`: semantic colors and typography roles
+live in tokens, `QPalette` supplies standard widget roles, and a limited stylesheet covers the
+sidebar, shared page title roles, legacy named surfaces, line edits, and buttons. `PageHeader` is
+used for the top-level title area on Organizer, Lookup, Rename History, and Settings. About retains
+its existing branded header, and Lightweight remains its own window with its existing layout.
+
 `DlsiteSite` builds every section-scoped URL in one place. `source_route_for()` maps the typed
 `WorkCode` to a bounded source route: RJ keeps the configured section, BJ uses `books`, and VJ
 resolves a public-page redirect across the fixed `soft`/`pro` pair before requesting structured

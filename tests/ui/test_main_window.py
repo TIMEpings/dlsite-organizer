@@ -3,8 +3,9 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QPoint, QRect
+from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QCloseEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 
@@ -20,7 +21,8 @@ from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_history import RenameHistoryService
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.services.update_checker import UpdateCheckResult, UpdateCheckStatus
-from dlsite_organizer.ui.main_window import MainWindow
+from dlsite_organizer.ui.main_window import MainPage, MainWindow
+from dlsite_organizer.ui.widgets.navigation import NavigationItemDelegate
 
 
 @pytest.fixture
@@ -54,6 +56,16 @@ def _wait_until(qapp: QApplication, predicate, timeout_seconds: float = 2.0) -> 
     assert predicate(), "timed out waiting for Qt state"
 
 
+def _select_navigation_label(window: MainWindow, label: str) -> None:
+    matches = [
+        window.navigation_list.item(index)
+        for index in range(window.navigation_list.count())
+        if window.navigation_list.item(index).text() == label
+    ]
+    assert len(matches) == 1
+    window.navigation_list.setCurrentItem(matches[0])
+
+
 def test_main_window_exposes_organizer_page_without_running_filesystem_work(
     qapp: QApplication,
 ) -> None:
@@ -63,12 +75,12 @@ def test_main_window_exposes_organizer_page_without_running_filesystem_work(
     assert [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
-    ] == ["整理", "查询", "设置", "重命名历史"]
+    ] == ["整理", "查询", "重命名历史"]
     assert window.about_button.text() == f"关于 · v{__version__}"
-    assert window.pages.widget(0) is window.organizer_page
+    assert window.pages.currentWidget() is window.organizer_page
     assert window.organizer_page.table.rowCount() == 0
     assert not window.organizer_page.is_busy()
-    assert window.navigation_list.currentRow() == window.page_indices["organizer"]
+    assert window.current_page is MainPage.ORGANIZER
     assert window.about_page.version_value.text() == f"v{__version__}"
     window.close()
 
@@ -81,24 +93,123 @@ def test_about_footer_opens_about_destination_without_main_nav_entry(
     window.about_button.click()
 
     assert window.pages.currentWidget() is window.about_page
+    assert window.current_page is MainPage.ABOUT
+    assert window.about_button.isChecked()
     assert window.navigation_list.currentRow() == -1
     assert [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
-    ] == ["整理", "查询", "设置", "重命名历史"]
+    ] == ["整理", "查询", "重命名历史"]
     window.close()
 
 
 def test_main_window_lightweight_settings_selects_settings_page(
     qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    refresh_calls = []
+    monkeypatch.setattr(
+        window.settings_page,
+        "refresh_explorer_registration",
+        lambda: refresh_calls.append(True),
+    )
 
     window.show_settings_page()
 
-    assert window.navigation_list.currentRow() == window.page_indices["settings"]
+    assert window.navigation_list.currentRow() == -1
+    assert window.current_page is MainPage.SETTINGS
+    assert window.settings_button.isChecked()
     assert window.pages.currentWidget() is window.settings_page
+    assert refresh_calls == [True]
     window.close()
+
+
+def test_settings_footer_routes_without_refreshing_external_state(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    refresh_calls = []
+    monkeypatch.setattr(
+        window.settings_page,
+        "refresh_explorer_registration",
+        lambda: refresh_calls.append(True),
+    )
+
+    window.settings_button.click()
+
+    assert window.current_page is MainPage.SETTINGS
+    assert window.pages.currentWidget() is window.settings_page
+    assert window.settings_button.isChecked()
+    assert refresh_calls == []
+    window.close()
+
+
+def test_main_page_identity_routes_each_public_page_and_startup_mounts_each_once(
+    qapp: QApplication,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    expected_pages = {
+        MainPage.ORGANIZER: window.organizer_page,
+        MainPage.LOOKUP: window.lookup_page,
+        MainPage.HISTORY: window.rename_history_page,
+        MainPage.SETTINGS: window.settings_page,
+        MainPage.ABOUT: window.about_page,
+    }
+
+    try:
+        assert window.current_page is MainPage.ORGANIZER
+        assert window.navigation_list.focusPolicy() != Qt.FocusPolicy.NoFocus
+        assert isinstance(window.navigation_list.itemDelegate(), NavigationItemDelegate)
+        assert len(window._pages_by_identity) == len(expected_pages) == 5
+        assert window.pages.count() == len(expected_pages)
+        mounted_pages = [window.pages.widget(index) for index in range(window.pages.count())]
+        assert len({id(page) for page in mounted_pages}) == 5
+        assert set(mounted_pages) == set(expected_pages.values())
+
+        for identity, page in expected_pages.items():
+            window.navigate_to(identity)
+            assert window.current_page is identity
+            assert window._pages_by_identity[identity] is page
+            assert window.pages.currentWidget() is page
+            if identity in {MainPage.ORGANIZER, MainPage.LOOKUP, MainPage.HISTORY}:
+                current_item = window.navigation_list.currentItem()
+                assert current_item is not None
+                assert current_item.data(Qt.ItemDataRole.UserRole) == identity.value
+                assert not window.settings_button.isChecked()
+                assert not window.about_button.isChecked()
+            elif identity is MainPage.SETTINGS:
+                assert window.navigation_list.currentRow() == -1
+                assert window.settings_button.isChecked()
+                assert not window.about_button.isChecked()
+            else:
+                assert window.navigation_list.currentRow() == -1
+                assert not window.settings_button.isChecked()
+                assert window.about_button.isChecked()
+    finally:
+        window.close()
+
+
+def test_sidebar_arrow_keys_keep_keyboard_navigation_functional(
+    qapp: QApplication,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    window.show()
+    qapp.processEvents()
+
+    try:
+        window.navigation_list.setFocus()
+        QTest.keyClick(window.navigation_list, Qt.Key.Key_Down)
+        assert window.navigation_list.hasFocus()
+        assert window.current_page is MainPage.LOOKUP
+        assert window.pages.currentWidget() is window.lookup_page
+
+        QTest.keyClick(window.navigation_list, Qt.Key.Key_Down)
+        assert window.current_page is MainPage.HISTORY
+        assert window.pages.currentWidget() is window.rename_history_page
+    finally:
+        window.close()
 
 
 def test_unresolved_organizer_link_opens_read_only_transaction_history(
@@ -253,7 +364,7 @@ def test_about_update_survives_navigation_away_and_back(qapp: QApplication) -> N
         window.show_about_page()
         window.about_page.check_update_button.click()
         _wait_until(qapp, service.started.is_set)
-        window.navigation_list.setCurrentRow(window.page_indices["organizer"])
+        _select_navigation_label(window, "整理")
         service.release.set()
         _wait_until(qapp, lambda: not window.about_page.is_busy())
         window.show_about_page()

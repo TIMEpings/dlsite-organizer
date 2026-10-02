@@ -41,6 +41,7 @@ from dlsite_organizer.services.rename_history import (
     CurrentPathState,
     RenameHistoryService,
 )
+from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
 class RenameHistoryPage(QWidget):
@@ -71,18 +72,15 @@ class RenameHistoryPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(36, 28, 36, 28)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(14)
 
-        title = QLabel("重命名历史")
-        title.setObjectName("pageTitle")
-        layout.addWidget(title)
-        description = QLabel(
-            "查看已保存的重命名事务和操作记录。记录状态来自 journal；当前路径观察单独显示。"
+        layout.addWidget(
+            PageHeader(
+                "重命名历史",
+                "查看已保存的重命名事务和操作记录。记录状态来自 journal；当前路径观察单独显示。",
+            )
         )
-        description.setObjectName("pageDescription")
-        description.setWordWrap(True)
-        layout.addWidget(description)
 
         content = QSplitter(Qt.Orientation.Horizontal)
         content.setObjectName("renameHistorySplitter")

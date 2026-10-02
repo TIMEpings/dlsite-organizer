@@ -46,6 +46,7 @@ from dlsite_organizer.services.naming import (
     NamingService,
     NamingTemplateError,
 )
+from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
 class SettingsPage(QWidget):
@@ -81,16 +82,12 @@ class SettingsPage(QWidget):
 
     def _build_ui(self) -> None:
         page_layout = QVBoxLayout(self)
-        page_layout.setContentsMargins(36, 28, 36, 28)
+        page_layout.setContentsMargins(24, 24, 24, 24)
         page_layout.setSpacing(12)
 
-        heading = QLabel("设置")
-        heading.setObjectName("pageTitle")
-        description = QLabel("普通配置使用此页面；TOML 仍可作为持久化和高级手工入口。")
-        description.setObjectName("pageDescription")
-        description.setWordWrap(True)
-        page_layout.addWidget(heading)
-        page_layout.addWidget(description)
+        page_layout.addWidget(
+            PageHeader("设置", "普通配置使用此页面；TOML 仍可作为持久化和高级手工入口。")
+        )
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)

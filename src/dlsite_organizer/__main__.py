@@ -399,12 +399,13 @@ def _schedule_startup_smoke(
     if os.environ.get("DLSITE_ORGANIZER_STARTUP_SMOKE") != "1":
         return
 
-    expected_pages = ["整理", "查询", "设置", "重命名历史"]
+    expected_pages = ["整理", "查询", "重命名历史"]
     actual_pages = [
         window.navigation_list.item(index).text()
         for index in range(window.navigation_list.count())
     ]
-    expected_about = f"关于 · v{__version__}"
+    expected_footer = ["设置", f"关于 · v{__version__}"]
+    actual_footer = [window.settings_button.text(), window.about_button.text()]
     about_pixmap = window.about_page.branding_image.pixmap()
     lightweight_pixmap = lightweight_window.drop_zone.branding_pixmap
     icon_ready = not application.windowIcon().isNull()
@@ -414,16 +415,16 @@ def _schedule_startup_smoke(
     )
     if (
         actual_pages != expected_pages
-        or window.about_button.text() != expected_about
+        or actual_footer != expected_footer
         or not icon_ready
         or not about_branding_ready
         or not lightweight_branding_ready
     ):
         logger.error(
-            "Startup smoke failed: navigation pages=%s about_footer=%s "
+            "Startup smoke failed: navigation pages=%s footer=%s "
             "app_icon=%s about_branding=%s lightweight_branding=%s",
             actual_pages,
-            window.about_button.text(),
+            actual_footer,
             icon_ready,
             about_branding_ready,
             lightweight_branding_ready,
@@ -432,10 +433,10 @@ def _schedule_startup_smoke(
         return
 
     logger.info(
-        "Startup smoke passed: MainWindow pages=%s about_footer=%s "
+        "Startup smoke passed: MainWindow pages=%s footer=%s "
         "app_icon=%s about_branding=%s lightweight_branding=%s",
         actual_pages,
-        window.about_button.text(),
+        actual_footer,
         icon_ready,
         about_branding_ready,
         lightweight_branding_ready,

@@ -31,6 +31,7 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysisStatus,
 )
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
+from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
 class LookupPage(QWidget):
@@ -65,15 +66,12 @@ class LookupPage(QWidget):
         scroll_area.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(36, 28, 36, 28)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(18)
 
-        heading = QLabel("查询作品")
-        heading.setObjectName("pageTitle")
-        description = QLabel("读取当前作品信息并生成安全的格式化名称。")
-        description.setObjectName("pageDescription")
-        layout.addWidget(heading)
-        layout.addWidget(description)
+        layout.addWidget(
+            PageHeader("查询作品", "读取当前作品信息并生成安全的格式化名称。")
+        )
 
         query_row = QHBoxLayout()
         query_row.setSpacing(10)

@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import StrEnum
 
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from dlsite_organizer import __version__
+from dlsite_organizer.app.branding import load_branding_pixmap
 from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.services.cover import CoverService
@@ -38,6 +40,8 @@ from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.pages.rename_history_page import RenameHistoryPage
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
+from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
+from dlsite_organizer.ui.widgets.navigation import NavigationItemDelegate
 from dlsite_organizer.ui.workers.update_check_worker import UpdateCheckServiceLike
 
 
@@ -47,7 +51,7 @@ class MainPage(StrEnum):
     ORGANIZER = "organizer"
     LOOKUP = "lookup"
     SETTINGS = "settings"
-    RENAME_HISTORY = "rename_history"
+    HISTORY = "history"
     ABOUT = "about"
 
 
@@ -72,6 +76,9 @@ class MainWindow(QMainWindow):
         rename_history_service: RenameHistoryService | None = None,
     ) -> None:
         super().__init__()
+        application = QApplication.instance()
+        if isinstance(application, QApplication):
+            apply_light_theme(application)
         self._lookup_service = lookup_service
         self._settings_service = settings_service or SettingsService(AppSettings())
         self._settings_snapshot = self._settings_service.settings
@@ -84,29 +91,55 @@ class MainWindow(QMainWindow):
         # not mounted in the public application navigation.
         self._candidate_review_queue_service = candidate_review_queue_service
         self.setWindowTitle("DLsite Organizer")
-        self.resize(1080, 760)
-        self.setMinimumSize(860, 640)
+        self.resize(1160, 800)
 
         central = QWidget()
+        central.setObjectName("applicationSurface")
         shell = QHBoxLayout(central)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
 
-        navigation = QWidget()
-        navigation.setObjectName("navigation")
-        navigation.setFixedWidth(176)
-        nav_layout = QVBoxLayout(navigation)
-        nav_layout.setContentsMargins(18, 24, 18, 20)
-        nav_layout.setSpacing(16)
-        brand = QLabel("DLsite\nOrganizer")
-        brand.setObjectName("brand")
+        self.navigation = QWidget()
+        self.navigation.setObjectName("navigation")
+        self.navigation.setFixedWidth(184)
+        nav_layout = QVBoxLayout(self.navigation)
+        nav_layout.setContentsMargins(16, 20, 16, 16)
+        nav_layout.setSpacing(12)
+
+        brand = QWidget()
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.setSpacing(8)
+        self.branding_image = QLabel()
+        self.branding_image.setFixedSize(30, 30)
+        self.branding_image.setAccessibleName("DLsite Organizer 图标")
+        brand_pixmap = load_branding_pixmap(30)
+        if brand_pixmap is not None:
+            self.branding_image.setPixmap(brand_pixmap)
+        else:
+            self.branding_image.hide()
+        brand_row.addWidget(self.branding_image)
+        brand_label = QLabel("DLsite\nOrganizer")
+        brand_label.setObjectName("brandLabel")
+        brand_row.addWidget(brand_label, 1)
         nav_layout.addWidget(brand)
+
         self.navigation_list = QListWidget()
         self.navigation_list.setObjectName("navigationList")
         self.navigation_list.setSpacing(4)
+        self.navigation_list.setItemDelegate(NavigationItemDelegate(self.navigation_list))
         nav_layout.addWidget(self.navigation_list, 1)
+
+        self.settings_button = QPushButton("设置")
+        self.settings_button.setObjectName("settingsButton")
+        self.settings_button.setCheckable(True)
+        self.settings_button.setToolTip("打开设置页面")
+        self.settings_button.clicked.connect(self._navigate_from_sidebar_to_settings)
+        nav_layout.addWidget(self.settings_button)
+
         self.about_button = QPushButton(f"关于 · v{__version__}")
         self.about_button.setObjectName("aboutButton")
+        self.about_button.setCheckable(True)
         self.about_button.setToolTip("打开关于页面")
         self.about_button.clicked.connect(self.show_about_page)
         nav_layout.addWidget(self.about_button)
@@ -135,35 +168,40 @@ class MainWindow(QMainWindow):
         self.rename_history_page = RenameHistoryPage(rename_history_service)
         self.about_page = AboutPage(update_check_service=update_check_service)
         self._settings_service.subscribe(self._settings_saved)
-        page_definitions = (
-            (MainPage.ORGANIZER, "整理", self.organizer_page),
-            (MainPage.LOOKUP, "查询", self.lookup_page),
-            (MainPage.SETTINGS, "设置", self.settings_page),
-            (MainPage.RENAME_HISTORY, "重命名历史", self.rename_history_page),
-            (MainPage.ABOUT, "关于", self.about_page),
-        )
-        self.page_indices: dict[str, int] = {}
-        for index, (page_key, label, page) in enumerate(page_definitions):
-            self.page_indices[page_key.value] = index
-            if page_key is not MainPage.ABOUT:
-                self.navigation_list.addItem(QListWidgetItem(label))
+        # Route identities point directly to the one long-lived page instance.
+        # Stack order and visible navigation order are intentionally independent.
+        self._pages_by_identity: dict[MainPage, QWidget] = {
+            MainPage.ORGANIZER: self.organizer_page,
+            MainPage.LOOKUP: self.lookup_page,
+            MainPage.HISTORY: self.rename_history_page,
+            MainPage.SETTINGS: self.settings_page,
+            MainPage.ABOUT: self.about_page,
+        }
+        for page in self._pages_by_identity.values():
             self.pages.addWidget(page)
 
-        self.navigation_list.currentRowChanged.connect(self.pages.setCurrentIndex)
-        self.navigation_list.currentRowChanged.connect(self._navigation_changed)
+        for page_identity, label in (
+            (MainPage.ORGANIZER, "整理"),
+            (MainPage.LOOKUP, "查询"),
+            (MainPage.HISTORY, "重命名历史"),
+        ):
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, page_identity.value)
+            self.navigation_list.addItem(item)
+
+        self._current_page: MainPage | None = None
+        self.navigation_list.currentItemChanged.connect(self._navigation_item_changed)
         self.organizer_page.view_transaction_requested.connect(self.show_transaction_history)
-        self.navigation_list.setCurrentRow(self.page_indices[MainPage.ORGANIZER.value])
-        shell.addWidget(navigation)
+        self.navigate_to(MainPage.ORGANIZER)
+        shell.addWidget(self.navigation)
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
-        self.setStyleSheet(_STYLE)
-        # Organizer's table and footer are both layout-managed.  Derive the
-        # supported vertical minimum from the assembled page instead of
-        # allowing a smaller hard-coded height to make Qt compress siblings
-        # below their layout minimum.
-        minimum_height = max(self.minimumHeight(), self.minimumSizeHint().height())
-        self.setMinimumHeight(minimum_height)
-        self.resize(self.width(), max(self.height(), minimum_height))
+        self.setStyleSheet(light_stylesheet())
+        self._update_minimum_size_from_layout()
+        self.resize(
+            max(self.width(), self.minimumWidth()),
+            max(self.height(), self.minimumHeight()),
+        )
         if self._runtime_signals is not None:
             self._runtime_signals.mutation_history_changed.connect(
                 self.organizer_page.mark_filesystem_changed
@@ -172,17 +210,61 @@ class MainWindow(QMainWindow):
                 self.rename_history_page.refresh_after_mutation
             )
 
-    @Slot(int)
-    def _navigation_changed(self, row: int) -> None:
-        if row == self.page_indices[MainPage.RENAME_HISTORY.value]:
+    @property
+    def current_page(self) -> MainPage:
+        """Return the current stable page identity."""
+        assert self._current_page is not None
+        return self._current_page
+
+    @Slot(object, object)
+    def _navigation_item_changed(
+        self,
+        current: QListWidgetItem | None,
+        _previous: QListWidgetItem | None,
+    ) -> None:
+        if current is not None:
+            self.navigate_to(MainPage(current.data(Qt.ItemDataRole.UserRole)))
+
+    def navigate_to(self, page: MainPage) -> None:
+        """Select a public destination by stable identity, preserving its instance."""
+        previous_page = self._current_page
+        page_widget = self._pages_by_identity[page]
+        self._current_page = page
+        self.pages.setCurrentWidget(page_widget)
+
+        previous_block_state = self.navigation_list.blockSignals(True)
+        try:
+            matching_item = next(
+                (
+                    self.navigation_list.item(index)
+                    for index in range(self.navigation_list.count())
+                    if self.navigation_list.item(index).data(Qt.ItemDataRole.UserRole)
+                    == page.value
+                ),
+                None,
+            )
+            if matching_item is None:
+                self.navigation_list.setCurrentRow(-1)
+                self.navigation_list.clearSelection()
+            else:
+                self.navigation_list.setCurrentItem(matching_item)
+        finally:
+            self.navigation_list.blockSignals(previous_block_state)
+
+        self.settings_button.setChecked(page is MainPage.SETTINGS)
+        self.about_button.setChecked(page is MainPage.ABOUT)
+        if previous_page is not page:
+            self._navigation_changed(page)
+
+    def _navigation_changed(self, page: MainPage) -> None:
+        if page is MainPage.HISTORY:
             self.rename_history_page.refresh_history()
 
     @Slot(str)
     def show_transaction_history(self, transaction_id: str) -> None:
         """Open the history page on a journal transaction selected by Organizer."""
-        history_row = self.page_indices[MainPage.RENAME_HISTORY.value]
-        already_on_history = self.navigation_list.currentRow() == history_row
-        self.navigation_list.setCurrentRow(history_row)
+        already_on_history = self.current_page is MainPage.HISTORY
+        self.navigate_to(MainPage.HISTORY)
         self.rename_history_page.open_transaction(
             transaction_id,
             refresh=already_on_history,
@@ -197,6 +279,16 @@ class MainWindow(QMainWindow):
         """Re-read mutation state whenever a hidden full-mode window is activated."""
         super().showEvent(event)
         self.refresh_mutation_state()
+        self._update_minimum_size_from_layout()
+
+    def _update_minimum_size_from_layout(self) -> None:
+        """Honor the assembled shell and legacy Organizer page size hints."""
+        hint = self.minimumSizeHint()
+        organizer_hint = self.organizer_page.minimumSizeHint()
+        self.setMinimumSize(
+            max(960, hint.width()),
+            max(640, hint.height(), organizer_hint.height()),
+        )
 
     @Slot()
     def request_lightweight_mode(self) -> None:
@@ -209,18 +301,17 @@ class MainWindow(QMainWindow):
     def show_settings_page(self) -> None:
         """Select the shared Settings page for the lightweight settings action."""
         self.settings_page.refresh_explorer_registration()
-        self.navigation_list.setCurrentRow(self.page_indices[MainPage.SETTINGS.value])
+        self.navigate_to(MainPage.SETTINGS)
+
+    @Slot()
+    def _navigate_from_sidebar_to_settings(self) -> None:
+        """Route ordinary footer navigation without refreshing external state."""
+        self.navigate_to(MainPage.SETTINGS)
 
     @Slot()
     def show_about_page(self) -> None:
-        """Show About from the single footer entry without a magic nav index."""
-        self.navigation_list.blockSignals(True)
-        try:
-            self.navigation_list.clearSelection()
-            self.navigation_list.setCurrentRow(-1)
-        finally:
-            self.navigation_list.blockSignals(False)
-        self.pages.setCurrentIndex(self.page_indices[MainPage.ABOUT.value])
+        """Route the footer About action through the shared page identity map."""
+        self.navigate_to(MainPage.ABOUT)
 
     def is_busy(self) -> bool:
         """Return whether any full-mode background operation is active."""
@@ -258,49 +349,3 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "任务进行中", "请等待当前任务结束后再退出。")
             return
         event.accept()
-
-
-_STYLE = """
-QMainWindow, QStackedWidget { background: #f5f7fb; }
-QWidget { color: #1e293b; font-family: "Segoe UI", "Microsoft YaHei UI"; font-size: 14px; }
-#navigation { background: #172033; }
-#brand { color: white; font-size: 21px; font-weight: 700; line-height: 1.2; }
-#navigationList { background: transparent; border: 0; color: #c9d2e3; outline: 0; }
-#navigationList::item { border-radius: 7px; padding: 11px 12px; }
-#navigationList::item:selected { background: #2e3c55; color: white; font-weight: 600; }
-#navigationList::item:hover:!selected { background: #222e43; }
-#aboutButton {
-  color: #c9d2e3; background: transparent; border: 0;
-  padding: 8px 12px; text-align: left;
-}
-#aboutButton:hover { color: white; background: #222e43; }
-#pageTitle { font-size: 26px; font-weight: 700; color: #111827; }
-#pageDescription { color: #64748b; }
-#resultCard { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }
-#relationCard { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }
-#coverPlaceholder {
-  background: #eef2f7;
-  border: 1px solid #dbe2ea;
-  border-radius: 7px;
-  color: #94a3b8;
-}
-#sectionLabel { font-weight: 600; color: #334155; }
-QLineEdit { background: white; border: 1px solid #cbd5e1; border-radius: 7px; padding: 7px 10px; }
-QLineEdit:focus { border: 1px solid #4f7cff; }
-QLineEdit:read-only { background: #f8fafc; }
-QPushButton { background: white; border: 1px solid #cbd5e1; border-radius: 7px; padding: 7px 14px; }
-QPushButton:hover { background: #f1f5f9; }
-QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
-#primaryButton { background: #3867e8; color: white; border: 0; font-weight: 600; }
-#primaryButton:hover { background: #2f5bd0; }
-#primaryButton:disabled { background: #94a9df; color: #eef2ff; }
-#statusLabel { color: #64748b; min-height: 22px; }
-#statusLabel[state="loading"] { color: #315fc9; }
-#statusLabel[state="success"] { color: #16805b; }
-#statusLabel[state="error"] { color: #c53b47; }
-#dropZone { background: transparent; border: 0; }
-#dropZoneTitle { background: transparent; color: #23499d; font-size: 16px; font-weight: 600; }
-#dropZoneDescription { background: transparent; color: #64748b; }
-#modeButton { color: #c9d2e3; background: #222e43; border-color: #3b4a64; }
-#modeButton:hover { background: #2e3c55; color: white; }
-"""

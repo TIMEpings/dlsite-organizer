@@ -40,6 +40,7 @@ from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerServi
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.widgets.drop_zone import DirectoryDropZone, local_directory_paths
+from dlsite_organizer.ui.widgets.page_header import PageHeader
 from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorker, OrganizerWorkerResult
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 
@@ -127,12 +128,10 @@ class OrganizerPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(36, 28, 36, 28)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(14)
 
-        heading = QLabel("整理")
-        heading.setObjectName("pageTitle")
-        layout.addWidget(heading)
+        layout.addWidget(PageHeader("整理"))
 
         self.drop_zone = DirectoryDropZone(
             "将作品文件夹或作品根目录拖到这里",
