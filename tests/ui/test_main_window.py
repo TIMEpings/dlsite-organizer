@@ -253,6 +253,9 @@ def test_unresolved_organizer_link_opens_read_only_transaction_history(
     assert not window.organizer_page.execute_button.isEnabled()
     assert not window.organizer_page.undo_button.isEnabled()
     assert not window.organizer_page.view_transaction_button.isHidden()
+    assert not window.organizer_page.status_banner.isHidden()
+    assert window.organizer_page.status_banner.property("state") == "blocked"
+    assert window.organizer_page.status_banner.title_label.text() == "存在未解决的重命名事务"
     window.organizer_page.view_transaction_button.click()
 
     assert window.pages.currentWidget() is window.rename_history_page
@@ -270,10 +273,13 @@ def test_unresolved_organizer_link_opens_read_only_transaction_history(
 
 
 def test_organizer_minimum_height_keeps_table_and_footer_disjoint(
-    qapp: QApplication,
+    qapp: QApplication, tmp_path: Path,
 ) -> None:
     window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
     page = window.organizer_page
+    from tests.ui.test_organizer_preview_model import synthetic_preview
+
+    page.set_preview(synthetic_preview(tmp_path, 8))
 
     try:
         window.show()

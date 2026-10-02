@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QSizePolicy
 from tests.services.test_lookup_cache import (
     MutableClock,
     SequencedProvider,
@@ -310,8 +310,10 @@ def test_organizer_page_removes_duplicate_subtitle_but_keeps_drop_safety_copy(
     labels = "\n".join(label.text() for label in page.findChildren(QLabel))
 
     assert "可选择根目录，也可将文件夹拖入此窗口" not in labels
-    assert "将作品文件夹或作品根目录拖到这里" in labels
-    assert "完整模式只生成预览，不会因拖放立即重命名。" in labels
+    assert "拖入根目录或作品文件夹以追加预览" in labels
+    assert "扫描目录，检查名称，再执行重命名。" in labels
+    assert page.drop_zone.minimumHeight() < 100
+    assert page.input_panel.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Fixed
     page.close()
 
 
@@ -376,8 +378,11 @@ def test_organizer_page_disables_execute_without_journal_and_marks_stale_after_a
 
     assert page.preview_stale
     assert not page.execute_button.isEnabled()
-    assert not page.table.isEnabled()
-    assert "预览已失效" in page.summary_label.text()
+    assert page.table.isEnabled()
+    assert not page.status_banner.isHidden()
+    assert page.status_banner.title_label.text() == "重命名记录不可用"
+    assert not (page.preview_model.flags(page.preview_model.index(0, 0))
+                & Qt.ItemFlag.ItemIsUserCheckable)
     page.close()
 
 
@@ -651,6 +656,109 @@ def test_clear_preview_is_immediate_preview_only_and_keeps_root(
     assert page.root_input.text() == str(tmp_path)
     assert "未发现作品" not in page.status_label.text()
     assert source.exists()
+    page.close()
+
+
+def test_preview_root_remains_committed_when_next_scan_root_changes(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    root_a = tmp_path / "作品库 A"
+    root_b = tmp_path / "作品库 B"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / "old RJ01609020").mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_root_path(root_a)
+    page.set_preview(service.preview(root_a))
+
+    page.set_root_path(root_b)
+
+    assert page.root_input.text() == str(root_b)
+    assert page.state.committed_preview_root == root_a
+    assert page.preview_root_display.text() == str(root_a)
+    assert "输入目录已更改" in page.input_root_difference_label.text()
+    assert str(root_a) in page.input_root_difference_label.text()
+    assert not page.preview_stale
+    page.close()
+
+
+def test_summary_counts_overlap_warnings_and_actions_use_state_counts(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    for code in ("RJ01609020", "RJ01636949", "RJ01637033"):
+        (tmp_path / f"old {code}").mkdir()
+    service = OrganizerService(FakeLookupService())
+    preview = service.preview(tmp_path)
+    warning_ready = replace(preview.plans[0], warnings=("需要复核目标路径。",))
+    unchanged = replace(
+        preview.plans[1], status=RenamePlanStatus.UNCHANGED,
+        warnings=("缓存数据较旧。",),
+    )
+    page = OrganizerPage(service)
+    page.set_preview(replace(preview, plans=(warning_ready, unchanged, preview.plans[2])))
+
+    assert "共 3 项" in page.summary_label.text()
+    assert "可执行 2" in page.summary_label.text()
+    assert "无需重命名 1" in page.summary_label.text()
+    assert "不可执行 0" in page.summary_label.text()
+    assert "含警告 2" in page.summary_label.text()
+    assert page.execute_button.text() == "执行重命名（2 项）"
+    page.table.selectRow(1)
+    assert page.remove_button.text() == "从预览移除（1）"
+    assert page.highlight_count_label.text() == "高亮 1 项"
+    assert page.execute_button.property("visualRole") == "primary"
+    assert page.remove_button.property("visualRole") == "quiet"
+    assert page.clear_button.property("visualRole") == "quiet"
+    assert page.undo_button.property("visualRole") == "quiet"
+    assert page.scan_button.property("visualRole") == "secondary"
+    page.close()
+
+
+def test_current_row_detail_remains_inspectable_when_preview_is_stale(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    source = tmp_path / "old RJ01609020"
+    source.mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    preview = service.preview(tmp_path)
+    page.set_preview(preview)
+    page.table.setCurrentIndex(page.preview_model.index(0, 0))
+
+    assert page.state.current_key == page.state.row_keys[0]
+    assert page.detail_title_label.text() == "Preview Title"
+    assert page.detail_metadata_label.text() == "作品编号：RJ01609020 · 社团：Circle"
+    assert page.detail_source_path.text() == str(source)
+    assert page.detail_target_path.text() == str(preview.plans[0].target_path)
+
+    page.invalidate_preview()
+
+    assert page.table.isEnabled()
+    assert page.table.selectionModel().currentIndex().row() == 0
+    assert page.detail_title_label.text() == "Preview Title"
+    assert page.detail_source_path.text() == str(source)
+    assert not page.status_banner.isHidden()
+    page.detail_toggle.click()
+    assert not page.detail_content.isVisible()
+    page.close()
+
+
+def test_journal_unavailable_has_a_distinct_persistent_banner(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    page = OrganizerPage(
+        OrganizerService(FakeLookupService()),
+        execution_service=RenameExecutor(UnavailableRenameJournal()),
+        undo_service=UndoService(UnavailableRenameJournal()),
+    )
+
+    assert not page.status_banner.isHidden()
+    assert page.status_banner.property("state") == "blocked"
+    assert page.status_banner.title_label.text() == "重命名记录不可用"
+    assert not page.preview_stale
+    assert "journal 暂不可用" in page.recent_transaction_label.text()
+    assert not page.execute_button.isEnabled()
     page.close()
 
 

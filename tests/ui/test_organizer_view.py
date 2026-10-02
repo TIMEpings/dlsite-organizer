@@ -78,6 +78,10 @@ def test_production_view_has_no_cell_widgets_and_survives_navigation(qapp, tmp_p
         page.table.selectRow(2)
         assert page.state.highlighted_keys == frozenset({page.state.row_keys[2]})
         assert page.remove_button.isEnabled()
+        page.detail_toggle.setChecked(False)
+        window.navigate_to(MainPage.LOOKUP)
+        window.navigate_to(MainPage.ORGANIZER)
+        assert page.detail_content.isHidden()
     finally:
         window.close()
 
@@ -136,10 +140,12 @@ def test_drop_zone_event_appends_without_table_consuming_drop(qapp, tmp_path):
                                 Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         QCoreApplication.sendEvent(page.drop_zone, enter)
         assert enter.isAccepted()
+        assert page.input_panel.property("dropActive") is True
         drop = QDropEvent(QPointF(20, 20), Qt.DropAction.CopyAction, mime,
                           Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         QCoreApplication.sendEvent(page.drop_zone, drop)
         assert drop.isAccepted()
+        assert page.input_panel.property("dropActive") is False
         _wait_for_scan_idle(qapp, page)
         assert page.preview is not None
         assert [plan.source_path for plan in page.preview.plans] == [first, second]
@@ -182,7 +188,8 @@ def test_direct_stale_preview_displays_previous_checks_but_blocks_edit(qapp, tmp
         PreviewStaleReason.SETTINGS_CHANGED
         if kind == "generation" else PreviewStaleReason.CANCELLED
     )
-    assert not page.table.isEnabled() and page.state.checked(0)
+    assert page.table.isEnabled() and page.state.checked(0)
+    assert not page.status_banner.isHidden()
     assert not page.preview_model.setData(page.preview_model.index(0, 0), 0,
                                           Qt.ItemDataRole.CheckStateRole)
     page.close()

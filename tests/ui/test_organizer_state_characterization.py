@@ -130,7 +130,8 @@ def test_stale_retains_rows_checks_and_selection_and_disables_execution(
     page.invalidate_preview()
     assert page.preview is old
     assert [checked(page, row) for row in range(4)] == [True, False, True, True]
-    assert not page.table.isEnabled()
+    assert page.table.isEnabled()
+    assert not page.status_banner.isHidden()
     assert page.table.selectionModel().selectedRows()[0].row() == 1
     assert not page.selected_ready_plans() and not page.execute_button.isEnabled()
     page.close()

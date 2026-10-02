@@ -79,13 +79,33 @@ delegate painting creates no per-cell widgets. Interim widths are Organizer-only
 Page/controller retains worker lifetime, service calls, immutable settings snapshot
 dispatch, drop validation, dialogs, status/summary copy and gate refresh. Selection
 signals project highlighted/current identities into state; removal consumes those
-identities, never execution checks. To preserve legacy selection-reset behavior,
-successful collection edits clear highlight/current state explicitly. Navigation
-and stale/busy transitions retain them. No QModelIndex is stored in state.
+identities, never execution checks. Successful collection edits clear
+highlight/current state explicitly. Navigation and stale/busy transitions retain
+them. No QModelIndex is stored in state.
 
 Model/state do not query providers, settings persistence, journal health or filesystem
 mutation safety. They consume service results and gate snapshots. Execute eligibility
 requires an existing current non-cancelled preview, committed root, idle state,
 checked READY rows, available executor and no unresolved/failed gate. Backend remains
-the final mutation authority. Final details, banners and visual composition belong
-to Phase 6.
+the final mutation authority.
+
+## Phase 6 presentation contract
+
+- The compact input field is the next scan root. Editing it never changes
+  `OrganizerState.committed_preview_root` and never marks the existing preview stale.
+- The current preview root and summary are rendered from `OrganizerState.preview`.
+  Warning counts overlap the status totals and are not a partition.
+- The production table remains `QTableView + OrganizerPreviewModel`, with five
+  unsorted columns. Structured delegates paint work identity/title and status marks;
+  no per-row or per-cell widgets are created.
+- A collapsible bottom detail pane follows the state current-row identity and reads
+  the corresponding structured plan. It exposes full title, maker, codes, source
+  and target paths, and diagnostics. Path fields remain selectable and copyable.
+- A single persistent banner prioritizes recovery-required state, journal
+  unavailability, and stale preview. Stale rows remain enabled for selection and
+  inspection; the model blocks checkbox edits and execution. Rescan or clear recovers
+  a stale preview. Unresolved transactions link to History for inspection.
+- Scan and rename progress use real worker callbacks. Local completion feedback is
+  transient and cannot replace the persistent banner.
+- Remove and clear operate only on the in-memory preview. Execute is the only primary
+  mutation action, and its count comes from checked READY identities in state.

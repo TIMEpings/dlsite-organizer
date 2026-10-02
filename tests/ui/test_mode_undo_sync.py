@@ -137,7 +137,7 @@ def test_quick_rename_then_full_mode_undo_needs_no_restart(
         lightweight.full_mode_button.click()
         _wait_for(qapp, lambda: full.isVisible() and not lightweight.isVisible())
         assert full.organizer_page.undo_button.isEnabled()
-        assert result.transaction_id in full.organizer_page.recent_transaction_label.text()
+        assert full.organizer_page.recent_transaction_label.toolTip() == result.transaction_id
         assert "未解决的重命名事务" not in full.organizer_page.status_label.text()
 
         monkeypatch.setattr(

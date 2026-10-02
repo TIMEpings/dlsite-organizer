@@ -8,19 +8,22 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QModelIndex, QThread, Signal, Slot
-from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtCore import QModelIndex, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -38,10 +41,14 @@ from dlsite_organizer.services.drop_input import (
 from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerService
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.undo_service import UndoService
+from dlsite_organizer.ui.delegates.organizer_delegates import (
+    OrganizerStatusDelegate,
+    OrganizerWorkDelegate,
+)
 from dlsite_organizer.ui.models.organizer_preview_model import (
     OrganizerPreviewModel,
-    StatusPresentation,
-    plan_presentation,
+    plan_diagnostics,
+    plan_status_label,
 )
 from dlsite_organizer.ui.state.organizer_state import (
     BusyOperation,
@@ -51,8 +58,12 @@ from dlsite_organizer.ui.state.organizer_state import (
 from dlsite_organizer.ui.state.organizer_state import (
     PreviewStaleReason as PreviewStaleReason,
 )
-from dlsite_organizer.ui.widgets.drop_zone import DirectoryDropZone, local_directory_paths
+from dlsite_organizer.ui.theme.stylesheet import set_button_role
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, ButtonRole
+from dlsite_organizer.ui.widgets.compact_drop_area import CompactDirectoryDropArea
 from dlsite_organizer.ui.widgets.page_header import PageHeader
+from dlsite_organizer.ui.widgets.path_display import PathDisplay
+from dlsite_organizer.ui.widgets.status_banner import BannerState, StatusBanner
 from dlsite_organizer.ui.workers.organizer_worker import OrganizerWorker, OrganizerWorkerResult
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 
@@ -101,120 +112,360 @@ class OrganizerPage(QWidget):
         self.table.selectionModel().currentChanged.connect(self._table_selection_changed)
         self.remove_button.clicked.connect(self.remove_selected)
         self.clear_button.clicked.connect(self.clear_preview)
+        self.detail_toggle.toggled.connect(self._detail_expanded_changed)
         self._refresh_recent_transaction()
+        self._update_execute_button()
+        self._update_preview_controls()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(14)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(8)
 
-        layout.addWidget(PageHeader("整理"))
-
-        self.drop_zone = DirectoryDropZone(
-            "将作品文件夹或作品根目录拖到这里",
-            "完整模式只生成预览，不会因拖放立即重命名。",
+        self.page_header = PageHeader("整理", "扫描目录，检查名称，再执行重命名。")
+        self.page_header.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
         )
-        self.drop_zone.paths_dropped.connect(self._handle_drop_paths)
-        layout.addWidget(self.drop_zone)
+        layout.addWidget(self.page_header)
 
-        root_label = QLabel("作品根目录")
+        self.input_panel = CompactDirectoryDropArea(self)
+        # Keep the established page attribute as a public drop-target hook for callers.
+        self.drop_zone = self.input_panel
+        self.drop_zone.paths_dropped.connect(self._handle_drop_paths)
+        input_layout = QVBoxLayout(self.input_panel)
+        input_layout.setContentsMargins(10, 9, 10, 8)
+        input_layout.setSpacing(3)
+
+        root_label = QLabel("下次扫描目录")
         root_label.setObjectName("sectionLabel")
-        layout.addWidget(root_label)
-        root_row = QHBoxLayout()
-        root_row.setSpacing(10)
         self.root_input = QLineEdit()
+        root_label.setBuddy(self.root_input)
+        self.root_input.setAccessibleName("下次扫描目录")
         self.root_input.setPlaceholderText("选择包含作品子目录的文件夹")
         self.root_input.setClearButtonEnabled(True)
-        self.root_input.setMinimumHeight(40)
+        self.root_input.setMinimumWidth(0)
+        self.root_input.setAcceptDrops(False)
         self.browse_button = QPushButton("选择…")
-        self.browse_button.setMinimumSize(92, 40)
+        self.browse_button.setAccessibleName("选择下次扫描目录")
+        root_row = QHBoxLayout()
+        root_row.setSpacing(7)
+        root_row.addWidget(root_label)
         root_row.addWidget(self.root_input, 1)
         root_row.addWidget(self.browse_button)
-        layout.addLayout(root_row)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
         self.scan_button = QPushButton("扫描并预览")
-        self.scan_button.setObjectName("primaryButton")
-        self.scan_button.setMinimumSize(124, 40)
-        self.cancel_button = QPushButton("取消")
-        self.cancel_button.setMinimumSize(92, 40)
+        self.scan_button.setAccessibleName("扫描并预览下次扫描目录")
+        set_button_role(self.scan_button, ButtonRole.SECONDARY)
+        self.cancel_button = QPushButton("取消扫描")
+        self.cancel_button.setAccessibleName("取消扫描")
         self.cancel_button.setEnabled(False)
-        action_row.addWidget(self.scan_button)
-        action_row.addWidget(self.cancel_button)
-        self.remove_button = QPushButton("删除选中项")
-        self.remove_button.setMinimumSize(112, 40)
-        self.remove_button.setEnabled(False)
-        action_row.addWidget(self.remove_button)
-        self.clear_button = QPushButton("清空")
-        self.clear_button.setMinimumSize(82, 40)
-        self.clear_button.setEnabled(False)
-        action_row.addWidget(self.clear_button)
-        self.execute_button = QPushButton("执行重命名")
-        self.execute_button.setObjectName("primaryButton")
-        self.execute_button.setMinimumSize(124, 40)
-        self.execute_button.setEnabled(False)
-        action_row.addWidget(self.execute_button)
-        action_row.addStretch(1)
-        layout.addLayout(action_row)
+        self.cancel_button.hide()
+        root_row.addWidget(self.scan_button)
+        root_row.addWidget(self.cancel_button)
+        input_layout.addLayout(root_row)
 
-        self.status_label = QLabel("请选择根目录开始扫描。")
-        self.status_label.setObjectName("statusLabel")
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        self.input_hint_label = QLabel("拖入根目录或作品文件夹以追加预览")
+        self.input_hint_label.setObjectName("pageDescription")
+        self.input_hint_label.setAccessibleName("拖放说明")
+        input_layout.addWidget(self.input_hint_label)
+        layout.addWidget(self.input_panel)
+
+        self.preview_context = QWidget(self)
+        self.preview_context.setObjectName("organizerPreviewContext")
+        context_layout = QVBoxLayout(self.preview_context)
+        context_layout.setContentsMargins(0, 0, 0, 0)
+        context_layout.setSpacing(2)
+        root_context_row = QHBoxLayout()
+        root_context_row.setContentsMargins(0, 0, 0, 0)
+        root_context_row.setSpacing(7)
+        current_root_label = QLabel("当前预览")
+        current_root_label.setObjectName("sectionLabel")
+        self.preview_root_display = PathDisplay(copy_button=False)
+        self.preview_root_display.setAccessibleName("当前预览目录")
+        self.summary_label = QLabel("尚未生成预览")
+        self.summary_label.setObjectName("organizerSummary")
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setAccessibleName("预览项目统计")
+        root_context_row.addWidget(current_root_label)
+        root_context_row.addWidget(self.preview_root_display, 1)
+        root_context_row.addWidget(self.summary_label, 2)
+        context_layout.addLayout(root_context_row)
+        self.input_root_difference_label = QLabel()
+        self.input_root_difference_label.setObjectName("organizerRootDifference")
+        self.input_root_difference_label.setWordWrap(True)
+        self.input_root_difference_label.hide()
+        context_layout.addWidget(self.input_root_difference_label)
+        layout.addWidget(self.preview_context)
+
+        self.status_banner = StatusBanner(self)
+        layout.addWidget(self.status_banner)
+
+        self.empty_state = QWidget(self)
+        self.empty_state.setObjectName("organizerEmptyState")
+        empty_layout = QVBoxLayout(self.empty_state)
+        empty_layout.setContentsMargins(4, 7, 4, 7)
+        empty_layout.setSpacing(2)
+        self.empty_title_label = QLabel("尚未生成预览")
+        self.empty_title_label.setObjectName("sectionLabel")
+        self.empty_description_label = QLabel(
+            "选择下次扫描目录并扫描，或拖入作品目录以追加预览。"
+        )
+        self.empty_description_label.setObjectName("pageDescription")
+        self.empty_description_label.setWordWrap(True)
+        empty_layout.addWidget(self.empty_title_label)
+        empty_layout.addWidget(self.empty_description_label)
+        layout.addWidget(self.empty_state)
 
         self.table = QTableView()
         self.table.setModel(self.preview_model)
+        # Keep a useful width hint while the empty state hides the table.
+        self.table.setMinimumWidth(680)
         self.table.setSortingEnabled(False)
         self.table.setAcceptDrops(False)
         self.table.viewport().setAcceptDrops(False)
         self.table.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.table.setObjectName("organizerTable")
+        self.table.setAccessibleName("重命名预览")
         self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setWordWrap(True)
+        self.table.setWordWrap(False)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.verticalHeader().setDefaultSectionSize(40)
         header = self.table.horizontalHeader()
-        header.setMinimumSectionSize(40)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 52)
-        self.table.setColumnWidth(1, 110)
-        for column in (2, 3, 4):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        self.table.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
+        header.setMinimumSectionSize(36)
+        header.setFixedHeight(32)
+        header.setSectionsClickable(False)
+        header.setSortIndicatorShown(False)
+        for column in range(self.preview_model.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        self.table.setItemDelegateForColumn(1, OrganizerStatusDelegate(self.table))
+        self.table.setItemDelegateForColumn(2, OrganizerWorkDelegate(self.table))
+        self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.table.setMinimumHeight(150)
+        self.table.hide()
+        self.table.setStyleSheet(
+            f"""
+            QTableView#organizerTable {{
+              background: {LIGHT_COLORS.surface};
+              alternate-background-color: {LIGHT_COLORS.surface_secondary};
+              border: 1px solid {LIGHT_COLORS.border};
+              border-radius: 7px;
+              selection-background-color: {LIGHT_COLORS.selection};
+              selection-color: {LIGHT_COLORS.text_primary};
+            }}
+            QTableView#organizerTable::item {{ padding: 2px 3px; }}
+            QTableView#organizerTable::item:focus {{
+              border: 1px solid {LIGHT_COLORS.focus};
+            }}
+            QHeaderView::section {{
+              background: {LIGHT_COLORS.surface_secondary};
+              color: {LIGHT_COLORS.text_secondary};
+              border: 0;
+              border-bottom: 1px solid {LIGHT_COLORS.border};
+              padding: 5px 7px;
+              font-weight: 600;
+            }}
+            """
         )
-        self.table.setMinimumHeight(260)
         layout.addWidget(self.table, 1)
+
+        self.detail_panel = QFrame(self)
+        self.detail_panel.setObjectName("organizerDetailPane")
+        self.detail_panel.setStyleSheet(
+            f"""
+            QFrame#organizerDetailPane {{
+              background: {LIGHT_COLORS.surface};
+              border: 1px solid {LIGHT_COLORS.border};
+              border-radius: 7px;
+            }}
+            """
+        )
+        detail_layout = QVBoxLayout(self.detail_panel)
+        detail_layout.setContentsMargins(6, 3, 6, 4)
+        detail_layout.setSpacing(1)
+        detail_header = QHBoxLayout()
+        detail_header.setContentsMargins(0, 0, 0, 0)
+        detail_header.setSpacing(7)
+        self.detail_toggle = QToolButton(self.detail_panel)
+        self.detail_toggle.setObjectName("organizerDetailToggle")
+        self.detail_toggle.setCheckable(True)
+        self.detail_toggle.setChecked(True)
+        self.detail_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.detail_toggle.setText("当前行详情")
+        self.detail_toggle.setAccessibleName("展开或折叠当前行详情")
+        self.detail_toggle.setAutoRaise(True)
+        self.detail_toggle.setStyleSheet(
+            f"""
+            QToolButton#organizerDetailToggle {{
+              background: transparent;
+              border: 0;
+              border-radius: 5px;
+              color: {LIGHT_COLORS.text_secondary};
+              padding: 3px 5px;
+              font-weight: 600;
+            }}
+            QToolButton#organizerDetailToggle:hover {{
+              background: {LIGHT_COLORS.surface_secondary};
+              color: {LIGHT_COLORS.text_primary};
+            }}
+            QToolButton#organizerDetailToggle:focus {{
+              border: 1px solid {LIGHT_COLORS.focus};
+            }}
+            """
+        )
+        self.detail_summary_label = QLabel("尚未选择行")
+        self.detail_summary_label.setObjectName("pageDescription")
+        self.detail_summary_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        detail_header.addWidget(self.detail_toggle)
+        detail_header.addWidget(self.detail_summary_label, 1)
+        detail_layout.addLayout(detail_header)
+
+        self.detail_content = QWidget(self.detail_panel)
+        detail_content_layout = QVBoxLayout(self.detail_content)
+        detail_content_layout.setContentsMargins(2, 0, 2, 0)
+        detail_content_layout.setSpacing(1)
+        self.detail_title_label = QLabel()
+        self.detail_title_label.setObjectName("sectionLabel")
+        self.detail_title_label.setWordWrap(True)
+        self.detail_metadata_label = QLabel()
+        self.detail_metadata_label.setObjectName("pageDescription")
+        self.detail_metadata_label.setWordWrap(True)
+        detail_content_layout.addWidget(self.detail_title_label)
+        detail_content_layout.addWidget(self.detail_metadata_label)
+
+        source_row = QHBoxLayout()
+        source_row.setContentsMargins(0, 0, 0, 0)
+        source_row.setSpacing(6)
+        source_label = QLabel("来源路径")
+        source_label.setObjectName("pageDescription")
+        self.detail_source_path = PathDisplay(copy_button=True, compact=True)
+        source_label.setBuddy(self.detail_source_path.path_input)
+        source_row.addWidget(source_label)
+        source_row.addWidget(self.detail_source_path, 1)
+        detail_content_layout.addLayout(source_row)
+
+        target_row = QHBoxLayout()
+        target_row.setContentsMargins(0, 0, 0, 0)
+        target_row.setSpacing(6)
+        target_label = QLabel("目标路径")
+        target_label.setObjectName("pageDescription")
+        self.detail_target_path = PathDisplay(copy_button=True, compact=True)
+        target_label.setBuddy(self.detail_target_path.path_input)
+        target_row.addWidget(target_label)
+        target_row.addWidget(self.detail_target_path, 1)
+        detail_content_layout.addLayout(target_row)
+
+        self.detail_diagnostics = QPlainTextEdit()
+        self.detail_diagnostics.setObjectName("organizerDetailDiagnostics")
+        self.detail_diagnostics.setReadOnly(True)
+        self.detail_diagnostics.setFixedHeight(34)
+        self.detail_diagnostics.setStyleSheet(
+            """
+            QPlainTextEdit#organizerDetailDiagnostics {
+              min-height: 24px;
+              padding: 1px 4px;
+            }
+            """
+        )
+        self.detail_diagnostics.setPlaceholderText("无警告或阻止原因")
+        self.detail_diagnostics.setAccessibleName("当前行警告与错误")
+        self.detail_diagnostics.setTabChangesFocus(True)
+        detail_content_layout.addWidget(self.detail_diagnostics)
+        detail_layout.addWidget(self.detail_content)
+        self.detail_panel.hide()
+        layout.addWidget(self.detail_panel)
 
         self.footer = QWidget()
         self.footer.setObjectName("organizerFooter")
         footer_layout = QVBoxLayout(self.footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
-        footer_layout.setSpacing(14)
-        self.summary_label = QLabel("尚未生成预览。")
-        self.summary_label.setObjectName("pageDescription")
-        footer_layout.addWidget(self.summary_label)
+        footer_layout.setSpacing(4)
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(6)
+        self.highlight_count_label = QLabel("高亮 0 项")
+        self.highlight_count_label.setObjectName("pageDescription")
+        self.remove_button = QPushButton("从预览移除（0）")
+        self.remove_button.setAccessibleName("从预览移除高亮项目")
+        self.remove_button.setEnabled(False)
+        set_button_role(self.remove_button, ButtonRole.QUIET)
+        self.clear_button = QPushButton("清空预览")
+        self.clear_button.setAccessibleName("清空当前内存预览")
+        self.clear_button.setToolTip("仅清空内存中的预览，不修改文件；保留下次扫描目录。")
+        self.clear_button.setEnabled(False)
+        set_button_role(self.clear_button, ButtonRole.QUIET)
+        self.execute_button = QPushButton("执行重命名（0 项）")
+        self.execute_button.setAccessibleName("执行已勾选的可执行重命名")
+        self.execute_button.setDefault(False)
+        self.execute_button.setAutoDefault(False)
+        set_button_role(self.execute_button, ButtonRole.PRIMARY)
+        self.execute_button.setEnabled(False)
+        self.action_hint_label = QLabel("请勾选要执行的可执行项目。")
+        self.action_hint_label.setObjectName("pageDescription")
+        self.action_hint_label.setWordWrap(True)
+        action_row.addWidget(self.highlight_count_label)
+        action_row.addWidget(self.remove_button)
+        action_row.addWidget(self.clear_button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.action_hint_label, 0)
+        action_row.addWidget(self.execute_button)
+        footer_layout.addLayout(action_row)
+
+        self.status_label = QLabel("请选择根目录开始扫描。")
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setWordWrap(True)
+        self.status_label.hide()
+        self.progress_label = QLabel()
+        self.progress_label.setObjectName("organizerProgress")
+        self.progress_label.setWordWrap(True)
+        self.progress_label.hide()
+        footer_layout.addWidget(self.progress_label)
+        footer_layout.addWidget(self.status_label)
+
         recent_row = QHBoxLayout()
-        self.recent_transaction_label = QLabel("最近一次重命名：无")
+        recent_row.setContentsMargins(0, 0, 0, 0)
+        recent_row.setSpacing(6)
+        self.recent_transaction_label = QLabel("最近可撤销：无")
         self.recent_transaction_label.setObjectName("pageDescription")
         self.recent_transaction_label.setWordWrap(True)
-        self.undo_button = QPushButton("撤销最近一次重命名")
-        self.undo_button.setMinimumSize(152, 36)
+        self.recent_transaction_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.undo_button = QPushButton("撤销最近一次")
+        self.undo_button.setAccessibleName("撤销最近一次重命名")
         self.undo_button.setEnabled(False)
-        self.view_transaction_button = QPushButton("查看事务详情")
+        set_button_role(self.undo_button, ButtonRole.QUIET)
+        self.view_transaction_button = QPushButton("查看未解决事务")
+        self.view_transaction_button.setAccessibleName("在重命名历史中查看未解决事务")
         self.view_transaction_button.setToolTip("在重命名历史中查看该事务的记录和恢复信息")
+        set_button_role(self.view_transaction_button, ButtonRole.QUIET)
         self.view_transaction_button.hide()
-        recent_row.addWidget(self.view_transaction_button)
         recent_row.addWidget(self.recent_transaction_label, 1)
+        recent_row.addWidget(self.view_transaction_button)
         recent_row.addWidget(self.undo_button)
         footer_layout.addLayout(recent_row)
         layout.addWidget(self.footer)
+
+        self._feedback_timer = QTimer(self)
+        self._feedback_timer.setSingleShot(True)
+        self._feedback_timer.setInterval(6500)
+        self._feedback_timer.timeout.connect(self._clear_feedback)
+        self._detail_user_touched = False
+        self._journal_unavailable = False
+        self._journal_error_message = ""
+        self._operation_message = ""
+        self._resize_table_columns()
+        self._update_preview_context()
+        self._update_empty_state()
+        self._update_detail_expanded(self.detail_toggle.isChecked())
 
     @Slot()
     def choose_root(self) -> None:
@@ -239,18 +490,15 @@ class OrganizerPage(QWidget):
             return
         root = self.state.input_root.strip()
         if not root:
-            self.status_label.setProperty("state", "error")
-            self.status_label.setText("请先选择作品根目录。")
-            self._refresh_status_style()
+            self._set_feedback("请先选择下次扫描目录。", "error")
             return
 
         self.state.settings_generation = self._organizer_service.settings_generation
         self.state.begin_scan(self._next_scan_mode)
         self._next_scan_mode = ScanMode.REPLACE
+        self._clear_feedback()
+        self._set_operation_progress("正在扫描目录…")
         self._set_loading(True)
-        self.status_label.setProperty("state", "loading")
-        self.status_label.setText("正在扫描目录…")
-        self._refresh_status_style()
 
         thread: QThread | None = None
         worker: OrganizerWorker | None = None
@@ -295,34 +543,10 @@ class OrganizerPage(QWidget):
             self._worker = None
             self.state.scan_mode = ScanMode.REPLACE
             self._show_error("无法启动扫描，请稍后重试。")
+            self._set_operation_progress("")
             self._set_loading(False)
             self._update_execute_button()
             self._refresh_recent_transaction()
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        paths = local_directory_paths(event.mimeData())
-        if paths:
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        paths = local_directory_paths(event.mimeData())
-        if paths:
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
-        event.accept()
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        paths = local_directory_paths(event.mimeData())
-        if not paths:
-            event.ignore()
-            return
-        event.acceptProposedAction()
-        self._handle_drop_paths(paths)
 
     @Slot(object)
     def _handle_drop_paths(self, value: object) -> None:
@@ -366,15 +590,12 @@ class OrganizerPage(QWidget):
         self.state.cancel_requested = True
         self._worker.cancel()
         self.cancel_button.setEnabled(False)
-        self.status_label.setProperty("state", "loading")
-        self.status_label.setText("正在取消；当前网络请求结束后会保留已完成结果…")
-        self._refresh_status_style()
+        self.cancel_button.setText("正在取消…")
+        self._set_operation_progress("正在取消；当前查询结束后会保留已完成结果…")
 
     @Slot(int, int, str)
     def _show_progress(self, completed: int, total: int, work_code: str) -> None:
-        self.status_label.setProperty("state", "loading")
-        self.status_label.setText(f"正在查询 {completed + 1} / {total}：{work_code}")
-        self._refresh_status_style()
+        self._set_operation_progress(f"正在查询 {completed + 1} / {total}：{work_code}")
 
     @Slot(object)
     def _show_preview(self, value: object) -> None:
@@ -398,9 +619,7 @@ class OrganizerPage(QWidget):
             # With no previous collection, retain the existing useful behavior
             # of showing completed rows from a cancelled replace scan.
             self._commit_preview(preview)
-            self.status_label.setProperty("state", "success")
-            self.status_label.setText("扫描已取消；表格保留已完成查询及未处理项目。")
-            self._refresh_status_style()
+            self._set_feedback("扫描已取消；已完成和未处理项目仍可检查，但不可执行。", "success")
             self._update_summary(preview)
             return
 
@@ -416,8 +635,7 @@ class OrganizerPage(QWidget):
             preview = self.state.preview
             assert preview is not None
             self._update_preview_controls()
-            self.status_label.setProperty("state", "success")
-            self.status_label.setText("追加预览完成；未修改本地文件。")
+            self._set_feedback("追加预览完成；未修改本地文件。", "success")
         else:
             self._commit_preview(preview)
 
@@ -426,20 +644,20 @@ class OrganizerPage(QWidget):
             and not preview.plans
             and not preview.scan.candidates
         ):
-            self.status_label.setProperty("state", "success")
-            self.status_label.setText("未发现可整理的作品文件夹；未修改本地文件。")
+            self._set_feedback("未发现可整理的作品文件夹；未修改本地文件。", "success")
         elif self.state.scan_mode is not ScanMode.APPEND:
-            self.status_label.setProperty("state", "success")
-            self.status_label.setText("预览生成完成；未修改本地文件。")
-        self._refresh_status_style()
+            self._set_feedback("预览生成完成；未修改本地文件。", "success")
+        self._set_operation_progress("")
         self._update_summary(preview)
 
     def set_preview(self, preview: OrganizerPreview) -> None:
         """Render a preview directly for smoke tests and embedding callers."""
         self._commit_preview(preview)
-        self.status_label.setProperty("state", "success")
-        self.status_label.setText("预览生成完成；未修改本地文件。")
-        self._refresh_status_style()
+        self._set_feedback(
+            "扫描已取消；已完成和未处理项目仍可检查，但不可执行。"
+            if preview.cancelled else "预览生成完成；未修改本地文件。",
+            "success",
+        )
         self._update_summary(preview)
         self._update_execute_button()
 
@@ -475,6 +693,7 @@ class OrganizerPage(QWidget):
     @Slot(str)
     def _input_root_changed(self, value: str) -> None:
         self.state.input_root = value
+        self._update_root_difference()
 
     @Slot()
     def _table_selection_changed(self) -> None:
@@ -485,11 +704,15 @@ class OrganizerPage(QWidget):
             current.row() if current.isValid() else None,
         )
         self._update_preview_controls()
+        self._update_action_labels()
+        self._refresh_detail(current.row() if current.isValid() else None)
 
     def _clear_highlight(self) -> None:
         self.table.clearSelection()
         self.table.setCurrentIndex(QModelIndex())
         self.state.clear_highlight()
+        self._update_action_labels()
+        self._refresh_detail(None)
 
     def refresh_mutation_state(self) -> None:
         """Refresh only journal-backed controls after another UI entry point mutates."""
@@ -506,16 +729,23 @@ class OrganizerPage(QWidget):
     def _update_execute_button(self) -> None:
         self.state.settings_generation = self._organizer_service.settings_generation
         self.state.executor_available = False
-        self.state.mutation_blocked = True
+        blocked = True
         if self._execution_service is not None:
             try:
                 self.state.executor_available = self._execution_service.available
-                self.state.mutation_blocked = (
-                    self._execution_service.unresolved_transaction() is not None
-                )
+                unresolved = self._execution_service.unresolved_transaction()
+                if unresolved is not None:
+                    self.state.unresolved_transaction_id = unresolved.transaction_id
+                blocked = unresolved is not None or not self.state.executor_available
             except Exception:
-                self.state.mutation_blocked = True
+                self._journal_unavailable = True
+                self._journal_error_message = "无法读取重命名记录；执行和撤销已暂停。"
+                blocked = True
+        self.state.mutation_blocked = blocked or self._journal_unavailable
+        self.execute_button.setText(f"执行重命名（{self.state.checked_ready_count} 项）")
         self.execute_button.setEnabled(self.state.can_execute)
+        self._update_action_hint()
+        self._refresh_status_banner()
 
     @Slot(object)
     def _show_execution_result(self, value: object) -> None:
@@ -523,27 +753,26 @@ class OrganizerPage(QWidget):
         self.state.last_execution_result = result
         self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         if result.status.name == "COMPLETED":
-            self.status_label.setProperty("state", "success")
-            self.status_label.setText(
+            self._set_feedback(
                 f"重命名完成：成功 {result.success_count}，失败 {result.failed_count}。 "
-                f"Transaction: {result.transaction_id}。当前预览已失效，请重新扫描。"
+                f"当前预览已失效，请重新扫描。",
+                "success",
             )
         elif result.status.name == "PARTIAL":
-            self.status_label.setProperty("state", "error")
-            self.status_label.setText(
+            self._set_feedback(
                 f"重命名未全部完成：成功 {result.success_count}，失败 {result.failed_count}，"
                 f"未执行 {result.not_executed_count}。已停止后续操作。"
-                " 可以从最近事务尝试撤销已经成功的修改。"
+                " 可以从最近事务尝试撤销已经成功的修改。",
+                "error",
             )
         elif result.status.name == "RECOVERY_REQUIRED":
-            self.status_label.setProperty("state", "error")
-            self.status_label.setText(
+            self._set_feedback(
                 "重命名状态需要恢复：文件系统与 journal 可能不同步。"
-                " 请不要立即重新执行；详细信息已写入日志。"
+                " 请不要立即重新执行；详细信息已写入日志。",
+                "error",
             )
         else:
             self._show_error(result.error or "重命名未执行。")
-        self._refresh_status_style()
         self._refresh_recent_transaction()
 
     @Slot(object)
@@ -552,9 +781,9 @@ class OrganizerPage(QWidget):
         self.state.last_undo_result = result
         self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         if result.status.name == "UNDONE":
-            self.status_label.setProperty("state", "success")
-            self.status_label.setText(
-                f"撤销完成：恢复 {result.success_count} 个目录。当前预览已失效，请重新扫描。"
+            self._set_feedback(
+                f"撤销完成：恢复 {result.success_count} 个目录。当前预览已失效，请重新扫描。",
+                "success",
             )
         elif result.status.name == "UNDO_PARTIAL":
             self._show_error(
@@ -565,7 +794,6 @@ class OrganizerPage(QWidget):
             self._show_error("撤销状态需要恢复；请不要立即重新执行。")
         else:
             self._show_error(result.error or "撤销未执行。")
-        self._refresh_status_style()
         self._refresh_recent_transaction()
 
     @Slot()
@@ -662,22 +890,25 @@ class OrganizerPage(QWidget):
             BusyOperation.UNDO
             if result_handler == self._show_undo_result else BusyOperation.EXECUTE
         )
+        self._clear_feedback()
+        self._set_operation_progress(
+            "正在撤销最近一次重命名…"
+            if self.state.busy is BusyOperation.UNDO else "正在准备重命名…"
+        )
         self._set_action_loading(True)
         thread.start()
 
     @Slot(int, int, str, str)
     def _show_action_progress(self, completed: int, total: int, source: str, target: str) -> None:
-        self.status_label.setProperty("state", "loading")
-        self.status_label.setText(f"正在执行 {completed} / {total}: {source} -> {target}")
-        self._refresh_status_style()
+        self._set_operation_progress(
+            f"正在尝试 {completed} / {total}：{source} → {target}"
+        )
 
     @Slot(str)
     def _show_error(self, message: str) -> None:
         if self._worker is not None and self.state.preview is not None:
             message = f"{message} 当前预览保持不变。"
-        self.status_label.setProperty("state", "error")
-        self.status_label.setText(message)
-        self._refresh_status_style()
+        self._set_feedback(message, "error")
 
     @Slot(str)
     def _show_action_error(self, message: str) -> None:
@@ -693,6 +924,8 @@ class OrganizerPage(QWidget):
         self._worker = None
         self.state.finish_operation()
         self._set_loading(False)
+        self.cancel_button.setText("取消扫描")
+        self._set_operation_progress("")
         self._update_execute_button()
         self._refresh_recent_transaction()
 
@@ -702,19 +935,23 @@ class OrganizerPage(QWidget):
         self._action_worker = None
         self.state.finish_operation()
         self._set_action_loading(False)
+        self._set_operation_progress("")
         self._update_execute_button()
         self._refresh_recent_transaction()
 
     def _set_action_loading(self, loading: bool) -> None:
         self.preview_model.refresh_editability()
-        self.drop_zone.setEnabled(not loading)
+        self.input_panel.setAcceptDrops(not loading)
         self.root_input.setEnabled(not loading)
         self.browse_button.setEnabled(not loading)
         self.scan_button.setEnabled(not loading)
+        self.scan_button.setVisible(not loading)
         self.cancel_button.setEnabled(False)
+        self.cancel_button.hide()
         self.execute_button.setEnabled(False)
         self.undo_button.setEnabled(False)
-        self.table.setEnabled(not loading and not self.state.stale)
+        self.table.setEnabled(not loading)
+        self.input_hint_label.setVisible(not loading and not self._operation_message)
         self._update_preview_controls()
 
     def is_busy(self) -> bool:
@@ -725,12 +962,15 @@ class OrganizerPage(QWidget):
         if not loading:
             self.state.finish_operation()
         self.preview_model.refresh_editability()
-        self.drop_zone.setEnabled(not loading)
+        self.input_panel.setAcceptDrops(not loading)
         self.root_input.setEnabled(not loading)
         self.browse_button.setEnabled(not loading)
         self.scan_button.setEnabled(not loading)
+        self.scan_button.setVisible(not loading)
         self.cancel_button.setEnabled(loading)
-        self.table.setEnabled(not loading and not self.state.stale)
+        self.cancel_button.setVisible(loading)
+        self.table.setEnabled(not loading)
+        self.input_hint_label.setVisible(not loading and not self._operation_message)
         self._update_preview_controls()
         if loading:
             self.execute_button.setEnabled(False)
@@ -741,64 +981,101 @@ class OrganizerPage(QWidget):
         self.preview_model.mark_stale(reason)
         if not self.state.stale:
             return
-        self.table.setEnabled(False)
-        self.execute_button.setEnabled(False)
-        self.summary_label.setText("预览已失效：请重新扫描以刷新状态。")
+        # Rows and selection stay readable; the model itself removes check editability.
+        self.table.setEnabled(not self.is_busy())
         self._update_preview_controls()
+        self._update_execute_button()
 
     def _refresh_recent_transaction(self) -> None:
-        if self._undo_service is None:
+        self._journal_unavailable = False
+        self._journal_error_message = ""
+        self.state.unresolved_transaction_id = None
+        if self._execution_service is not None:
+            try:
+                if not self._execution_service.available:
+                    self._journal_unavailable = True
+                    self._journal_error_message = "重命名记录 journal 暂不可用。"
+            except Exception:
+                self._journal_unavailable = True
+                self._journal_error_message = "无法读取重命名记录 journal。"
+        if self._undo_service is None and self._execution_service is None:
             self.undo_button.setEnabled(False)
             self.view_transaction_button.hide()
+            self.recent_transaction_label.setText("最近可撤销：撤销服务不可用")
+            self._refresh_status_banner()
             return
         try:
-            unresolved = self._undo_service.unresolved_transaction()
+            transaction_service = self._undo_service or self._execution_service
+            unresolved = (
+                transaction_service.unresolved_transaction()
+                if transaction_service is not None else None
+            )
             if unresolved is not None:
                 self.state.unresolved_transaction_id = unresolved.transaction_id
                 self.view_transaction_button.show()
                 self.undo_button.setEnabled(False)
-                self.execute_button.setEnabled(False)
                 self.recent_transaction_label.setText(
-                    f"检测到未解决的重命名事务: {unresolved.transaction_id} "
-                    f"| root={unresolved.root} | 状态={unresolved.display_status.value}"
+                    f"需要恢复的事务：{unresolved.transaction_id} · "
+                    f"{unresolved.display_status.value}"
                 )
-                self.status_label.setProperty("state", "error")
-                self.status_label.setText(
-                    "检测到未解决的重命名事务。为防止进一步改变文件系统，新的重命名和普通撤销已暂时禁用。"
-                    "请查看重命名历史中的事务详情与当前路径观察。"
+                self.recent_transaction_label.setToolTip(
+                    f"事务：{unresolved.transaction_id}\n根目录：{unresolved.root}\n"
+                    f"状态：{unresolved.display_status.value}"
                 )
-                self._refresh_status_style()
+                self._refresh_status_banner()
                 return
-            self.state.unresolved_transaction_id = None
             self.view_transaction_button.hide()
-            transaction = self._undo_service.latest_transaction()
-        except Exception:
+            transaction = (
+                self._undo_service.latest_transaction()
+                if self._undo_service is not None and not self._journal_unavailable else None
+            )
+        except Exception as exc:
             self.undo_button.setEnabled(False)
-            self.state.unresolved_transaction_id = None
             self.view_transaction_button.hide()
-            self.recent_transaction_label.setText("最近一次重命名：journal 不可用")
+            self._journal_unavailable = True
+            self._journal_error_message = f"读取重命名记录失败：{exc}"
+            self.recent_transaction_label.setText("最近可撤销：journal 暂不可用")
+            self._refresh_status_banner()
+            return
+        if self._journal_unavailable:
+            self.undo_button.setEnabled(False)
+            self.view_transaction_button.hide()
+            self.recent_transaction_label.setText("最近可撤销：journal 暂不可用")
+            self._refresh_status_banner()
             return
         if transaction is None:
             self.undo_button.setEnabled(False)
-            self.recent_transaction_label.setText("最近一次重命名：无")
+            self.recent_transaction_label.setText("最近可撤销：无")
+            self.recent_transaction_label.setToolTip("")
+            self._refresh_status_banner()
             return
         pending = sum(
             operation.status.name == "SUCCESS" and operation.undo_status.name != "SUCCESS"
             for operation in transaction.operations
         )
         self.undo_button.setEnabled(self._thread is None and pending > 0)
-        self.state.unresolved_transaction_id = None
         self.view_transaction_button.hide()
-        self.recent_transaction_label.setText(
-            f"最近一次重命名：{transaction.created_at:%Y-%m-%d %H:%M} | "
-            f"可撤销：{pending} | 事务：{transaction.transaction_id}"
-        )
+        if pending:
+            self.recent_transaction_label.setText(
+                f"最近可撤销：{transaction.created_at:%Y-%m-%d %H:%M} · "
+                f"可撤销：{pending} 项"
+            )
+        else:
+            self.recent_transaction_label.setText(
+                f"最近事务：{transaction.created_at:%Y-%m-%d %H:%M} · 已无可撤销项"
+            )
+        self.recent_transaction_label.setToolTip(transaction.transaction_id)
+        self._refresh_status_banner()
 
     def _clear_preview(self) -> None:
         self._clear_highlight()
         self.preview_model.clear_preview()
         self.table.setEnabled(True)
-        self.summary_label.setText("尚未生成预览。")
+        self._update_preview_context()
+        self._update_summary(None)
+        self._update_empty_state()
+        self._refresh_detail(None)
+        self._refresh_status_banner()
         self._update_preview_controls()
 
     def _has_preview_content(self) -> bool:
@@ -817,10 +1094,12 @@ class OrganizerPage(QWidget):
             return
         self._clear_highlight()
         self.preview_model.remove_rows(rows)
-        self.status_label.setProperty("state", "success")
-        self.status_label.setText(f"已从当前预览移除 {len(rows)} 项；未修改本地文件。")
-        self._refresh_status_style()
+        self._set_feedback(f"已从当前预览移除 {len(rows)} 项；未修改本地文件。", "success")
+        assert self.state.preview is not None
         self._update_summary(self.state.preview)
+        self._update_preview_context()
+        self._update_empty_state()
+        self._refresh_detail(None)
         self._update_execute_button()
 
     @Slot()
@@ -834,20 +1113,24 @@ class OrganizerPage(QWidget):
         if self.is_busy():
             return
         self._clear_preview()
-        self.status_label.setProperty("state", "success")
-        self.status_label.setText("预览已清空；未修改本地文件。")
-        self._refresh_status_style()
+        self._set_feedback("预览已清空；未修改本地文件。", "success")
         self._update_execute_button()
 
     def _commit_preview(self, preview: OrganizerPreview) -> None:
         self.state.settings_generation = self._organizer_service.settings_generation
+        if not self.state.input_root.strip():
+            self.set_root_path(preview.root_path)
         self._clear_highlight()
         self.preview_model.replace_preview(preview)
-        self.table.setEnabled(not self.is_busy() and not self.state.stale)
+        self.table.setEnabled(not self.is_busy())
+        self._update_preview_context()
+        self._update_summary(preview)
+        self._update_empty_state()
+        self._refresh_detail(None)
+        self._refresh_status_banner()
         self._update_preview_controls()
         if self.state.stale:
-            self.execute_button.setEnabled(False)
-            self.summary_label.setText("预览已失效：请重新扫描以刷新状态。")
+            self._update_execute_button()
 
     def _update_preview_controls(self) -> None:
         active = not self.is_busy() and not self.state.stale
@@ -856,26 +1139,235 @@ class OrganizerPage(QWidget):
         self.remove_button.setEnabled(active and has_rows and has_selection)
         # Clearing is also the safe escape hatch for a stale preview.
         self.clear_button.setEnabled(not self.is_busy() and has_rows)
+        self._update_action_labels()
 
-    def _update_summary(self, preview: OrganizerPreview) -> None:
+    def _update_summary(self, preview: OrganizerPreview | None) -> None:
+        if preview is None:
+            self.summary_label.setText("尚未生成预览")
+            return
         ready = preview.count(RenamePlanStatus.READY)
         unchanged = preview.count(RenamePlanStatus.UNCHANGED)
-        warning = sum(
-            plan_presentation(plan) is StatusPresentation.WARNING
-            for plan in preview.plans
-        )
-        conflict = preview.count(RenamePlanStatus.CONFLICT)
-        failed = preview.count(RenamePlanStatus.LOOKUP_FAILED)
-        blocked = sum(
-            plan_presentation(plan) is StatusPresentation.BLOCKED
-            for plan in preview.plans
-        )
+        total = len(preview.plans)
+        non_executable = total - ready - unchanged
+        warning = sum(bool(plan.warnings) for plan in preview.plans)
+        skipped = preview.skipped_count
         self.summary_label.setText(
-            f"共 {len(preview.plans)} 个 · 可执行 {ready} · 无需重命名 {unchanged} · "
-            f"警告 {warning} · 阻止 {blocked} · 冲突 {conflict} · 查询失败 {failed} · "
-            f"已跳过 {preview.skipped_count}"
+            f"共 {total} 项 · 可执行 {ready} · 无需重命名 {unchanged} · "
+            f"不可执行 {non_executable} · 含警告 {warning}"
+            + (f" · 扫描跳过 {skipped}" if skipped else "")
         )
 
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
+
+    def _update_preview_context(self) -> None:
+        root = self.state.committed_preview_root
+        self.preview_root_display.set_path(str(root) if root is not None else "")
+        self.preview_root_display.setToolTip(str(root) if root is not None else "")
+        self._update_root_difference()
+
+    def _update_root_difference(self) -> None:
+        root = self.state.committed_preview_root
+        if root is None:
+            self.input_root_difference_label.hide()
+            return
+        input_root = self.state.input_root.strip()
+        if input_root and normalized_path_identity(input_root) == normalized_path_identity(root):
+            self.input_root_difference_label.hide()
+            self.input_root_difference_label.clear()
+            return
+        if not input_root:
+            message = f"下次扫描目录尚未设置；当前预览仍属于 {root}。"
+        else:
+            message = (
+                f"输入目录已更改；当前预览仍属于 {root}。"
+                "扫描成功后才会替换当前预览。"
+            )
+        self.input_root_difference_label.setText(message)
+        self.input_root_difference_label.setAccessibleDescription(message)
+        self.input_root_difference_label.show()
+
+    def _update_empty_state(self) -> None:
+        has_rows = bool(self.state.plans)
+        self.table.setVisible(has_rows)
+        self.empty_state.setVisible(not has_rows)
+        if has_rows:
+            return
+        if self.state.preview is None:
+            self.empty_title_label.setText("尚未生成预览")
+            self.empty_description_label.setText(
+                "选择下次扫描目录并扫描，或拖入作品目录以追加预览。"
+            )
+        elif self.state.stale:
+            self.empty_title_label.setText("当前预览没有可检查的行")
+            self.empty_description_label.setText("预览行仍为空；状态说明会显示在上方。")
+        else:
+            self.empty_title_label.setText("当前预览没有项目")
+            self.empty_description_label.setText(
+                "没有发现可整理的作品文件夹。更改下次扫描目录后可再次扫描。"
+            )
+
+    def _refresh_detail(self, row: int | None) -> None:
+        """Render detail from the current state identity and structured plan data."""
+        plans = self.state.plans
+        if not plans:
+            self.detail_panel.hide()
+            return
+        self.detail_panel.show()
+        if row is None or not 0 <= row < len(plans):
+            self.detail_summary_label.setText("选择一行查看当前行详情")
+            self.detail_title_label.setText("选择一行查看作品标题和诊断")
+            self.detail_metadata_label.clear()
+            self.detail_source_path.set_path("")
+            self.detail_target_path.set_path("")
+            self.detail_diagnostics.clear()
+            return
+
+        key = self.state.row_keys[row]
+        if key != self.state.current_key:
+            self.detail_summary_label.setText("选择一行查看当前行详情")
+            return
+        plan = plans[row]
+        code = plan.work_code or "、".join(plan.work_codes) or "—"
+        title = plan.work.title if plan.work is not None else "作品元数据不可用"
+        maker = plan.work.maker_name if plan.work is not None else None
+        codes = "、".join(plan.work_codes) if plan.work_codes else code
+        metadata = f"作品编号：{codes}"
+        if maker:
+            metadata += f" · 社团：{maker}"
+        status = plan_status_label(plan.status)
+        if plan.warnings:
+            status += " · 含警告"
+        self.detail_summary_label.setText(f"当前行：{code} · {status}")
+        self.detail_title_label.setText(title)
+        self.detail_title_label.setToolTip(title)
+        self.detail_metadata_label.setText(metadata)
+        self.detail_source_path.set_path(str(plan.source_path))
+        target = str(plan.target_path) if plan.target_path is not None else (
+            plan.proposed_name or "未生成目标路径"
+        )
+        self.detail_target_path.set_path(target)
+        self.detail_diagnostics.setPlainText(plan_diagnostics(plan) or "无警告或阻止原因。")
+
+    def _detail_expanded_changed(self, expanded: bool) -> None:
+        self._detail_user_touched = True
+        self._update_detail_expanded(expanded)
+
+    def _update_detail_expanded(self, expanded: bool) -> None:
+        self.detail_content.setVisible(expanded)
+        self.detail_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self.detail_toggle.setAccessibleDescription(
+            "折叠当前行详情" if expanded else "展开当前行详情"
+        )
+
+    def _set_detail_expanded(self, expanded: bool) -> None:
+        if self.detail_toggle.isChecked() == expanded:
+            return
+        self.detail_toggle.blockSignals(True)
+        self.detail_toggle.setChecked(expanded)
+        self.detail_toggle.blockSignals(False)
+        self._update_detail_expanded(expanded)
+
+    def _resize_table_columns(self) -> None:
+        if not hasattr(self, "table"):
+            return
+        width = max(1, self.table.viewport().width())
+        check_width = 44
+        status_width = min(150, max(116, round(width * 0.13)))
+        work_width = min(250, max(180, round(width * 0.22)))
+        remaining = max(2, width - check_width - status_width - work_width)
+        current_width = max(1, round(remaining * 0.46))
+        target_width = max(1, remaining - current_width)
+        for column, section_width in enumerate(
+            (check_width, status_width, work_width, current_width, target_width)
+        ):
+            self.table.setColumnWidth(column, section_width)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._resize_table_columns()
+        if not self._detail_user_touched:
+            # Keep the table usable at compact heights while restoring the
+            # expanded review pane when the page has normal vertical room.
+            self._set_detail_expanded(self.height() > 700)
+
+    def _update_action_labels(self) -> None:
+        highlighted = len(self.state.highlighted_keys)
+        checked = self.state.checked_ready_count
+        self.highlight_count_label.setText(f"高亮 {highlighted} 项")
+        self.remove_button.setText(f"从预览移除（{highlighted}）")
+        self.execute_button.setText(f"执行重命名（{checked} 项）")
+        self._update_action_hint()
+
+    def _update_action_hint(self) -> None:
+        if self.is_busy():
+            message = "操作进行中；请等待当前任务完成。"
+        elif self.state.unresolved_transaction_id is not None:
+            message = "请先查看并处理未解决事务。"
+        elif self._journal_unavailable:
+            message = "重命名记录不可用，执行与撤销已暂停。"
+        elif self.state.stale:
+            message = "当前预览只可检查；重新扫描或清空后才能执行。"
+        elif self.state.preview is None:
+            message = "扫描生成预览后，勾选可执行项目。"
+        elif self.state.checked_ready_count == 0:
+            message = "勾选可执行行；高亮选择与执行勾选相互独立。"
+        elif not self.state.executor_available:
+            message = "重命名执行服务当前不可用。"
+        else:
+            message = "执行前会再次确认并检查目标路径。"
+        self.action_hint_label.setText(message)
+
+    def _refresh_status_banner(self) -> None:
+        unresolved = self.state.unresolved_transaction_id
+        if unresolved is not None:
+            self.status_banner.show_status(
+                BannerState.BLOCKED,
+                "存在未解决的重命名事务",
+                "重命名和普通撤销已暂停。请查看该事务的记录与恢复信息。",
+            )
+        elif self._journal_unavailable:
+            message = self._journal_error_message or "重命名记录暂不可用。"
+            self.status_banner.show_status(
+                BannerState.BLOCKED,
+                "重命名记录不可用",
+                f"{message}为保证可恢复性，执行和撤销已暂停。",
+            )
+        elif self.state.stale:
+            if self.state.stale_reason is PreviewStaleReason.SETTINGS_CHANGED:
+                title = "当前预览因设置变化已失效"
+                message = "行仍可查看和复制，但不能勾选或执行。请重新扫描，或清空预览。"
+            elif self.state.stale_reason is PreviewStaleReason.CANCELLED:
+                title = "扫描已取消；结果仅供检查"
+                message = "已完成和未处理项目仍保留为诊断预览，不能执行。请重新扫描或清空。"
+            else:
+                title = "当前预览因文件系统变化已失效"
+                message = "行仍可查看和复制，但不能勾选或执行。请重新扫描，或清空预览。"
+            self.status_banner.show_status(BannerState.STALE, title, message)
+        else:
+            self.status_banner.clear_status()
+
+    def _set_operation_progress(self, message: str) -> None:
+        self._operation_message = message
+        self.progress_label.setText(message)
+        self.progress_label.setVisible(bool(message))
+        if not message and not self.is_busy():
+            self.input_hint_label.show()
+
+    def _set_feedback(self, message: str, state: str = "success") -> None:
+        self._feedback_timer.stop()
+        self.status_label.setProperty("state", state)
+        self.status_label.setText(message)
+        self.status_label.setAccessibleDescription(message)
+        self._refresh_status_style()
+        self.status_label.show()
+        self._feedback_timer.start()
+
+    def _clear_feedback(self) -> None:
+        self._feedback_timer.stop()
+        self.status_label.clear()
+        self.status_label.setAccessibleDescription("")
+        self.status_label.hide()
