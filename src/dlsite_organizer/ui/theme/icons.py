@@ -70,3 +70,36 @@ def _draw_icon(name: str, color: str) -> QPixmap:
 
     painter.end()
     return pixmap
+
+
+@lru_cache(maxsize=3)
+def execution_check_icon(action: str) -> QIcon:
+    """App-owned checkbox group marks for execution selection."""
+    if action not in ("select", "invert", "clear"):
+        raise ValueError(f"Unknown check icon: {action}")
+    pixmap = QPixmap(36, 36)
+    pixmap.setDevicePixelRatio(2)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor(LIGHT_COLORS.text_secondary), 1.4,
+                        Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                        Qt.PenJoinStyle.RoundJoin))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(QRectF(2, 2, 9, 9), 1, 1)
+    painter.drawRoundedRect(QRectF(7, 7, 9, 9), 1, 1)
+    if action == "clear":
+        painter.drawLine(QPointF(9, 11.5), QPointF(14, 11.5))
+    else:
+        painter.drawLine(QPointF(9, 11), QPointF(11, 13))
+        painter.drawLine(QPointF(11, 13), QPointF(14, 9))
+        if action == "select":
+            painter.drawLine(QPointF(4, 6), QPointF(5, 7))
+            painter.drawLine(QPointF(5, 7), QPointF(8, 4))
+        else:
+            painter.drawLine(QPointF(12, 3), QPointF(16, 3))
+            painter.drawLine(QPointF(16, 3), QPointF(14, 1))
+            painter.drawLine(QPointF(5, 15), QPointF(1, 15))
+            painter.drawLine(QPointF(1, 15), QPointF(3, 17))
+    painter.end()
+    return QIcon(pixmap)

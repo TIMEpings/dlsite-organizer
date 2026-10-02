@@ -135,6 +135,27 @@ class OrganizerPreviewModel(QAbstractTableModel):
             self.checked_changed.emit()
         return True
 
+    def bulk_check(self, action: str) -> None:
+        """Use the existing state gate and coalesce execution check notifications."""
+        if action not in ("select", "invert", "clear"):
+            raise ValueError(f"Unknown bulk check action: {action}")
+        if not self.state.checks_editable:
+            return
+        first = last = None
+        for row, plan in enumerate(self.state.plans):
+            if plan.status is not RenamePlanStatus.READY:
+                continue
+            previous = self.state.checked(row)
+            checked = not previous if action == "invert" else action == "select"
+            if checked != previous and self.state.set_checked(row, checked):
+                if first is None:
+                    first = row
+                last = row
+        if first is not None and last is not None:
+            self.dataChanged.emit(self.index(first, 0), self.index(last, 0),
+                                  [Qt.ItemDataRole.CheckStateRole])
+            self.checked_changed.emit()
+
     def replace_preview(self, preview: OrganizerPreview) -> None:
         self.beginResetModel()
         self.state.replace_preview(preview)
