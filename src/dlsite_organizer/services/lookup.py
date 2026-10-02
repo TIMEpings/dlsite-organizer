@@ -397,17 +397,33 @@ class LookupService:
         metadata_source: str | None = None,
         translation_attribution: TranslationAttribution | None = None,
     ):
+        formatted_name = self._configuration.naming.format(work)
+        translation = self._translation_relations.analyze(workno, info)
+        historical = (
+            self._historical_relations.for_work(workno)
+            if self._configuration.cache_enabled and self._historical_relations
+            else HistoricalRelations()
+        )
+        candidates = None
+        if self._configuration.cache_enabled and self._candidate_relations:
+            if (
+                type(self._candidate_relations) is CandidateRelationService
+                and self._candidate_relations.historical_relations_service is self._historical_relations
+            ):
+                candidates = self._candidate_relations.for_work(workno, historical_relations=historical)
+            else:
+                candidates = self._candidate_relations.for_work(workno)
         return LookupResult(
             work=work,
-            formatted_name=self._configuration.naming.format(work),
-            translation=self._translation_relations.analyze(workno, info),
+            formatted_name=formatted_name,
+            translation=translation,
             freshness=freshness,
             source=source,
             fetched_at=fetched,
             core_source=core_source,
             metadata_source=metadata_source,
             translation_attribution=translation_attribution,
-            historical_relations=self._historical_relations.for_work(workno) if self._configuration.cache_enabled and self._historical_relations else HistoricalRelations(),
-            candidate_relations=self._candidate_relations.for_work(workno) if self._configuration.cache_enabled and self._candidate_relations else None,
+            historical_relations=historical,
+            candidate_relations=candidates,
             manual_reviews=(self._manual_review_service.reviews_for_work(workno) if self._manual_review_service else ()),
         )

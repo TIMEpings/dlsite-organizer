@@ -6,7 +6,7 @@ import unicodedata
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Protocol, cast, runtime_checkable
 
 from dlsite_organizer import __version__
 from dlsite_organizer.domain.candidate import (
@@ -22,11 +22,24 @@ from dlsite_organizer.domain.candidate import (
 )
 from dlsite_organizer.domain.manual_review import CandidateReviewOutcome, ManualReviewEvent
 from dlsite_organizer.domain.work_code import WorkCodeError, normalize_workno
-from dlsite_organizer.services.historical_relations import HistoricalRelationService
+from dlsite_organizer.services.historical_relations import (
+    HistoricalRelations,
+    HistoricalRelationService,
+)
 
 
 class KnownWorkRepository(Protocol):
     def list_known_work_summaries(self) -> tuple[KnownWorkSnapshot, ...]: ...
+
+
+@runtime_checkable
+class RelationCandidateRepository(Protocol):
+    def list_relation_candidate_summaries(self, workno: str) -> tuple[KnownWorkSnapshot, ...]: ...
+
+
+@runtime_checkable
+class CurrentRelationRepository(Protocol):
+    def list_current_relation_pairs_for_work(self, workno: str) -> tuple[tuple[str, str], ...]: ...
 
 
 class ManualReviewLookup(Protocol):
@@ -134,7 +147,13 @@ class CandidateRelationService:
             application_version=__version__,
         )
 
-    def for_work(self, workno: str) -> CandidateSearchResult:
+    @property
+    def historical_relations_service(self) -> HistoricalRelationService | None:
+        return self._historical_relations
+
+    def for_work(
+        self, workno: str, *, historical_relations: HistoricalRelations | None = None
+    ) -> CandidateSearchResult:
         evaluated_at = self._now()
         policy_provenance = self._policy_provenance()
         try:
@@ -146,7 +165,12 @@ class CandidateRelationService:
                 evaluated_at=evaluated_at,
                 policy_provenance=policy_provenance,
             )
-        snapshots = self._repository.list_known_work_summaries()
+        snapshots = (
+            self._repository.list_relation_candidate_summaries(normalized)
+            if type(self._policy) is CandidateSearchPolicy
+            and isinstance(self._repository, RelationCandidateRepository)
+            else self._repository.list_known_work_summaries()
+        )
         source = next((item for item in snapshots if item.workno == normalized), None)
         if source is None or _maker_identity(source) is None:
             return CandidateSearchResult(
@@ -157,7 +181,7 @@ class CandidateRelationService:
                 policy_provenance=policy_provenance,
             )
 
-        excluded = self._confirmed_pairs(normalized)
+        excluded = self._confirmed_pairs(normalized, historical_relations)
         maker_count = sum(1 for item in snapshots if _same_maker(source, item))
         day_count = sum(
             1
@@ -220,14 +244,22 @@ class CandidateRelationService:
             policy_provenance=policy_provenance,
         )
 
-    def _confirmed_pairs(self, source_workno: str) -> set[tuple[str, str]]:
+    def _confirmed_pairs(
+        self, source_workno: str, historical: HistoricalRelations | None = None
+    ) -> set[tuple[str, str]]:
         pairs: set[tuple[str, str]] = set()
         if self._historical_relations is not None:
-            historical = self._historical_relations.for_work(source_workno)
+            if historical is None:
+                historical = self._historical_relations.for_work(source_workno)
             pairs.update(
                 _canonical_pair(item.subject_workno, item.target_workno)
                 for item in (*historical.outgoing, *historical.incoming)
             )
+        if isinstance(self._repository, CurrentRelationRepository):
+            with suppress(Exception):
+                current = self._repository.list_current_relation_pairs_for_work(source_workno)
+                pairs.update(_canonical_pair(left, right) for left, right in current)
+            return pairs
         current_pairs = getattr(self._repository, "list_current_relation_pairs", None)
         if callable(current_pairs):
             with suppress(Exception):

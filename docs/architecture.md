@@ -113,7 +113,7 @@ to both current cache and historical observations, so old rows load as not captu
 [historical bonus evidence](bonus-evidence-history.md) and the [DLsite metadata source contract](dlsite-data-contract.md).
 Lookup results use the cache for current metadata and preserve provider provenance separately from
 delivery freshness. Translation relations are reconstructed from the normalized cached
-`translation_info`; no relation-history query or inference is implemented.
+`translation_info`; historical explicit evidence is obtained separately as described below.
 
 Settings use `tomllib` and validated Pydantic models. `SettingsPage` edits the same `AppSettings`
 schema that TOML loading uses; it never writes TOML directly. `SettingsService` validates a complete
@@ -655,3 +655,31 @@ LookupService uses MetadataStore for a current cache and append-only observation
 # Historical translation evidence
 
 `metadata_observations` remains the source of truth for past DLsite responses. `HistoricalRelationService` reuses `TranslationRelationService` to derive explicit translation edges, then aggregates them by `(subject, relation_type, target)` with first/last observation times, count, and structured provenance. Queries return outgoing and incoming edges independently, so reverse relations remain visible offline and without target metadata.
+
+Single-work Lookup loads a targeted relation context through `MetadataStore`:
+`list_relation_observations(workno)` returns detached, minimal historical evidence,
+and `list_current_relation_pairs_for_work(workno)` returns current confirmed exclusions.
+Both select the subject's rows and potential incoming references from safely decoded JSON;
+the existing translation evaluator remains the authority for valid explicit edges.
+Malformed/absent payloads cannot establish a relation. Historical evidence is independent
+of the current cache, so changed current metadata cannot erase confirmed history.
+
+`list_relation_candidate_summaries(workno)` restricts default same-maker-same-date v1
+discovery to the source's maker context, retaining all dates for maker-count evidence.
+Current cache snapshots retain precedence over historical snapshots; otherwise the
+newest valid observation wins, with observation ID breaking time ties. Maker IDs take
+precedence over names; a stateless SQLite function applies the policy's existing
+NFKC/strip normalization for name-only identities. The service still applies eligibility,
+confirmed/manual exclusions, evidence construction, deterministic ordering and the
+existing presentation limit after counting all candidates. Custom policies and legacy
+repository implementations retain their unrestricted contracts. Review Queue continues
+to use the full-universe APIs and its existing pair generation/pagination.
+
+Lookup reuses its historical result for candidate exclusion only when both services
+share the same historical authority. This value lives for one request; no global derived
+relation cache, session-bound object, or query object escapes the repository boundary.
+Freshness/TTL, live refresh and stale fallback remain independent of relation retrieval.
+Existing repository read failures remain logged with their established empty-result
+contracts; unhandled service errors still propagate. Incoming JSON and unindexed maker
+predicates still require database scans, but unrelated library rows are not materialized
+as ORM/domain objects for the common single-work Lookup path. Schema/indexes are unchanged.

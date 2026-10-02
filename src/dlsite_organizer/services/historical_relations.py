@@ -6,10 +6,10 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from dlsite_organizer.domain.relation import Confidence, RelationType, WorkRelation
-from dlsite_organizer.persistence.metadata_store import MetadataObservation, MetadataStore
+from dlsite_organizer.persistence.metadata_store import MetadataObservation, RelationObservation
 from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
 from dlsite_organizer.domain.work_code import normalize_workno
 from dlsite_organizer.services.translation_relations import TranslationRelationService
@@ -52,6 +52,11 @@ class _ObservationStore(Protocol):
     def list_all_observations(self) -> tuple[MetadataObservation, ...]: ...
 
 
+@runtime_checkable
+class _RelationObservationStore(Protocol):
+    def list_relation_observations(self, workno: str) -> tuple[RelationObservation, ...]: ...
+
+
 class HistoricalRelationService:
     """Interpret persisted explicit translation payloads; never performs I/O."""
 
@@ -64,7 +69,12 @@ class HistoricalRelationService:
         outgoing: list[HistoricalRelation] = []
         incoming: list[HistoricalRelation] = []
         aggregates: dict[tuple[str, RelationType, str], list[RelationEvidenceRecord]] = {}
-        for observation in self._store.list_all_observations():
+        observations = (
+            self._store.list_relation_observations(workno)
+            if isinstance(self._store, _RelationObservationStore)
+            else self._store.list_all_observations()
+        )
+        for observation in observations:
             for relation in self._relations_for_observation(observation):
                 key = (relation.source_workno, relation.relation_type, relation.target_workno)
                 field = next((e.attributes.get("field", "translation_info") for e in relation.evidence), "translation_info")
@@ -89,7 +99,7 @@ class HistoricalRelationService:
                 pairs.add((min(relation.source_workno, relation.target_workno), max(relation.source_workno, relation.target_workno)))
         return pairs
 
-    def _relations_for_observation(self, observation: MetadataObservation) -> tuple[WorkRelation, ...]:
+    def _relations_for_observation(self, observation: MetadataObservation | RelationObservation) -> tuple[WorkRelation, ...]:
         if not observation.translation_json:
             return ()
         try:
