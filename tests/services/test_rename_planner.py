@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from dlsite_organizer.domain.organizer import RenamePlanStatus
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.services.naming import NamingService
@@ -45,6 +47,131 @@ def test_planner_marks_existing_target_as_conflict(tmp_path: Path) -> None:
     assert plan.status is RenamePlanStatus.CONFLICT
     assert plan.target_path == target
     assert plan.error is not None
+
+
+def test_planner_marks_existing_file_target_as_conflict(tmp_path: Path) -> None:
+    source = tmp_path / "old RJ01609020"
+    target = tmp_path / "[RJ01609020][Circle Name]Work Title"
+    source.mkdir()
+    target.write_text("occupied", encoding="utf-8")
+
+    plan = RenamePlanner().plan(tmp_path, source, "RJ01609020", make_work())
+
+    assert plan.status is RenamePlanStatus.CONFLICT
+    assert plan.target_path == target
+    assert plan.error == "目标目录已存在，未生成可执行的重命名计划。"
+
+
+@pytest.mark.parametrize("existing_name", ["Title", "title", "TITLE"])
+def test_planner_matches_windows_case_insensitive_sibling_aliases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_name: str,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    existing_alias = tmp_path / existing_name
+    original_iterdir = Path.iterdir
+
+    def fake_iterdir(path: Path):
+        if path == tmp_path:
+            return iter((source, existing_alias))
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+    plan = RenamePlanner().plan(
+        tmp_path,
+        source,
+        "RJ01609020",
+        make_work(),
+        formatted_name="tItLe",
+    )
+
+    assert plan.status is RenamePlanStatus.CONFLICT
+    assert plan.error == "目标目录已存在，未生成可执行的重命名计划。"
+
+
+def test_planner_treats_link_like_sibling_as_occupied_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    link_like = tmp_path / "target"
+    link_referent = tmp_path / "other-target"
+    original_iterdir = Path.iterdir
+    original_resolve = Path.resolve
+
+    def fake_iterdir(path: Path):
+        if path == tmp_path:
+            return iter((source, link_like))
+        return original_iterdir(path)
+
+    def fake_resolve(path: Path, strict: bool = False) -> Path:
+        if path == link_like:
+            return link_referent
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    plan = RenamePlanner().plan(
+        tmp_path,
+        source,
+        "RJ01609020",
+        make_work(),
+        formatted_name="target",
+    )
+
+    assert plan.status is RenamePlanStatus.CONFLICT
+    assert plan.error == "目标目录已存在，未生成可执行的重命名计划。"
+
+
+def test_planner_does_not_schedule_rename_into_another_batch_source(tmp_path: Path) -> None:
+    occupied_source = tmp_path / "A"
+    moving_source = tmp_path / "B"
+    occupied_source.mkdir()
+    moving_source.mkdir()
+    planner = RenamePlanner()
+    work_a = make_work("RJ01609020", "A title")
+    work_b = make_work("RJ01636949", "B title")
+
+    first = planner.plan(
+        tmp_path, occupied_source, work_a.workno, work_a, formatted_name="renamed A"
+    )
+    second = planner.plan(
+        tmp_path, moving_source, work_b.workno, work_b, formatted_name="A"
+    )
+    plans = planner.finalize((first, second))
+
+    assert [plan.status for plan in plans] == [
+        RenamePlanStatus.READY,
+        RenamePlanStatus.CONFLICT,
+    ]
+    assert plans[1].error == "目标目录已存在，未生成可执行的重命名计划。"
+
+
+def test_planner_reports_sibling_enumeration_failure_as_conflict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+
+    def fail_iterdir(_path: Path):
+        raise PermissionError("fixture access denied")
+
+    monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+    plan = RenamePlanner().plan(
+        tmp_path,
+        source,
+        "RJ01609020",
+        make_work(),
+        formatted_name="target",
+    )
+
+    assert plan.status is RenamePlanStatus.CONFLICT
+    assert plan.warnings == ("无法确认目标目录是否已存在，因此不会标记为 READY。",)
+    assert plan.error == "无法检查目标目录是否已存在。"
 
 
 def test_planner_marks_duplicate_planned_targets_as_conflict(tmp_path: Path) -> None:
