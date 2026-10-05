@@ -116,6 +116,7 @@ class RenameTransactionSummary:
     created_at: datetime
     status: TransactionStatus
     undo_state: UndoTransactionState | None = None
+    operation_count: int = 0
 
     @property
     def display_status(self) -> TransactionStatus:

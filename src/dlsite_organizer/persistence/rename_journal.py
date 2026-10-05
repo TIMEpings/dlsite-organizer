@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from dlsite_organizer.domain.rename_execution import (
@@ -321,7 +321,26 @@ class TransactionJournal:
                     .limit(limit)
                     .offset(offset)
                 ).all()
-                return tuple(_to_transaction_summary(record) for record in records)
+                if not records:
+                    return ()
+                count_rows = session.execute(
+                    select(
+                        RenameOperationRecord.transaction_id,
+                        func.count(RenameOperationRecord.id),
+                    )
+                    .where(
+                        RenameOperationRecord.transaction_id.in_([record.id for record in records])
+                    )
+                    .group_by(RenameOperationRecord.transaction_id)
+                ).all()
+                counts = {
+                    transaction_id: int(operation_count)
+                    for transaction_id, operation_count in count_rows
+                }
+                return tuple(
+                    _to_transaction_summary(record, counts.get(record.id, 0))
+                    for record in records
+                )
         except ValueError:
             raise
         except Exception as exc:
@@ -661,13 +680,17 @@ def _to_transaction(
     )
 
 
-def _to_transaction_summary(record: RenameTransactionRecord) -> RenameTransactionSummary:
+def _to_transaction_summary(
+    record: RenameTransactionRecord,
+    operation_count: int,
+) -> RenameTransactionSummary:
     return RenameTransactionSummary(
         transaction_id=record.id,
         root=Path(record.root),
         created_at=_as_utc(record.created_at),
         status=TransactionStatus(record.status),
         undo_state=UndoTransactionState(record.undo_state) if record.undo_state else None,
+        operation_count=operation_count,
     )
 
 
