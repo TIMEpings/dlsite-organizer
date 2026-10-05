@@ -22,6 +22,9 @@ transaction blocks ordinary reconciliation, even if operation snapshots include
 success. Undo acts on the most recent transaction with remaining undoable ops.
 Result counts/snapshots are cumulative across resumed partial Undo attempts;
 FAILED must never trigger reconciliation merely because earlier successes remain.
+Capture successful sequence numbers from the existing pre-attempt journal snapshot;
+only newly successful result operations cause identity reversal/refresh. This also
+covers a resumed UNDO_PARTIAL attempt failing before its first filesystem change.
 
 ## Presentation transition
 

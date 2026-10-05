@@ -45,7 +45,7 @@ from dlsite_organizer.domain.organizer import (
     RenamePlan,
     RenamePlanStatus,
 )
-from dlsite_organizer.domain.rename_execution import RenameExecutionResult, UndoResult
+from dlsite_organizer.domain.rename_execution import RenameExecutionResult, UndoResult, UndoStatus
 from dlsite_organizer.services.drop_input import (
     DropInputError,
     DropInputService,
@@ -576,6 +576,7 @@ class OrganizerPage(QWidget):
         self._compact_layout = False
         self._journal_unavailable = False
         self._undo_pending = False
+        self._undo_successes_before_attempt: frozenset[int] = frozenset()
         self._journal_error_message = ""
         self._operation_message = ""
         self._resize_table_columns()
@@ -773,12 +774,20 @@ class OrganizerPage(QWidget):
             if unmatched:
                 logger.warning("Completed rename targets absent from refreshed preview: %s",
                                sorted(unmatched))
-            result = self.state.last_execution_result
-            count = result.success_count if result is not None else 0
-            message = f"已完成 {count} 项，预览已刷新。"
-            if result is not None and result.status.name in {"PARTIAL", "FAILED"}:
-                message += (f" 本次失败 {result.failed_count} 项，"
-                            f"未执行 {result.not_executed_count} 项。")
+            if self.state.reconciliation_origin is BusyOperation.UNDO:
+                undone = self.state.reconciliation_undo_result
+                assert undone is not None
+                message = f"撤销已恢复 {undone.success_count} 项，预览已刷新。"
+                if undone.status.name == "UNDO_PARTIAL":
+                    message += (f" 失败 {undone.failed_count} 项，"
+                                f"剩余可撤销 {undone.pending_count} 项。")
+            else:
+                result = self.state.last_execution_result
+                count = result.success_count if result is not None else 0
+                message = f"已完成 {count} 项，预览已刷新。"
+                if result is not None and result.status.name in {"PARTIAL", "FAILED"}:
+                    message += (f" 本次失败 {result.failed_count} 项，"
+                                f"未执行 {result.not_executed_count} 项。")
             self._set_feedback(message, "success")
             self._set_operation_progress("")
             self._update_summary(preview)
@@ -943,14 +952,9 @@ class OrganizerPage(QWidget):
     def _show_undo_result(self, value: object) -> None:
         result = cast(UndoResult, value)
         self.state.last_undo_result = result
-        # Undo retains its existing invalidation contract. A failed forward
-        # refresh must not describe the now-undone transaction or schedule work.
-        self.state.reconciliation_root = None
-        self.state.reconciliation_pending = False
-        self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         if result.status.name == "UNDONE":
             self._set_feedback(
-                f"撤销完成：恢复 {result.success_count} 个目录。当前预览已失效，请重新扫描。",
+                f"撤销完成：恢复 {result.success_count} 个目录。",
                 "success",
             )
         elif result.status.name == "UNDO_PARTIAL":
@@ -963,6 +967,36 @@ class OrganizerPage(QWidget):
         else:
             self._show_error(result.error or "撤销未执行。")
         self._refresh_recent_transaction()
+
+        previously_undone = self._undo_successes_before_attempt
+        self._undo_successes_before_attempt = frozenset()
+        self._reconcile_undo_result(result, previously_undone)
+
+    def _reconcile_undo_result(self, result: UndoResult, previously_undone: frozenset[int]) -> None:
+        relevant = self.state.undo_affects_preview(result)
+        if (relevant and not self._journal_unavailable
+                and self.state.unresolved_transaction_id is None
+                and self.state.prepare_undo_reconciliation(
+                    result, previously_undone=previously_undone)):
+            if self.state.preview is not None:
+                self._update_summary(self.state.preview)
+            # The old preview cannot authorize mutation while either worker finishes.
+            if self.state.reconciliation_pending:
+                self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
+                self._set_feedback(
+                    "撤销完成，正在刷新预览…" if result.status.name == "UNDONE"
+                    else "撤销未全部完成，正在刷新预览…", "success")
+                if self._thread is None:
+                    self.retry_refresh()
+        elif relevant and (result.status.name == "RECOVERY_REQUIRED"
+                           or (result.transaction is not None and result.transaction.unresolved)
+                           or (result.status.name in {"UNDONE", "UNDO_PARTIAL"}
+                               and any(op.undo_status is UndoStatus.SUCCESS
+                                       and op.sequence not in previously_undone
+                                       for op in result.operations))):
+            self.state.reconciliation_root = None
+            self.state.reconciliation_pending = False
+            self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
 
     @Slot()
     def execute_rename(self) -> None:
@@ -1029,6 +1063,10 @@ class OrganizerPage(QWidget):
         if dialog.exec() != QMessageBox.StandardButton.Yes:
             return
         service = self._undo_service
+        # Undo snapshots/counts include successes from earlier partial attempts.
+        # Only new SUCCESS facts from this attempt changed the filesystem now.
+        self._undo_successes_before_attempt = frozenset(
+            op.sequence for op in transaction.operations if op.undo_status is UndoStatus.SUCCESS)
         self._start_action(
             lambda callback: service.undo(
                 transaction.transaction_id,
@@ -1091,6 +1129,7 @@ class OrganizerPage(QWidget):
     @Slot(str)
     def _show_action_error(self, message: str) -> None:
         """Treat an escaped action exception as a stale preview as well."""
+        self._undo_successes_before_attempt = frozenset()
         self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         self._show_error(message)
         self._refresh_recent_transaction()
@@ -1663,15 +1702,29 @@ class OrganizerPage(QWidget):
             )
         elif (self.state.reconciliation_root is not None and self.is_busy()
               and self.state.scan_mode is ScanMode.RECONCILE):
-            result = self.state.last_execution_result
+            undo = self.state.reconciliation_origin is BusyOperation.UNDO
+            result = (self.state.reconciliation_undo_result if undo
+                      else self.state.last_execution_result)
             count = result.success_count if result is not None else 0
+            title = f"重命名完成 {count} 项，正在刷新预览…"
+            if undo:
+                title = ("撤销完成，正在刷新预览…" if result is not None
+                         and result.status.name == "UNDONE"
+                         else "撤销未全部完成，正在刷新预览…")
             self.status_banner.show_status(
-                BannerState.INFO, f"重命名完成 {count} 项，正在刷新预览…",
-                "当前列表为执行前的预览，仅供等待刷新；执行勾选与重命名暂不可用。")
+                BannerState.INFO, title,
+                ("当前列表为撤销前的预览" if undo else "当前列表为执行前的预览")
+                + "，仅供等待刷新；执行勾选与重命名暂不可用。")
         elif self.state.stale:
             if self.state.reconciliation_root is not None:
+                title = "重命名已完成，但预览刷新失败。"
+                if self.state.reconciliation_origin is BusyOperation.UNDO:
+                    undone = self.state.reconciliation_undo_result
+                    title = ("撤销未全部完成，且预览刷新失败。" if undone is not None
+                             and undone.status.name == "UNDO_PARTIAL"
+                             else "撤销已完成，但预览刷新失败。")
                 self.status_banner.show_status(
-                    BannerState.STALE, "重命名已完成，但预览刷新失败。",
+                    BannerState.STALE, title,
                     "当前列表可能已过期，请重新刷新。行仍可检查，但不能勾选或执行。")
                 return
             if self.state.stale_reason is PreviewStaleReason.SETTINGS_CHANGED:

@@ -15,6 +15,7 @@ from dlsite_organizer.domain.rename_execution import (
     RenameExecutionResult,
     TransactionStatus,
     UndoResult,
+    UndoStatus,
 )
 from dlsite_organizer.services.drop_input import normalized_path_identity
 from dlsite_organizer.services.organizer import OrganizerPreview, WorkLookup
@@ -72,6 +73,8 @@ class OrganizerState:
     completed_targets: set[str] = field(default_factory=set, init=False)
     reconciliation_root: Path | None = field(default=None, init=False)
     reconciliation_pending: bool = field(default=False, init=False)
+    reconciliation_origin: BusyOperation | None = field(default=None, init=False)
+    reconciliation_undo_result: UndoResult | None = field(default=None, init=False)
 
     def completed(self, row: int) -> bool:
         return (self.plans[row].status is RenamePlanStatus.UNCHANGED
@@ -100,6 +103,44 @@ class OrganizerState:
                                       for target in successful.values())
         self.reconciliation_root = root
         self.reconciliation_pending = True
+        self.reconciliation_origin = BusyOperation.EXECUTE
+        self.reconciliation_undo_result = None
+        return True
+
+    def undo_affects_preview(self, result: UndoResult) -> bool:
+        """Compare authoritative transaction root with the committed review root."""
+        root = self.committed_preview_root
+        return (root is not None and result.transaction is not None
+                and normalized_path_identity(root)
+                == normalized_path_identity(result.transaction.root))
+
+    def prepare_undo_reconciliation(
+        self, result: UndoResult, *, previously_undone: frozenset[int] = frozenset(),
+    ) -> bool:
+        """Reverse confirmed scope identities; never infer mutation from intent/counts."""
+        transaction = result.transaction
+        root = self.committed_preview_root
+        if (transaction is None or root is None or not self.undo_affects_preview(result)
+                or transaction.unresolved
+                or result.status not in {TransactionStatus.UNDONE, TransactionStatus.UNDO_PARTIAL}
+                or transaction.status is not result.status
+                or transaction.operations != result.operations):
+            return False
+        root_key = normalized_path_identity(root)
+        successful = {
+            _source_identity(root, root_key, op.target_path): op.source_path
+            for op in result.operations
+            if op.status is ExecutionStatus.SUCCESS and op.undo_status is UndoStatus.SUCCESS
+            and op.sequence not in previously_undone
+        }
+        if not successful:
+            return False
+        self.review_scope = remap_review_scope(self.review_scope, root, root_key, successful)
+        self.completed_targets.difference_update(successful)
+        self.reconciliation_origin = BusyOperation.UNDO
+        self.reconciliation_undo_result = result
+        self.reconciliation_root = root if self.review_scope else None
+        self.reconciliation_pending = bool(self.review_scope)
         return True
 
     @property
@@ -261,6 +302,8 @@ class OrganizerState:
         self.completed_targets.clear()
         self.reconciliation_root = None
         self.reconciliation_pending = False
+        self.reconciliation_origin = None
+        self.reconciliation_undo_result = None
 
 
 class _PathItem(Protocol):

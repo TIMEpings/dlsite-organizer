@@ -453,10 +453,11 @@ def test_organizer_page_shows_recent_transaction_and_disables_undo_after_success
 
     undone = undo_service.undo(execution.transaction_id, confirmed=True)
     page._show_undo_result(undone)
+    _wait_for_scan_idle(qapp, page)
 
     assert undone.status is TransactionStatus.UNDONE
-    assert page.preview_stale
-    assert page.preview_stale_reason is PreviewStaleReason.FILESYSTEM_CHANGED
+    assert not page.preview_stale
+    assert not page.state.completed_targets
     assert not page.undo_button.isEnabled()
     assert (tmp_path / 'old RJ01609020').exists()
     page.close()

@@ -505,7 +505,7 @@ def test_replanning_preserves_nonplanning_status_and_fails_closed_on_occupancy(q
     assert "无法检查" in (replanned.plans[0].error or "")
 
 
-def test_undo_after_failed_forward_refresh_preserves_existing_invalidation(qapp, review):
+def test_undo_after_failed_forward_refresh_retries_reversed_scope(qapp, review):
     page, service, executor, journal, root, _lookup = review
     result = executor.execute(root, page.selected_ready_plans()[:1], confirmed=True)
     service.fail = True
@@ -516,8 +516,14 @@ def test_undo_after_failed_forward_refresh_preserves_existing_invalidation(qapp,
     undone = UndoService(journal).undo(result.transaction_id, confirmed=True)
     assert undone.status is TransactionStatus.UNDONE
     page._show_undo_result(undone)
-    assert page.state.stale and page.state.reconciliation_root is None
-    assert not page.state.reconciliation_pending and page.retry_refresh_button.isHidden()
-    assert page.state.request_id == request and not page.is_busy()
+    _wait_for_scan_idle(qapp, page)
+    assert page.state.stale and page.state.reconciliation_root == root
+    assert not page.state.reconciliation_pending and not page.retry_refresh_button.isHidden()
+    assert page.state.request_id == request + 1 and not page.is_busy()
     assert page.state.last_execution_result is result and page.state.last_undo_result is undone
     assert result.operations[0].source_path.is_dir()
+    assert not page.state.completed_targets
+    service.fail = False
+    page.retry_refresh()
+    _wait_for_scan_idle(qapp, page)
+    assert not page.state.stale and page.state.reconciliation_root is None
