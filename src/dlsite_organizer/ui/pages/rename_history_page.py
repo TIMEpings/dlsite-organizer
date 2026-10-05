@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -116,6 +117,8 @@ class RenameHistoryPage(QWidget):
         self.transaction_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.transaction_list.setUniformItemSizes(True)
         self.transaction_list.setSpacing(3)
+        self.transaction_list.setItemDelegate(_HistoryMasterDelegate(self.transaction_list))
+        self.transaction_list.setStyleSheet("QListWidget { border: 0; background: transparent; }")
         self.transaction_stack = QStackedWidget()
         self.transaction_stack.setObjectName("renameTransactionStack")
         self.master_empty_state = QWidget()
@@ -173,7 +176,7 @@ class RenameHistoryPage(QWidget):
         history_layout.addWidget(self.detail_heading)
 
         self.transaction_timestamp = QLabel("")
-        self.transaction_timestamp.setObjectName("pageTitle")
+        self.transaction_timestamp.setStyleSheet("font-size: 20px; font-weight: 600;")
         self.transaction_timestamp.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -196,11 +199,7 @@ class RenameHistoryPage(QWidget):
         history_layout.addWidget(_section_divider())
         journal_heading = _section_title("记录事实")
         history_layout.addWidget(journal_heading)
-        self.journal_facts_label = QLabel("")
-        self.journal_facts_label.setWordWrap(True)
-        self.journal_facts_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        self.journal_facts_label = _FactGrid()
         history_layout.addWidget(self.journal_facts_label)
         self.root_path_value, self.copy_root_path_button = self._add_path_detail_row(
             history_layout,
@@ -221,10 +220,12 @@ class RenameHistoryPage(QWidget):
         observation_layout.setSpacing(7)
         observation_header = QHBoxLayout()
         self.observation_heading = _section_title("当前文件系统")
-        observation_header.addWidget(self.observation_heading, 1)
+        observation_header.addWidget(self.observation_heading)
         self.observe_button = QPushButton("重新观察")
+        self.observe_button.setStyleSheet("QPushButton { min-height: 24px; padding: 2px 8px; }")
         self.observe_button.setAccessibleName("重新观察当前文件系统路径")
         observation_header.addWidget(self.observe_button)
+        observation_header.addStretch(1)
         observation_layout.addLayout(observation_header)
         self.observation_updated_label = QLabel("")
         self.observation_updated_label.setObjectName("pageDescription")
@@ -233,11 +234,10 @@ class RenameHistoryPage(QWidget):
         self.observation_summary.setWordWrap(True)
         observation_layout.addWidget(self.observation_summary)
         self.observation_caveat = QLabel(
-            "这里只检查 journal 记录的路径现在是否存在及其类型；路径存在不证明它仍指向原目录。"
+            "这里只检查记录的路径现在是否存在及其类型；路径存在不证明它仍指向原目录。"
         )
         self.observation_caveat.setObjectName("pageDescription")
         self.observation_caveat.setWordWrap(True)
-        observation_layout.addWidget(self.observation_caveat)
         self.observation_status_banner = StatusBanner(self)
         observation_layout.addWidget(self.observation_status_banner)
         self.observations_table = QTableWidget(0, 3)
@@ -246,6 +246,9 @@ class RenameHistoryPage(QWidget):
         self.observations_table.setHorizontalHeaderLabels(["操作", "源路徑现在", "目标路径现在"])
         self._configure_observations_table(self.observations_table)
         observation_layout.addWidget(self.observations_table)
+        self.single_observation = _FactGrid()
+        observation_layout.addWidget(self.single_observation)
+        observation_layout.addWidget(self.observation_caveat)
         history_layout.addWidget(self.observation_section)
         self.observation_section.hide()
 
@@ -282,7 +285,12 @@ class RenameHistoryPage(QWidget):
         technical_layout.addWidget(self.technical_operation_label)
         self.technical_section.hide()
 
-        self.technical_toggle = QToolButton()
+        self.technical_toggle = _DisclosureButton()
+        self.technical_toggle.setStyleSheet(
+            f"QToolButton {{ background: transparent; color: {LIGHT_COLORS.text_secondary}; "
+            "border: 0; padding: 4px 2px; }"
+            f"QToolButton:focus {{ border-bottom: 1px solid {LIGHT_COLORS.focus}; }}"
+        )
         self.technical_toggle.setObjectName("renameHistoryTechnicalToggle")
         self.technical_toggle.setText("技术详情")
         self.technical_toggle.setAccessibleName("技术详情")
@@ -298,10 +306,8 @@ class RenameHistoryPage(QWidget):
         history_layout.addWidget(self.operations_heading)
         self.operations_table = QTableWidget(0, 5)
         self.operations_table.setObjectName("renameHistoryOperations")
-        self.operations_table.setAccessibleName("重命名操作的 journal 记录")
-        self.operations_table.setHorizontalHeaderLabels(
-            ["#", "重命名记录", "撤销记录", "来源名称", "目标名称"]
-        )
+        self.operations_table.setAccessibleName("重命名操作历史，重命名与撤销结果分别显示")
+        self.operations_table.setHorizontalHeaderLabels(["", "重命名", "撤销", "来源", "→ 目标"])
         self._configure_operations_table(self.operations_table)
         history_layout.addWidget(self.operations_table)
 
@@ -309,11 +315,11 @@ class RenameHistoryPage(QWidget):
         operation_detail_layout = QVBoxLayout(self.operation_detail_section)
         operation_detail_layout.setContentsMargins(0, 0, 0, 0)
         operation_detail_layout.setSpacing(8)
-        operation_detail_layout.addWidget(_section_title("所选操作记录"))
+        operation_detail_layout.addWidget(_section_title("所选操作"))
         self.operation_sequence_label = QLabel("")
+        self.operation_sequence_label.hide()
         operation_detail_layout.addWidget(self.operation_sequence_label)
-        self.operation_status_label = QLabel("")
-        self.operation_status_label.setWordWrap(True)
+        self.operation_status_label = _FactGrid()
         operation_detail_layout.addWidget(self.operation_status_label)
 
         self.source_path_value, self.copy_source_path_button = self._add_path_detail_row(
@@ -372,16 +378,25 @@ class RenameHistoryPage(QWidget):
         label_text: str,
         copy_text: str,
     ) -> tuple[_ElidedPathLabel, QPushButton]:
+        group = QWidget()
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(0, 0, 0, 0)
+        group_layout.setSpacing(4)
         row = QHBoxLayout()
         label = QLabel(label_text)
+        label.setObjectName("pageDescription")
+        group_layout.addWidget(label)
         field = _ElidedPathLabel()
         button = QPushButton(copy_text)
+        button.setStyleSheet("QPushButton { min-height: 24px; padding: 2px 8px; }")
         button.setAccessibleName(copy_text)
         button.clicked.connect(lambda: QApplication.clipboard().setText(field.full_path))
-        row.addWidget(label)
-        row.addWidget(field, 1)
+        field.setMaximumWidth(560)
+        row.addWidget(field)
         row.addWidget(button)
-        parent_layout.addLayout(row)
+        row.addStretch(1)
+        group_layout.addLayout(row)
+        parent_layout.addWidget(group)
         return field, button
 
     @staticmethod
@@ -389,17 +404,19 @@ class RenameHistoryPage(QWidget):
         parent_layout: QVBoxLayout,
         label_text: str,
     ) -> QPlainTextEdit:
-        row = QVBoxLayout()
+        group = QWidget()
+        row = QVBoxLayout(group)
+        row.setContentsMargins(0, 0, 0, 0)
         label = QLabel(label_text)
         value = QPlainTextEdit()
         value.setReadOnly(True)
         value.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         value.setMaximumHeight(88)
         value.setMinimumHeight(42)
-        value.hide()
+        group.hide()
         row.addWidget(label)
         row.addWidget(value)
-        parent_layout.addLayout(row)
+        parent_layout.addWidget(group)
         return value
 
     @staticmethod
@@ -409,7 +426,9 @@ class RenameHistoryPage(QWidget):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setWordWrap(False)
         table.setSortingEnabled(False)
-        table.setAlternatingRowColors(True)
+        table.setAlternatingRowColors(False)
+        table.setShowGrid(False)
+        table.setFrameShape(QFrame.Shape.NoFrame)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.setMinimumHeight(90)
@@ -425,7 +444,7 @@ class RenameHistoryPage(QWidget):
             (
                 1,
                 (
-                    "重命名记录",
+                    "重命名",
                     "成功",
                     "失败",
                     "预检失败",
@@ -434,7 +453,7 @@ class RenameHistoryPage(QWidget):
                     "需检查",
                 ),
             ),
-            (2, ("撤销记录", "未撤销", "已撤销", "部分撤销", "失败", "冲突")),
+            (2, ("撤销", "不适用", "未撤销", "已撤销", "部分撤销", "失败", "冲突")),
         ):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             status_width = max(metrics.horizontalAdvance(label) for label in labels) + 24
@@ -449,7 +468,9 @@ class RenameHistoryPage(QWidget):
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setWordWrap(False)
         table.setSortingEnabled(False)
-        table.setAlternatingRowColors(True)
+        table.setAlternatingRowColors(False)
+        table.setShowGrid(False)
+        table.setFrameShape(QFrame.Shape.NoFrame)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.setMinimumHeight(76)
@@ -650,6 +671,18 @@ class RenameHistoryPage(QWidget):
             else:
                 target_present += 1
         self._resize_observations_table()
+        single = len(self._observations) == 1
+        self.observations_table.setVisible(not single)
+        self.single_observation.setVisible(single)
+        self.observation_summary.setVisible(not single)
+        if single:
+            observation = self._observations[0]
+            self.single_observation.set_facts(
+                [
+                    ("源路径", _observation_text(observation.source)),
+                    ("目标路径", _observation_text(observation.target)),
+                ]
+            )
 
         observed_at = datetime.now().astimezone()
         self.observation_updated_label.setText(f"最近观察 · {_format_local_wall_time(observed_at)}")
@@ -658,8 +691,16 @@ class RenameHistoryPage(QWidget):
         )
         if transaction.operations:
             self.observation_summary.setText(
-                f"{len(transaction.operations)} 个记录目标：{target_present} 个当前存在 · "
-                f"{target_absent} 个不存在 · {target_unknown} 个无法确认"
+                f"{len(transaction.operations)} 个记录目标 · "
+                + " · ".join(
+                    f"{count} 个{label}"
+                    for count, label in (
+                        (target_present, "当前存在"),
+                        (target_absent, "不存在"),
+                        (target_unknown, "无法确认"),
+                    )
+                    if count
+                )
             )
         else:
             self.observation_summary.setText("此事务没有操作路径可观察。")
@@ -708,12 +749,12 @@ class RenameHistoryPage(QWidget):
             f"事务创建时间：{_format_datetime(transaction.created_at)}"
         )
         status = _transaction_status_text(transaction.display_status)
-        self.transaction_summary.setText(f"{len(transaction.operations)} 项 · 事务状态：{status}")
+        self.transaction_summary.setText(f"{len(transaction.operations)} 项 · {status}")
         self._render_journal_facts(transaction)
         self.root_path_value.set_path(str(transaction.root))
         self._render_recovery(transaction)
-        self._render_operations(transaction)
         self._update_technical_details(transaction)
+        self._render_operations(transaction)
         self.observation_section.show()
         self.refresh_observations()
         if self.technical_toggle.isChecked():
@@ -747,40 +788,56 @@ class RenameHistoryPage(QWidget):
             operation.undo_status is UndoStatus.SUCCESS for operation in transaction.operations
         )
         undo_failed_count = sum(
-            operation.undo_status is UndoStatus.FAILED
-            for operation in transaction.operations
+            operation.undo_status is UndoStatus.FAILED for operation in transaction.operations
         )
         undo_conflict_count = sum(
-            operation.undo_status is UndoStatus.CONFLICT
-            for operation in transaction.operations
+            operation.undo_status is UndoStatus.CONFLICT for operation in transaction.operations
         )
         undo_waiting_count = sum(
             operation.status is ExecutionStatus.SUCCESS
             and operation.undo_status is UndoStatus.PENDING
             for operation in transaction.operations
         )
+        forward = (
+            (success_count, "成功"),
+            (failed_count, "失败"),
+            (precondition_failed_count, "预检失败"),
+            (rejected_count, "拒绝"),
+            (not_run_count, "未执行"),
+            (pending_count, "待处理"),
+            (recovery_required_count, "需检查"),
+        )
+        undo = (
+            (undo_success_count, "成功"),
+            (undo_failed_count, "失败"),
+            (undo_conflict_count, "冲突"),
+            (undo_waiting_count, "尚未撤销"),
+        )
+        undo_summary = " · ".join(f"{count} 项{label}" for count, label in undo if count)
+        undo_state = _undo_transaction_text(transaction)
+        if transaction.undo_state is None and transaction.status not in {
+            TransactionStatus.UNDONE,
+            TransactionStatus.UNDO_PARTIAL,
+        }:
+            undo_state = ""
         facts = [
-            f"记录状态：{_transaction_status_text(transaction.display_status)}",
+            ("事务状态", _transaction_status_text(transaction.display_status)),
             (
-                f"重命名记录：{success_count} 项成功 · {failed_count} 项失败 · "
-                f"{precondition_failed_count} 项预检失败 · {rejected_count} 项拒绝 · "
-                f"{not_run_count} 项未执行 · {pending_count} 项待处理 · "
-                f"{recovery_required_count} 项需检查"
+                "重命名",
+                " · ".join(f"{count} 项{label}" for count, label in forward if count) or "无操作",
             ),
             (
-                f"撤销记录：{_undo_transaction_text(transaction)} · "
-                f"{undo_success_count} 项已撤销 · {undo_failed_count} 项失败 · "
-                f"{undo_conflict_count} 项冲突 · "
-                f"{undo_waiting_count} 项尚未撤销"
+                "撤销",
+                " · ".join(value for value in (undo_state, undo_summary) if value)
+                or "尚无撤销记录",
             ),
-            f"记录时间：{_format_datetime(transaction.created_at)}",
+            ("记录时间", _format_local_wall_time(transaction.created_at)[:16]),
         ]
         if transaction.completed_at is not None:
-            facts.append(f"事务完成时间：{_format_datetime(transaction.completed_at)}")
+            facts.append(("完成时间", _format_local_wall_time(transaction.completed_at)[:16]))
         if transaction.undo_completed_at is not None:
-            facts.append(f"撤销完成时间：{_format_datetime(transaction.undo_completed_at)}")
-        self.journal_facts_label.setText("\n".join(facts))
-        self.journal_facts_label.setAccessibleDescription("\n".join(facts))
+            facts.append(("撤销完成", _format_local_wall_time(transaction.undo_completed_at)[:16]))
+        self.journal_facts_label.set_facts(facts)
 
     def _render_recovery(self, transaction: RenameTransaction) -> None:
         has_recovery_info = any(
@@ -841,6 +898,11 @@ class RenameHistoryPage(QWidget):
                     path = operation.source_path if column == 3 else operation.target_path
                     item.setToolTip(str(path))
                     item.setData(Qt.ItemDataRole.AccessibleTextRole, str(path))
+                if column in {1, 2}:
+                    color = _durable_status_color(operation, column)
+                    item.setForeground(QBrush(color))
+                if column == 0:
+                    item.setForeground(QBrush(QColor(LIGHT_COLORS.text_muted)))
                 table.setItem(row, column, item)
         if self._operations:
             table.setCurrentCell(0, 0)
@@ -867,15 +929,23 @@ class RenameHistoryPage(QWidget):
             self._clear_operation_detail()
             return
         operation = self._operations[row]
-        self.operation_sequence_label.setText(f"操作记录序号：{operation.sequence}")
-        self.operation_status_label.setText(
-            f"重命名记录：{_execution_status_text(operation.status)}\n"
-            f"撤销记录：{_undo_status_text(operation.undo_status)}"
+        self.operation_sequence_label.setText(f"操作 {operation.sequence}")
+        self.operation_status_label.set_facts(
+            [
+                ("重命名", _execution_overview_text(operation.status)),
+                ("撤销", _undo_overview_text(operation)),
+            ]
         )
         self.source_path_value.set_path(str(operation.source_path))
         self.target_path_value.set_path(str(operation.target_path))
-        self.execution_error_value.setPlainText(operation.error or "无")
-        self.undo_error_value.setPlainText(operation.undo_error or "无")
+        self.execution_error_value.setPlainText(operation.error or "")
+        execution_group = self.execution_error_value.parentWidget()
+        assert execution_group is not None
+        execution_group.setVisible(bool(operation.error))
+        self.undo_error_value.setPlainText(operation.undo_error or "")
+        undo_group = self.undo_error_value.parentWidget()
+        assert undo_group is not None
+        undo_group.setVisible(bool(operation.undo_error))
         self.operation_detail_section.show()
         self._update_technical_operation(operation)
 
@@ -933,6 +1003,7 @@ class RenameHistoryPage(QWidget):
         self.technical_operation_label.setText(
             "\n".join(
                 (
+                    f"操作序号：{operation.sequence}",
                     f"Journal operation ID：{operation_id}",
                     f"原始执行状态：{operation.status.value}",
                     f"原始撤销状态：{operation.undo_status.value}",
@@ -1181,34 +1252,13 @@ def _execution_overview_text(status: ExecutionStatus) -> str:
 
 def _undo_overview_text(operation: RenameOperation) -> str:
     if operation.undo_status is UndoStatus.PENDING:
-        return "未撤销" if operation.status is ExecutionStatus.SUCCESS else "—"
+        return "未撤销" if operation.status is ExecutionStatus.SUCCESS else "不适用"
     return {
         UndoStatus.SUCCESS: "已撤销",
         UndoStatus.FAILED: "失败",
         UndoStatus.CONFLICT: "冲突",
         UndoStatus.PENDING: "未撤销",
     }[operation.undo_status]
-
-
-def _execution_status_text(status: ExecutionStatus) -> str:
-    return {
-        ExecutionStatus.PENDING: "记录为待处理",
-        ExecutionStatus.SUCCESS: "Journal 记录成功",
-        ExecutionStatus.FAILED: "记录为失败",
-        ExecutionStatus.NOT_EXECUTED: "记录为未执行",
-        ExecutionStatus.PRECONDITION_FAILED: "记录为预检失败",
-        ExecutionStatus.REJECTED: "记录为拒绝",
-        ExecutionStatus.RECOVERY_REQUIRED: "记录为需要检查",
-    }[status]
-
-
-def _undo_status_text(status: UndoStatus) -> str:
-    return {
-        UndoStatus.PENDING: "记录为待处理",
-        UndoStatus.SUCCESS: "Journal 记录已撤销",
-        UndoStatus.FAILED: "记录为失败",
-        UndoStatus.CONFLICT: "记录为冲突",
-    }[status]
 
 
 def _observation_text(observation: CurrentPathObservation) -> str:
@@ -1232,6 +1282,123 @@ def _is_unresolved(transaction: RenameTransaction) -> bool:
     return transaction.unresolved
 
 
+class _DisclosureButton(QToolButton):
+    """Support both native Space activation and Enter for disclosure."""
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+            self.click()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+
+class _FactGrid(QWidget):
+    """Small selectable label/value facts, without form controls or borders."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._text = ""
+        self._layout = QGridLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setHorizontalSpacing(20)
+        self._layout.setVerticalSpacing(5)
+        self._layout.setColumnStretch(1, 1)
+        self.setMaximumWidth(560)
+
+        self._rows: list[tuple[QLabel, QLabel]] = []
+        for row in range(6):
+            key = QLabel()
+            key.setObjectName("pageDescription")
+            text = QLabel()
+            text.setWordWrap(True)
+            text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self._layout.addWidget(key, row, 0, Qt.AlignmentFlag.AlignTop)
+            self._layout.addWidget(text, row, 1)
+            self._rows.append((key, text))
+        self.clear()
+
+    def set_facts(self, facts: list[tuple[str, str]]) -> None:
+        self.clear()
+        self._text = "\n".join(f"{label}：{value}" for label, value in facts)
+        self.setAccessibleDescription(self._text)
+        for (key, text), (label, value) in zip(self._rows, facts, strict=False):
+            key.setText(label)
+            text.setText(value)
+            key.show()
+            text.show()
+
+    def text(self) -> str:
+        return self._text
+
+    def clear(self) -> None:
+        self._text = ""
+        for key, text in self._rows:
+            key.clear()
+            text.clear()
+            key.hide()
+            text.hide()
+        self.setAccessibleDescription("")
+
+
+def _durable_status_color(operation: RenameOperation, column: int) -> QColor:
+    if column == 1:
+        color = {
+            ExecutionStatus.SUCCESS: LIGHT_COLORS.success,
+            ExecutionStatus.FAILED: LIGHT_COLORS.error,
+            ExecutionStatus.PRECONDITION_FAILED: LIGHT_COLORS.warning,
+            ExecutionStatus.REJECTED: LIGHT_COLORS.warning,
+            ExecutionStatus.RECOVERY_REQUIRED: LIGHT_COLORS.warning,
+        }.get(operation.status, LIGHT_COLORS.text_secondary)
+    else:
+        color = {
+            UndoStatus.SUCCESS: LIGHT_COLORS.success,
+            UndoStatus.FAILED: LIGHT_COLORS.error,
+            UndoStatus.CONFLICT: LIGHT_COLORS.warning,
+        }.get(operation.undo_status, LIGHT_COLORS.text_secondary)
+    return QColor(color)
+
+
+class _HistoryMasterDelegate(QStyledItemDelegate):
+    """Compact two-line history entries with a local selection accent."""
+
+    def paint(self, painter, option, index) -> None:
+        painter.save()
+        rect = option.rect.adjusted(0, 1, -1, -1)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        if selected or hovered:
+            painter.fillRect(
+                rect, QColor(LIGHT_COLORS.selection if selected else LIGHT_COLORS.sidebar_hover)
+            )
+        if selected:
+            painter.fillRect(
+                rect.left(), rect.top() + 7, 3, rect.height() - 14, QColor(LIGHT_COLORS.accent)
+            )
+        lines = str(index.data(Qt.ItemDataRole.DisplayRole)).splitlines()
+        font = option.font
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(LIGHT_COLORS.text_primary))
+        painter.drawText(
+            rect.adjusted(12, 7, -8, -27),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            lines[0] if lines else "",
+        )
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QColor(LIGHT_COLORS.text_secondary))
+        painter.drawText(
+            rect.adjusted(12, 29, -8, -5),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            lines[1] if len(lines) > 1 else "",
+        )
+        if option.state & QStyle.StateFlag.State_HasFocus:
+            painter.setPen(QColor(LIGHT_COLORS.focus))
+            painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        painter.restore()
+
+
 class _OperationRowDelegate(QStyledItemDelegate):
     """Paint readable palette-aware row selection and elide overview paths."""
 
@@ -1245,37 +1412,45 @@ class _OperationRowDelegate(QStyledItemDelegate):
             )
 
     def paint(self, painter, option, index) -> None:
-        if not option.state & QStyle.StateFlag.State_Selected:
-            super().paint(painter, option, index)
-            return
-
-        selection_background = _operation_selection_background(option.palette)
-        text_color = option.palette.color(QPalette.ColorRole.Text)
-        selected_option = type(option)(option)
-        selected_option.state &= ~QStyle.StateFlag.State_Selected
-        selected_option.palette.setColor(QPalette.ColorRole.Base, selection_background)
-        selected_option.palette.setColor(QPalette.ColorRole.AlternateBase, selection_background)
-        selected_option.palette.setColor(QPalette.ColorRole.Text, text_color)
-        selected_option.palette.setColor(QPalette.ColorRole.WindowText, text_color)
-        selected_option.backgroundBrush = QBrush(selection_background)
-        super().paint(painter, selected_option, index)
-
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        foreground = index.data(Qt.ItemDataRole.ForegroundRole)
+        text_color = (
+            foreground.color()
+            if isinstance(foreground, QBrush)
+            else option.palette.color(QPalette.ColorRole.Text)
+        )
         painter.save()
-        if index.column() == 0:
-            indicator_height = max(0, option.rect.height() - 6)
+        background = (
+            _operation_selection_background(option.palette)
+            if selected
+            else option.palette.color(QPalette.ColorRole.Base)
+        )
+        painter.fillRect(option.rect, background)
+        painter.setFont(option.font)
+        painter.setPen(text_color)
+        text = option.fontMetrics.elidedText(
+            str(index.data(Qt.ItemDataRole.DisplayRole) or ""),
+            Qt.TextElideMode.ElideMiddle,
+            max(0, option.rect.width() - 16),
+        )
+        painter.drawText(
+            option.rect.adjusted(8, 0, -8, 0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            text,
+        )
+        painter.setPen(QColor(LIGHT_COLORS.border))
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+        if selected and index.column() == 0:
             painter.fillRect(
                 option.rect.left(),
-                option.rect.top() + 3,
-                min(3, option.rect.width()),
-                indicator_height,
+                option.rect.top() + 4,
+                3,
+                max(0, option.rect.height() - 8),
                 option.palette.color(QPalette.ColorRole.Highlight),
             )
         if option.state & QStyle.StateFlag.State_HasFocus:
-            focus_pen = QPen(option.palette.color(QPalette.ColorRole.Highlight))
-            focus_pen.setStyle(Qt.PenStyle.DotLine)
-            painter.setPen(focus_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
+            painter.setPen(QPen(option.palette.color(QPalette.ColorRole.Highlight)))
+            painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
         painter.restore()
 
 
@@ -1318,7 +1493,7 @@ class _ElidedPathLabel(QLabel):
         super().__init__(parent)
         self.full_path = ""
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(60)
         self.setAccessibleName("完整路径")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -1326,7 +1501,13 @@ class _ElidedPathLabel(QLabel):
     def set_path(self, path: str) -> None:
         self.full_path = path
         self.setAccessibleDescription(path)
+        self.updateGeometry()
         self._update_elision()
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        hint.setWidth(min(560, max(60, self.fontMetrics().horizontalAdvance(self.full_path) + 8)))
+        return hint
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
