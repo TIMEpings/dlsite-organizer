@@ -51,6 +51,9 @@ class OrganizerState:
     input_root: str = ""
     preview: OrganizerPreview | None = field(default=None, init=False)
     row_keys: tuple[str, ...] = field(default=(), init=False)
+    # Ordered canonical identity -> concrete path. Membership survives stale rows
+    # and omitted/skipped members; only explicit scan/append/remove changes intent.
+    review_scope: dict[str, Path] = field(default_factory=dict, init=False)
     _checked: set[str] = field(default_factory=set, init=False, repr=False)
     highlighted_keys: frozenset[str] = field(default_factory=frozenset, init=False)
     current_key: str | None = field(default=None, init=False)
@@ -87,9 +90,14 @@ class OrganizerState:
                 or any(op.status in {ExecutionStatus.PENDING, ExecutionStatus.RECOVERY_REQUIRED}
                        for op in result.operations)):
             return False
-        self.completed_targets.update(normalized_path_identity(op.target_path)
-                                      for op in result.operations
-                                      if op.status is ExecutionStatus.SUCCESS)
+        root_key = normalized_path_identity(root)
+        successful = {
+            _source_identity(root, root_key, op.source_path): op.target_path
+            for op in result.operations if op.status is ExecutionStatus.SUCCESS
+        }
+        self.review_scope = remap_review_scope(self.review_scope, root, root_key, successful)
+        self.completed_targets.update(_source_identity(root, root_key, target)
+                                      for target in successful.values())
         self.reconciliation_root = root
         self.reconciliation_pending = True
         return True
@@ -165,6 +173,8 @@ class OrganizerState:
         keys = preview_row_keys(preview)
         self.preview = preview
         self.row_keys = keys
+        if not reconcile:
+            self.review_scope = dict(zip(keys, (p.source_path for p in preview.plans), strict=True))
         self._checked = {
             key for key, plan in zip(keys, preview.plans, strict=True)
             if plan.status is RenamePlanStatus.READY and not reconcile
@@ -180,6 +190,7 @@ class OrganizerState:
         keys = preview_row_keys(preview)
         self.preview = preview
         self.row_keys = keys
+        self.review_scope.update(zip(keys, (p.source_path for p in preview.plans), strict=True))
         self._checked.intersection_update(
             key for key, plan in zip(keys, preview.plans, strict=True)
             if plan.status is RenamePlanStatus.READY
@@ -222,6 +233,8 @@ class OrganizerState:
     def remove_rows(self, first: int, last: int) -> None:
         assert self.preview is not None
         self._checked.difference_update(self.row_keys[first:last + 1])
+        for key in self.row_keys[first:last + 1]:
+            self.review_scope.pop(key, None)
         self.row_keys = self.row_keys[:first] + self.row_keys[last + 1:]
         self.preview = replace(
             self.preview, plans=self.plans[:first] + self.plans[last + 1:]
@@ -244,6 +257,7 @@ class OrganizerState:
         self._clear_review_session()
 
     def _clear_review_session(self) -> None:
+        self.review_scope.clear()
         self.completed_targets.clear()
         self.reconciliation_root = None
         self.reconciliation_pending = False
@@ -252,6 +266,17 @@ class OrganizerState:
 class _PathItem(Protocol):
     @property
     def source_path(self) -> Path: ...
+
+
+def remap_review_scope(scope: dict[str, Path], root: Path, root_key: str,
+                       successful: dict[str, Path]) -> dict[str, Path]:
+    """Replace only confirmed successful members in place in a single linear pass."""
+    mapped: dict[str, Path] = {}
+    for key, path in scope.items():
+        target = successful.get(key)
+        mapped[_source_identity(root, root_key, target) if target is not None else key] = (
+            target if target is not None else path)
+    return mapped
 
 
 def _source_identity(root: Path, root_key: str, source: Path) -> str:

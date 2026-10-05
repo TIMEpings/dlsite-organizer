@@ -41,6 +41,7 @@ class OrganizerWorker(QObject):
         *,
         request_id: int = 0,
         preview_revision: int = 0,
+        reconcile: bool = False,
     ) -> None:
         super().__init__()
         self._organizer_service = organizer_service.snapshot()
@@ -48,6 +49,7 @@ class OrganizerWorker(QObject):
         self._preview_revision = preview_revision
         self._root_path = root_path
         self._selected_paths = tuple(selected_paths) if selected_paths is not None else None
+        self._reconcile = reconcile
         self._cancel_event = Event()
 
     @Slot()
@@ -61,7 +63,14 @@ class OrganizerWorker(QObject):
             self._root_path,
         )
         try:
-            if self._selected_paths is None:
+            if self._reconcile:
+                assert self._selected_paths is not None
+                preview = self._organizer_service.refresh_preview_scope(
+                    self._root_path, tuple(Path(path) for path in self._selected_paths),
+                    progress_callback=self._report_progress,
+                    cancel_check=self._cancel_event.is_set,
+                )
+            elif self._selected_paths is None:
                 preview = self._organizer_service.preview(
                     self._root_path,
                     progress_callback=self._report_progress,

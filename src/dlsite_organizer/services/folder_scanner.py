@@ -70,6 +70,7 @@ class FolderScanner:
         paths: Sequence[Path | str],
         *,
         cancel_check: CancelCheck | None = None,
+        preserve_order: bool = False,
     ) -> ScanResult:
         """Scan only explicitly selected direct children of ``root``.
 
@@ -84,7 +85,7 @@ class FolderScanner:
                 FolderScanFailureKind.INVALID_ROOT,
                 "作品文件夹必须是所选根目录的直接子目录。",
             )
-        children = tuple(
+        children = normalized if preserve_order else tuple(
             sorted(normalized, key=lambda path: (path.name.casefold(), path.name))
         )
         return self._scan_children(root_path, children, cancel_check=cancel_check)

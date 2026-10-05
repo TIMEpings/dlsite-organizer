@@ -188,6 +188,26 @@ class OrganizerService:
             scan, progress_callback=progress_callback, cancel_check=cancel_check
         )
 
+    def refresh_preview_scope(
+        self,
+        root_path: Path | str,
+        members: tuple[Path, ...],
+        *,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> OrganizerPreview:
+        """Freshly evaluate ordered session members, never discover sibling rows.
+
+        The scanner retains direct-child/link validation and skipped-member
+        diagnostics. Planner batch evaluation still indexes real root occupancy.
+        Missing/invalid members are omitted with a fresh scan-skipped count.
+        """
+        operation = self if self._snapshot_captured else self.snapshot()
+        scan = operation._scanner.scan_paths(
+            root_path, members, cancel_check=cancel_check, preserve_order=True)
+        return operation._preview_scan(
+            scan, progress_callback=progress_callback, cancel_check=cancel_check)
+
     def _preview_scan(
         self,
         scan: ScanResult,

@@ -212,6 +212,8 @@ class OrganizerPreviewModel(QAbstractTableModel):
                 plan for row, plan in enumerate(self.state.plans) if row not in removed
             ))
             self.beginResetModel()
+            for row in selected:
+                self.state.review_scope.pop(self.state.row_keys[row], None)
             self.state.append_preview(preview)
             self.endResetModel()
             return

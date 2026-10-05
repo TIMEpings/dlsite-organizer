@@ -607,6 +607,7 @@ class OrganizerPage(QWidget):
             worker = OrganizerWorker(
                 self._organizer_service, root, selected_paths,
                 request_id=self.state.request_id, preview_revision=self.state.preview_revision,
+                reconcile=mode is ScanMode.RECONCILE,
             )
             worker.moveToThread(thread)
             thread.started.connect(worker.run)
@@ -665,7 +666,7 @@ class OrganizerPage(QWidget):
         except DropInputError as exc:
             self._show_error(exc.user_message)
             return
-        has_existing_preview = self._has_preview_content()
+        has_existing_preview = self._has_preview_content() or bool(self.state.review_scope)
         if self.state.preview is not None and has_existing_preview and normalized_path_identity(
             self.state.preview.root_path
         ) != normalized_path_identity(selection.root_path):
@@ -904,7 +905,7 @@ class OrganizerPage(QWidget):
 
     @Slot()
     def retry_refresh(self) -> None:
-        """Reuse the ordinary scanner and ownership gates on the committed root."""
+        """Refresh preserved members under the committed root through ownership gates."""
         root = self.state.reconciliation_root
         if self._thread is not None or root is None:
             return
@@ -912,7 +913,7 @@ class OrganizerPage(QWidget):
         if self._journal_unavailable or self.state.unresolved_transaction_id is not None:
             return
         self.state.reconciliation_pending = True
-        self._start_scan(str(root), ScanMode.RECONCILE)
+        self._start_scan(str(root), ScanMode.RECONCILE, tuple(self.state.review_scope.values()))
 
     @Slot(object)
     def _show_undo_result(self, value: object) -> None:

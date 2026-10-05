@@ -44,13 +44,13 @@ class ControlledOrganizer(OrganizerService):
     def settings_generation(self):
         return self.generation
 
-    def _preview(self, root_path, **kwargs):
+    def _preview_scan(self, scan, **kwargs):
         if self.entered is not None and self.release is not None:
             self.entered.set()
             assert self.release.wait(3)
         if self.fail:
             raise RuntimeError("controlled refresh failure")
-        return super()._preview(root_path, **kwargs)
+        return super()._preview_scan(scan, **kwargs)
 
 
 @pytest.fixture
