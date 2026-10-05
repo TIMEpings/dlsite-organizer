@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from dlsite_organizer.services.folder_scanner import FolderScanFailure
 from dlsite_organizer.services.organizer import OrganizerPreview, OrganizerService
+from dlsite_organizer.ui.state.organizer_state import merge_previews
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ class OrganizerWorkerResult:
     request_id: int
     preview_revision: int
     preview: OrganizerPreview
+    append_reconciled: bool = False
 
 
 class OrganizerWorker(QObject):
@@ -42,6 +44,7 @@ class OrganizerWorker(QObject):
         request_id: int = 0,
         preview_revision: int = 0,
         reconcile: bool = False,
+        append_to: OrganizerPreview | None = None,
     ) -> None:
         super().__init__()
         self._organizer_service = organizer_service.snapshot()
@@ -50,6 +53,7 @@ class OrganizerWorker(QObject):
         self._root_path = root_path
         self._selected_paths = tuple(selected_paths) if selected_paths is not None else None
         self._reconcile = reconcile
+        self._append_to = append_to
         self._cancel_event = Event()
 
     @Slot()
@@ -83,9 +87,13 @@ class OrganizerWorker(QObject):
                     progress_callback=self._report_progress,
                     cancel_check=self._cancel_event.is_set,
                 )
-            self.result_ready.emit(
-                OrganizerWorkerResult(self._request_id, self._preview_revision, preview)
-            )
+            append_reconciled = self._append_to is not None and not preview.cancelled
+            if append_reconciled:
+                assert self._append_to is not None
+                preview = self._organizer_service.reevaluate_preview(
+                    merge_previews(self._append_to, preview), recheck_ready=True)
+            self.result_ready.emit(OrganizerWorkerResult(
+                self._request_id, self._preview_revision, preview, append_reconciled))
             logger.debug(
                 "organizer worker success emitted thread=%s plans=%d cancelled=%s",
                 thread.objectName() or "<unnamed>",

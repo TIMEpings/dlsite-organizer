@@ -237,7 +237,9 @@ class OrganizerState:
             if plan.status is RenamePlanStatus.READY
         )
         self._commit_validity()
-        self.clear_highlight()
+        self.highlighted_keys = self.highlighted_keys.intersection(keys)
+        if self.current_key not in keys:
+            self.current_key = None
 
     def _commit_validity(self) -> None:
         self.preview_revision += 1

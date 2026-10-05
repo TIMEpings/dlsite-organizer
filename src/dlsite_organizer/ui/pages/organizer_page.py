@@ -68,6 +68,7 @@ from dlsite_organizer.ui.state.organizer_state import (
     BusyOperation,
     OrganizerState,
     ScanMode,
+    merge_previews,
 )
 from dlsite_organizer.ui.state.organizer_state import (
     PreviewStaleReason as PreviewStaleReason,
@@ -633,6 +634,7 @@ class OrganizerPage(QWidget):
                 self._organizer_service, root, selected_paths,
                 request_id=self.state.request_id, preview_revision=self.state.preview_revision,
                 reconcile=mode is ScanMode.RECONCILE,
+                append_to=self.state.preview if mode is ScanMode.APPEND else None,
             )
             worker.moveToThread(thread)
             thread.started.connect(worker.run)
@@ -760,8 +762,18 @@ class OrganizerPage(QWidget):
             ):
                 self.invalidate_preview()
                 return
-            self._clear_highlight()
-            self.preview_model.append_preview(preview)
+            # The worker reconciles its captured batch before delivery. Direct
+            # embedding callers use the same service seam before publication.
+            try:
+                combined = (preview if result.append_reconciled else
+                            self._organizer_service.reevaluate_preview(
+                                merge_previews(self.state.preview, preview), recheck_ready=True))
+            except Exception:
+                logger.exception("Could not re-evaluate appended Organizer plans")
+                self._show_error("追加计划无法重新检查；当前预览保持不变，请重试。")
+                return
+            self.preview_model.append_preview(combined)
+            self._table_selection_changed()
             preview = self.state.preview
             assert preview is not None
             self._update_preview_controls()

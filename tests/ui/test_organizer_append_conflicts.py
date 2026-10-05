@@ -1,18 +1,23 @@
 """Offline regression for the complete preview truth after individual drops."""
 
 from dataclasses import replace
-from threading import Event
+from threading import Event, get_ident
 
 import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
-from tests.ui.test_organizer_page import FakeLookupService, _wait_for_scan_idle
+from tests.ui.test_organizer_page import FakeLookupService, _wait_for, _wait_for_scan_idle
 from tests.ui.test_organizer_reconciliation import ControlledOrganizer
 
 from dlsite_organizer.domain.organizer import RenamePlanStatus
+from dlsite_organizer.domain.rename_execution import TransactionStatus
+from dlsite_organizer.persistence.database import Database
+from dlsite_organizer.persistence.rename_journal import TransactionJournal
+from dlsite_organizer.services.lookup import LookupFreshness
 from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_planner import BATCH_CONFLICT_WARNING
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.state.organizer_state import ScanMode
@@ -42,6 +47,91 @@ def test_individual_drop_detects_duplicate_before_execute(qapp, tmp_path):
         assert not any(page.state.checked(i) for i in range(2))
     finally:
         page.close()
+
+
+def test_manual_scan_then_append_conflict(qapp, tmp_path):
+    a, b = (tmp_path / f"{letter} RJ000001" for letter in "AB")
+    a.mkdir()
+    page = OrganizerPage(OrganizerService(FakeLookupService()))
+    page.set_root_path(tmp_path)
+    try:
+        page.scan_button.click()
+        _wait_for_scan_idle(qapp, page)
+        assert page.state.plans[0].status is RenamePlanStatus.READY
+        b.mkdir()
+        drop(qapp, page, b)
+        assert [p.status for p in page.state.plans] == [RenamePlanStatus.CONFLICT] * 2
+    finally:
+        page.close()
+
+
+def test_failed_append_reconciliation_keeps_original_atomic(qapp, tmp_path, monkeypatch):
+    a, b = (tmp_path / f"{letter} RJ000001" for letter in "AB")
+    a.mkdir()
+    b.mkdir()
+    service = OrganizerService(FakeLookupService())
+    page = OrganizerPage(service)
+    page.set_preview(service.preview_paths(tmp_path, [a]))
+    page.table.setCurrentIndex(page.preview_model.index(0, 1))
+    previous = (page.preview, dict(page.state.review_scope), page.state.current_key,
+                page.state.preview_revision)
+
+    def fail(_preview, **_kwargs):
+        raise OSError("controlled reconciliation failure")
+
+    monkeypatch.setattr(service, "reevaluate_preview", fail)
+    try:
+        drop(qapp, page, b)
+        assert (page.preview, page.state.review_scope, page.state.current_key,
+                page.state.preview_revision) == previous
+        assert page.state.checked(0) and page.state.preview_current
+        assert "当前预览保持不变" in page.status_label.text()
+    finally:
+        page.close()
+
+
+def test_execution_preflight_still_rejects_external_occupancy(qapp, tmp_path):
+    root = tmp_path / "library"
+    root.mkdir()
+    a, b, valid = (root / name for name in ("A RJ000001", "B RJ000001", "V RJ000002"))
+    for path in (a, b, valid):
+        path.mkdir()
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    service = OrganizerService(FakeLookupService())
+    executor = RenameExecutor(TransactionJournal(database))
+    page = OrganizerPage(service, execution_service=executor)
+    try:
+        independent = [service.preview_paths(root, [path]).plans[0] for path in (a, b)]
+        # Characterize the old internal inconsistency: preflight rejects it without mutation.
+        old_failure = executor.execute(root, independent, confirmed=True)
+        assert old_failure.status is TransactionStatus.FAILED and old_failure.success_count == 0
+        assert a.is_dir() and b.is_dir()
+        for path in (a, b, valid):
+            drop(qapp, page, path)
+        assert [p.status for p in page.state.plans] == [
+            RenamePlanStatus.CONFLICT, RenamePlanStatus.CONFLICT, RenamePlanStatus.READY]
+        page.preview_model.bulk_check("select")
+        selected = page.selected_ready_plans()
+        assert [p.source_path for p in selected] == [valid]
+        target = selected[0].target_path
+        assert target is not None
+        target.mkdir()  # Real external race after the current preview was accepted.
+        failed = executor.execute(root, selected, confirmed=True)
+        assert failed.status is TransactionStatus.FAILED and failed.success_count == 0
+        assert valid.is_dir()
+        page._show_execution_result(failed)
+        assert page.state.stale  # Execute failure invalidation was deliberately preserved.
+        target.rmdir()  # Controlled empty sandbox only.
+        page.set_preview(service.preview_paths(root, [valid]))
+        success = executor.execute(root, page.selected_ready_plans(), confirmed=True)
+        assert success.status is TransactionStatus.COMPLETED and success.success_count == 1
+        page._show_execution_result(success)
+        _wait_for_scan_idle(qapp, page)
+        assert page.state.completed(0) and page.state.preview_current
+    finally:
+        page.close()
+        database.dispose()
 
 
 def drop(qapp, page, path):
@@ -245,13 +335,13 @@ def test_append_ownership_accepts_once_or_rejects_before_reconciliation(
     page.set_preview(service.preview_paths(tmp_path, paths[:1]))
     old = page.preview
     calls = []
-    reevaluate = service.reevaluate_preview
+    commit = page.preview_model.append_preview
 
     def spy(preview):
         calls.append(preview)
-        return reevaluate(preview)
+        return commit(preview)
 
-    monkeypatch.setattr(service, "reevaluate_preview", spy)
+    monkeypatch.setattr(page.preview_model, "append_preview", spy)
     service.entered, service.release = Event(), Event()
     page.drop_zone.paths_dropped.emit(paths[1:])
     request, revision = page.state.request_id, page.state.preview_revision
@@ -319,11 +409,87 @@ def test_append_leaves_unrelated_nonexecutable_status_intact(qapp, tmp_path, sta
     service = OrganizerService(FakeLookupService())
     preview = service.preview_paths(tmp_path, [a])
     plan = replace(preview.plans[0], status=status, warnings=("raw diagnostic",))
+    if status is RenamePlanStatus.UNCHANGED:
+        plan = replace(plan, proposed_name=a.name, target_path=a)
     page = OrganizerPage(service)
     page.set_preview(replace(preview, plans=(plan,)))
     try:
         drop(qapp, page, b)
         assert page.state.plans[0] == plan
         assert not page.state.checked(0) and not page.state.checked(1)
+    finally:
+        page.close()
+
+
+def test_combined_reconciliation_runs_once_off_gui_thread(qapp, tmp_path, monkeypatch):
+    a, b = (tmp_path / f"{letter} RJ000001" for letter in "AB")
+    a.mkdir()
+    b.mkdir()
+    lookup = FakeLookupService()
+    service = OrganizerService(lookup)
+    page = OrganizerPage(service)
+    page.set_preview(service.preview_paths(tmp_path, [a]))
+    original = page.preview
+    entered, release = Event(), Event()
+    threads = []
+    reevaluate = service.reevaluate_preview
+
+    def blocked(preview, **kwargs):
+        threads.append(get_ident())
+        entered.set()
+        assert release.wait(3)
+        return reevaluate(preview, **kwargs)
+
+    monkeypatch.setattr(service, "reevaluate_preview", blocked)
+    page.drop_zone.paths_dropped.emit([b])
+    try:
+        _wait_for(qapp, entered.is_set)
+        assert page.is_busy() and not page.state.checks_editable
+        assert page.preview is original and len(page.state.plans) == 1
+        assert threads == [threads[0]] and threads[0] != get_ident()
+        release.set()
+        _wait_for_scan_idle(qapp, page)
+        assert len(threads) == 1 and lookup.calls == ["RJ000001", "RJ000001"]
+        assert [p.status for p in page.state.plans] == [RenamePlanStatus.CONFLICT] * 2
+    finally:
+        release.set()
+        _wait_for_scan_idle(qapp, page)
+        page.close()
+
+
+def test_full_scan_append_warning_equivalence(qapp, tmp_path):
+    class CautiousLookup(FakeLookupService):
+        def lookup(self, raw_workno):
+            return replace(super().lookup(raw_workno),
+                           freshness=LookupFreshness.CACHE_STALE_FALLBACK)
+
+    paths = [tmp_path / f"{letter} RJ000001" for letter in "ABC"]
+    for path in paths:
+        path.mkdir()
+    service = OrganizerService(CautiousLookup())
+    page = OrganizerPage(service)
+    try:
+        for path in paths:
+            drop(qapp, page, path)
+        assert page.state.plans == service.preview(tmp_path).plans
+        assert all(len(p.warnings) == 2 for p in page.state.plans)
+        assert all(page.preview_model.status_label(i) == "冲突" for i in range(3))
+    finally:
+        page.close()
+
+
+def test_newly_created_appended_source_occupies_existing_proposal(qapp, tmp_path):
+    a, b = (tmp_path / f"{letter} RJ{i:06}" for i, letter in enumerate("AB", 1))
+    a.mkdir()
+    service = OrganizerService(NamedLookup({"RJ000001": b.name, "RJ000002": "Y"}))
+    page = OrganizerPage(service)
+    try:
+        drop(qapp, page, a)
+        assert page.state.plans[0].status is RenamePlanStatus.READY
+        b.mkdir()  # The incoming source now occupies the old row's proposed target.
+        drop(qapp, page, b)
+        assert page.state.plans == service.preview_paths(tmp_path, [a, b]).plans
+        assert page.state.plans[0].status is RenamePlanStatus.CONFLICT
+        assert not page.state.checked(0)
     finally:
         page.close()

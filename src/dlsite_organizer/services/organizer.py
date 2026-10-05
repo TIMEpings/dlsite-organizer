@@ -127,10 +127,12 @@ class OrganizerService:
             self._planner = self._planner.snapshot()
             self._planner.apply_settings(settings)
 
-    def reevaluate_preview(self, preview: OrganizerPreview) -> OrganizerPreview:
+    def reevaluate_preview(
+        self, preview: OrganizerPreview, *, recheck_ready: bool = False,
+    ) -> OrganizerPreview:
         """Revalidate retained proposals without doing a new metadata lookup."""
         return replace(preview, plans=self._planner.snapshot().reevaluate(
-            preview.root_path, preview.plans))
+            preview.root_path, preview.plans, recheck_ready=recheck_ready))
 
     def preview(
         self,

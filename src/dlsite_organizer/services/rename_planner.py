@@ -314,20 +314,26 @@ class RenamePlanner:
                 )
         return tuple(ordered)
 
-    def reevaluate(self, root_path: Path, plans: Iterable[RenamePlan]) -> tuple[RenamePlan, ...]:
-        """Recheck surviving conflicts against fresh siblings, without metadata lookup.
+    def reevaluate(
+        self, root_path: Path, plans: Iterable[RenamePlan], *, recheck_ready: bool = False,
+    ) -> tuple[RenamePlan, ...]:
+        """Recheck captured proposals against fresh siblings, without metadata lookup.
 
-        Finalize is intentionally one-way. Rebuild affected CONFLICT rows using
-        captured work/name, then finalize the entire surviving batch. Other rows
-        retain their inputs and checks. Occupancy/Windows aliases use fresh sibling
-        truth for every conflict being reconsidered; execution still revalidates
+        Finalize is intentionally one-way. By default rebuild CONFLICT rows using
+        captured work/name, then finalize the entire surviving batch. Append also
+        rechecks READY/UNCHANGED: an incoming source may now occupy an old target.
+        All reconsidered proposals share fresh sibling truth for occupancy/Windows
+        aliases. Other statuses retain their inputs. Execution still revalidates
         the complete selected batch independently.
         """
         ordered = list(plans)
         slots = []
         requests = []
+        affected = {RenamePlanStatus.CONFLICT}
+        if recheck_ready:
+            affected.update({RenamePlanStatus.READY, RenamePlanStatus.UNCHANGED})
         for index, plan in enumerate(ordered):
-            if (plan.status is RenamePlanStatus.CONFLICT
+            if (plan.status in affected
                     and plan.work is not None and plan.work_code and plan.proposed_name):
                 slots.append(index)
                 requests.append(RenamePlanningRequest(

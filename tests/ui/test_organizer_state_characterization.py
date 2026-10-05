@@ -89,6 +89,9 @@ def test_append_upserts_in_place_and_preserves_checks_with_new_rows_unchecked(
     assert [plan.source_path for plan in page.preview.plans] == [*sources[1::-1], sources[2]]
     assert page.preview.plans[1].proposed_name == "updated"
     assert [checked(page, row) for row in range(3)] == [False, True, False]
+    # A CONFLICT is now revalidated by the Planner after upsert. Back the
+    # controlled blocked result with real occupancy rather than a status alone.
+    (tmp_path / "updated").mkdir()
     blocked = replace(incoming, plans=(replace(incoming.plans[0],
         status=RenamePlanStatus.CONFLICT),))
     page._show_preview(OrganizerWorkerResult(0, page.state.preview_revision, blocked))
