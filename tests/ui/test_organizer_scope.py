@@ -1,13 +1,12 @@
 """Phase 6.4 scope and desktop interaction regression contracts (offline)."""
 
 import pytest
-from PySide6.QtCore import QRect, QRectF, Qt
+from PySide6.QtCore import QItemSelectionModel, QPoint, QRect, QRectF, Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QStyleOptionViewItem
 from tests.ui.test_organizer_page import FakeLookupService, _wait_for_scan_idle
 from tests.ui.test_organizer_preview_model import synthetic_preview
 from tests.ui.test_organizer_reconciliation import checked_codes
-
-pytest_plugins = ["tests.ui.test_organizer_reconciliation"]
 
 from dlsite_organizer.domain.organizer import RenamePlanStatus
 from dlsite_organizer.services.drop_input import normalized_path_identity
@@ -17,6 +16,9 @@ from dlsite_organizer.ui.delegates.organizer_delegates import OrganizerCheckDele
 from dlsite_organizer.ui.models.organizer_preview_model import OrganizerPreviewModel
 from dlsite_organizer.ui.pages.organizer_page import OrganizerPage
 from dlsite_organizer.ui.state.organizer_state import OrganizerState
+from dlsite_organizer.ui.widgets.organizer_review import OrganizerElidedLabel
+
+pytest_plugins = ["tests.ui.test_organizer_reconciliation"]
 
 
 def test_scoped_refresh_excludes_removed_members(qapp, review):
@@ -37,11 +39,7 @@ def test_scoped_refresh_excludes_removed_members(qapp, review):
     assert tuple(page.state.review_scope.values()) == tuple(p.source_path for p in page.state.plans)
 
 
-@pytest.mark.parametrize("entry", [
-    "bottom",
-    pytest.param("context", marks=pytest.mark.xfail(strict=True, reason="Phase 6.4 contract")),
-    pytest.param("delete", marks=pytest.mark.xfail(strict=True, reason="Phase 6.4 contract")),
-])
+@pytest.mark.parametrize("entry", ["bottom", "context", "delete"])
 def test_remove_entries_replan_highlight_not_checked(qapp, tmp_path, entry):
     for name in ("a RJ000001", "b RJ000001", "c RJ000002"):
         (tmp_path / name).mkdir()
@@ -69,18 +67,20 @@ def test_remove_entries_replan_highlight_not_checked(qapp, tmp_path, entry):
         page.close()
 
 
-def test_phase63_summary_and_work_hover_are_redundant(qapp, review):
+def test_summary_and_status_hover_keep_accessibility_without_duplicates(qapp, review):
     page, *_ = review
-    assert page.summary_label.text() in page.summary_label.toolTip()
-    assert "社团" in page.preview_model.index(1, 2).data(Qt.ItemDataRole.ToolTipRole)
+    assert not page.summary_label.toolTip()
+    assert page.summary_label.text() in page.summary_label.accessibleDescription()
     assert page.preview_model.index(1, 1).data(Qt.ItemDataRole.ToolTipRole) is None
 
 
-def test_phase63_checkmark_uses_integer_center(qapp):
-    rect = QRect(0, 0, 14, 14).adjusted(2, 2, -2, -2)
-    assert QRectF(rect).center().x() - rect.center().x() == 1
-    assert QRectF(rect).center().y() - rect.center().y() == 1
-    assert OrganizerCheckDelegate.indicator_rect
+@pytest.mark.parametrize("size", [13, 14, 18, 20])
+def test_checkmark_bounds_center_in_logical_indicator(qapp, size):
+    rect = QRect(7, 11, size, size)
+    bounds = OrganizerCheckDelegate.checkmark_points(rect).boundingRect()
+    assert bounds.center().x() == pytest.approx(QRectF(rect).center().x())
+    assert bounds.center().y() == pytest.approx(QRectF(rect).center().y())
+    assert QRectF(rect).contains(bounds.adjusted(-0.85, -0.85, 0.85, 0.85))
 
 
 @pytest.mark.parametrize("refresh_fails", [False, True])
@@ -176,3 +176,87 @@ def test_partial_scope_preserves_position_and_sparse_remove(qapp, review):
     model.remove_rows(range(0, 100, 2))
     assert tuple(state.review_scope) == state.row_keys and len(state.row_keys) == 50
     assert all(normalized_path_identity(path) == key for key, path in state.review_scope.items())
+
+
+def test_context_selection_blank_area_and_delete_focus(qapp, review):
+    page, *_ = review
+    page.resize(1100, 800)
+    page.show()
+    QTest.qWait(30)
+    selection = page.table.selectionModel()
+    flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+    for row in (1, 2):
+        selection.select(page.preview_model.index(row, 1), flags)
+    point = page.table.visualRect(page.preview_model.index(2, 1)).center()
+    QTest.mouseClick(page.table.viewport(), Qt.MouseButton.RightButton, pos=point)
+    assert {i.row() for i in selection.selectedRows()} == {1, 2}
+    assert page.table.currentIndex().row() == 2
+    page._show_preview_menu(point)
+    assert not page.preview_menu.isHidden()
+    page.preview_menu.hide()
+    blank = QPoint(10, page.table.viewport().height() - 5)
+    page._show_preview_menu(blank)
+    assert page.preview_menu.isHidden()
+    assert {i.row() for i in selection.selectedRows()} == {1, 2}
+    point = page.table.visualRect(page.preview_model.index(0, 1)).center()
+    QTest.mouseClick(page.table.viewport(), Qt.MouseButton.RightButton, pos=point)
+    assert {i.row() for i in selection.selectedRows()} == {0}
+    page.root_input.setFocus()
+    page.root_input.setText("ABC")
+    page.root_input.setCursorPosition(0)
+    QTest.keyClick(page.root_input, Qt.Key.Key_Delete)
+    assert page.root_input.text() == "BC" and len(page.state.plans) == 4
+    page.detail_source_path.path_input.setFocus()
+    QTest.keyClick(page.detail_source_path.path_input, Qt.Key.Key_Delete)
+    assert len(page.state.plans) == 4
+    page.table.setFocus()
+    for row in (1, 2):
+        selection.select(page.preview_model.index(row, 1), flags)
+    page.remove_action.trigger()
+    assert len(page.state.plans) == 1  # all three highlighted, independent of checks
+
+
+@pytest.mark.parametrize("column", [2, 3, 4])
+def test_cell_tooltip_only_for_actual_elision(qapp, review, column):
+    page, *_ = review
+    index = page.preview_model.index(1, column)
+    delegate = page.table.itemDelegateForColumn(column)
+    option = QStyleOptionViewItem()
+    option.initFrom(page.table)
+    option.widget = page.table
+    option.rect = QRect(0, 0, 2000, 40)
+    assert delegate.tooltip_text(option, index) is None
+    option.rect = QRect(0, 0, 20, 40)
+    assert delegate.tooltip_text(option, index)
+    assert "社团：" not in delegate.tooltip_text(option, index)
+
+
+def test_labels_and_paths_tooltip_only_when_truncated(qapp, review):
+    page, *_ = review
+    label = OrganizerElidedLabel("完整文本")
+    label.setParent(page)
+    page.show()
+    label.resize(500, 30)
+    label.show()
+    QTest.qWait(30)
+    assert not label.toolTip() and label.accessibleDescription() == label.text()
+    label.resize(10, 30)
+    qapp.processEvents()
+    assert label.toolTip() == label.text()
+    label.set_extra_tooltip("additional transaction identity")
+    label.resize(600, 30)
+    qapp.processEvents()
+    assert label.toolTip() == "additional transaction identity"
+    label.close()
+    path = page.preview_root_display
+    path.resize(2000, 30)
+    path.show()
+    page.resize(2000, 800)
+    page.show()
+    QTest.qWait(30)
+    assert not path.path_input.toolTip()
+    page.resize(720, 650)
+    path.set_path("C:/" + "long-directory/" * 50)
+    QTest.qWait(30)
+    assert path.path_input.toolTip() == path.text()
+    assert page.bulk_menu_button.toolTip() and page.bulk_menu_button.accessibleName()

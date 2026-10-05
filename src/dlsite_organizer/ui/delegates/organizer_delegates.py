@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QToolTip,
 )
 
 from dlsite_organizer.domain.organizer import RenamePlan, RenamePlanStatus
@@ -56,7 +57,30 @@ def paint_item_background(painter: QPainter, option: QStyleOptionViewItem) -> No
                       item_option.widget)
 
 
-class OrganizerCheckDelegate(QStyledItemDelegate):
+class OrganizerTextDelegate(QStyledItemDelegate):
+    """Only the hovered cell is measured; full text appears only when elided."""
+
+    def tooltip_text(self, option: QStyleOptionViewItem, index) -> str | None:
+        item = QStyleOptionViewItem(option)
+        self.initStyleOption(item, index)
+        style = item.widget.style() if item.widget is not None else QApplication.style()
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, item, item.widget)
+        if QFontMetrics(item.font).horizontalAdvance(item.text) > max(0, rect.width()):
+            return index.data(Qt.ItemDataRole.ToolTipRole)
+        return None
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        if event.type() != QEvent.Type.ToolTip:
+            return super().helpEvent(event, view, option, index)
+        text = self.tooltip_text(option, index)
+        if text:
+            QToolTip.showText(event.globalPos(), text, view)
+        else:
+            QToolTip.hideText()
+        return True
+
+
+class OrganizerCheckDelegate(OrganizerTextDelegate):
     """Own indicator painting/hit geometry; the model alone owns execution checks."""
 
     @staticmethod
@@ -75,6 +99,20 @@ class OrganizerCheckDelegate(QStyledItemDelegate):
             option.state & QStyle.StateFlag.State_Enabled
         )
         return checked, editable
+
+    def tooltip_text(self, option, index) -> str | None:
+        return index.data(Qt.ItemDataRole.ToolTipRole)
+
+    @staticmethod
+    def checkmark_points(rect: QRect) -> QPolygonF:
+        """Symmetric visual bounds around the floating-point indicator center.
+
+        A round 1.7 logical-pixel stroke expands these bounds equally. The bend
+        retains the familiar rising long arm without integer-center rounding.
+        """
+        box = QRectF(rect)
+        return QPolygonF([QPointF(box.x() + box.width() * x, box.y() + box.height() * y)
+                          for x, y in ((0.23, 0.49), (0.43, 0.70), (0.77, 0.30))])
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         paint_item_background(painter, option)
@@ -97,8 +135,9 @@ class OrganizerCheckDelegate(QStyledItemDelegate):
         painter.setBrush(QColor(fill))
         painter.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
         if checked:
-            paint_status_mark(painter, rect.adjusted(2, 2, -2, -2), "ready",
-                              QColor(LIGHT_COLORS.surface))
+            painter.setPen(QPen(QColor(LIGHT_COLORS.surface), 1.7, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawPolyline(self.checkmark_points(rect))
         painter.restore()
 
     def editorEvent(self, event, model, option, index) -> bool:
@@ -125,7 +164,7 @@ class OrganizerCheckDelegate(QStyledItemDelegate):
         return model.setData(index, value, Qt.ItemDataRole.CheckStateRole)
 
 
-class OrganizerWorkDelegate(QStyledItemDelegate):
+class OrganizerWorkDelegate(OrganizerTextDelegate):
     """Paint work identity and title on two stable lines without child widgets."""
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
@@ -183,6 +222,21 @@ class OrganizerWorkDelegate(QStyledItemDelegate):
         del index
         return QSize(220, max(40, option.fontMetrics.height() * 2 + 6))
 
+    def tooltip_text(self, option, index) -> str | None:
+        model = index.model()
+        if not isinstance(model, OrganizerPreviewModel):
+            return None
+        plan = model.state.plans[index.row()]
+        code = plan.work_code or "、".join(plan.work_codes) or "—"
+        title = plan.work.title if plan.work is not None else plan.current_name
+        primary = QFont(option.font)
+        primary.setWeight(QFont.Weight.DemiBold)
+        width = max(0, option.rect.width() - 14)
+        if (QFontMetrics(primary).horizontalAdvance(code) > width
+                or QFontMetrics(option.font).horizontalAdvance(title) > width):
+            return f"{code}\n{title}"
+        return None
+
     @staticmethod
     def _paint_item_background(painter: QPainter, option: QStyleOptionViewItem) -> None:
         paint_item_background(painter, option)
@@ -193,7 +247,7 @@ class OrganizerWorkDelegate(QStyledItemDelegate):
             painter.restore()
 
 
-class OrganizerStatusDelegate(QStyledItemDelegate):
+class OrganizerStatusDelegate(OrganizerTextDelegate):
     """Paint concise status marks beside the model's real domain status."""
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
@@ -239,6 +293,9 @@ class OrganizerStatusDelegate(QStyledItemDelegate):
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
         del index
         return QSize(136, max(40, option.fontMetrics.height() + 8))
+
+    def tooltip_text(self, option, index) -> str | None:
+        return index.data(Qt.ItemDataRole.ToolTipRole)
 
     @staticmethod
     def _mark(plan: RenamePlan) -> tuple[str, QColor]:

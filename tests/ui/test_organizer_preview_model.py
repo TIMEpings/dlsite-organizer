@@ -54,10 +54,10 @@ def test_roles_headers_unicode_full_paths_and_diagnostics(qapp: QApplication, tm
     assert model.data(model.index(0, 0)) is None
     assert model.data(model.index(0, 1)) == "可执行"
     assert "中文作品・日本語" in model.data(model.index(0, 2))
-    assert "社团" in model.data(model.index(0, 2), Qt.ItemDataRole.ToolTipRole)
+    assert "中文作品・日本語" in model.data(model.index(0, 2), Qt.ItemDataRole.ToolTipRole)
     assert model.data(model.index(0, 3)) == "目录" * 200
-    assert model.data(model.index(0, 3), Qt.ItemDataRole.ToolTipRole) == str(plan.source_path)
-    assert model.data(model.index(0, 4), Qt.ItemDataRole.ToolTipRole) == str(plan.target_path)
+    assert model.data(model.index(0, 3), Qt.ItemDataRole.ToolTipRole) == plan.current_name
+    assert model.data(model.index(0, 4), Qt.ItemDataRole.ToolTipRole) == plan.proposed_name
     assert "结构化原因\n路径警告" in model.data(model.index(0, 1), Qt.ItemDataRole.ToolTipRole)
     assert model.data(model.index(0, 1), Qt.ItemDataRole.FontRole).bold()
     assert not model.data(model.index(0, 1), Qt.ItemDataRole.DecorationRole).isNull()

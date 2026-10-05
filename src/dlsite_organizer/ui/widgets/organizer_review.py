@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QKeyEvent, QPainter
-from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy
+from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QStyle, QStyleOptionFrame
 
 from dlsite_organizer.ui.delegates.organizer_delegates import paint_status_mark
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
@@ -32,6 +32,9 @@ class OrganizerPathDisplay(PathDisplay):
         super().__init__(copy_button=copy_button, compact=True)
         self.path_input.setFrame(False)
         self.path_input.setMinimumWidth(0)
+        self.path_input.installEventFilter(self)
+        if self.copy_button is not None:
+            self.copy_button.setToolTip("")
         self.setStyleSheet(f"""
             QWidget#pathDisplay QLineEdit#pathDisplayInput {{
               background: transparent;
@@ -51,19 +54,56 @@ class OrganizerPathDisplay(PathDisplay):
             }}
         """)
 
+    def set_path(self, value: str) -> None:
+        super().set_path(value)
+        self._update_path_tooltip()
+
+    def _update_path_tooltip(self) -> None:
+        option = QStyleOptionFrame()
+        option.initFrom(self.path_input)
+        rect = self.path_input.style().subElementRect(
+            QStyle.SubElement.SE_LineEditContents, option, self.path_input)
+        margins = self.path_input.textMargins()
+        width = max(0, rect.width() - margins.left() - margins.right() - 4)
+        text = self.text()
+        self.path_input.setToolTip(
+            text if self.path_input.fontMetrics().horizontalAdvance(text) > width else "")
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.path_input and event.type() in (QEvent.Type.Resize, QEvent.Type.ToolTip):
+            self._update_path_tooltip()
+        return super().eventFilter(watched, event)
+
 
 class OrganizerElidedLabel(QLabel):
     """One line of secondary context, with full text accessible on hover and to AT."""
 
     def __init__(self, text: str = "") -> None:
         super().__init__(text)
+        self._extra_tooltip = ""
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(0)
+        self.setAccessibleDescription(text)
 
     def setText(self, text: str) -> None:
         super().setText(text)
-        self.setToolTip(text)
+        self._extra_tooltip = ""
+        self._update_tooltip()
         self.setAccessibleDescription(text)
+
+    def _update_tooltip(self) -> None:
+        self.setToolTip(self._extra_tooltip or (
+            self.text() if self.fontMetrics().horizontalAdvance(self.text())
+            > self.contentsRect().width() else ""))
+
+    def set_extra_tooltip(self, text: str) -> None:
+        """Preserve genuinely additional diagnostics when available width changes."""
+        self._extra_tooltip = text
+        self._update_tooltip()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_tooltip()
 
     def minimumSizeHint(self) -> QSize:
         return QSize(0, self.fontMetrics().height() + 4)
@@ -105,8 +145,9 @@ class OrganizerSummary(QLabel):
         self.setText(f"共 {total} 项 · 本轮已完成 {completed} · 可执行 {ready} · "
                      f"不可执行 {blocked} · 含警告 {warning} · "
                      f"无需重命名 {unchanged} · 扫描跳过 {skipped}")
-        self.setToolTip(self.text() + "\n警告仅统计仍可执行、但建议检查的项目；与不可执行互斥。")
-        self.setAccessibleDescription(self.toolTip())
+        self.setToolTip("")
+        self.setAccessibleDescription(
+            self.text() + "\n警告仅统计仍可执行、但建议检查的项目；与不可执行互斥。")
         self.update()
 
     def clear_counts(self) -> None:

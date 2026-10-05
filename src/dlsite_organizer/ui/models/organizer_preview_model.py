@@ -79,19 +79,17 @@ class OrganizerPreviewModel(QAbstractTableModel):
             return plan.proposed_name or "—"
         if role == Qt.ItemDataRole.ToolTipRole:
             if column in (0, 1):
-                detail = plan_diagnostics(plan)
+                detail = "\n".join(line for line in plan_diagnostics(plan).splitlines()
+                                   if line != self.status_label(row))
                 # Concise diagnostics only; the detail pane keeps the full text.
                 return "\n".join(detail.splitlines()[:3])[:300] if detail else None
             if column == 2:
                 code = plan.work_code or "、".join(plan.work_codes) or "—"
-                work = plan.work
-                return (
-                    f"{code}\n{work.title}\n社团：{work.maker_name or '—'}"
-                    if work is not None else code
-                )
+                title = plan.work.title if plan.work is not None else plan.current_name
+                return f"{code}\n{title}"
             if column == 3:
-                return str(plan.source_path)
-            return str(plan.target_path) if plan.target_path is not None else plan.proposed_name
+                return plan.current_name
+            return plan.proposed_name
         if role == Qt.ItemDataRole.AccessibleTextRole and column in (0, 1):
             return f"{self.status_label(row)}。原因：{plan_diagnostics(plan)}"
         if role == Qt.ItemDataRole.TextAlignmentRole:

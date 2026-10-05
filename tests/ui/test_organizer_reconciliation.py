@@ -220,6 +220,7 @@ def test_refresh_failure_truth_retry_and_clear(qapp, review):
 
 def test_deterministic_partial_success_replans_failed_and_unattempted(qapp, review):
     page, _service, _executor, journal, root, _lookup = review
+    original_scope = dict(page.state.review_scope)
     class FailSecond(LocalRenameFilesystem):
         count = 0
 
@@ -234,6 +235,11 @@ def test_deterministic_partial_success_replans_failed_and_unattempted(qapp, revi
     assert (result.success_count, result.failed_count, result.not_executed_count) == (1, 1, 1)
     page._show_execution_result(result)
     _wait_for_scan_idle(qapp, page)
+    successes = {normalized_path_identity(op.source_path): op.target_path
+                 for op in result.operations if op.status is ExecutionStatus.SUCCESS}
+    assert tuple(page.state.review_scope.values()) == tuple(
+        successes.get(key, path) for key, path in original_scope.items())
+    assert tuple(p.source_path for p in page.state.plans) == tuple(page.state.review_scope.values())
     assert not page.state.stale and page.state.checked_ready_count == 0
     assert sum(page.state.completed(i) for i in range(len(page.state.plans))) == 1
     assert sum(plan.status is RenamePlanStatus.READY for plan in page.state.plans) == 2
@@ -262,8 +268,10 @@ def test_refresh_ownership_rejection_and_busy_scan_policy(qapp, review, conditio
     else:
         page.state.request_id += 1
     service.release.set()
+    scope = dict(page.state.review_scope)
     _wait_for_scan_idle(qapp, page)
     assert page.preview is old_preview and page.state.stale
+    assert page.state.review_scope == scope
     assert page.state.checked_ready_count == 0
     assert page.state.last_execution_result is result
     # Explicit late delivery cannot bypass ownership, even when hidden.
@@ -427,6 +435,8 @@ def test_empty_reconciliation_and_unmatched_targets_are_not_fabricated(qapp, rev
     page._show_execution_result(result)
     _wait_for_scan_idle(qapp, page)
     assert not page.state.plans and not page.state.stale
+    assert len(page.state.review_scope) == 4  # Omission doesn't silently change review intent.
+    assert page.clear_button.isEnabled()
     assert page.state.last_execution_result is result
     assert "absent from refreshed preview" in caplog.text
     assert page.empty_title_label.text() == "当前预览没有项目"

@@ -159,3 +159,49 @@ ownership rules. Recovery and journal failure take precedence over refresh banne
 and retries. Undo remains journal-driven and keeps the previous invalidation-only
 behavior; an Undo result clears any failed forward-refresh retry context and does
 not schedule a new scan. No executor/Undo/journal safety semantics are changed.
+
+## Phase 6.4 review scope and interaction contract
+
+The committed root owns the session; it does not define membership. State owns
+`review_scope`, an insertion-ordered dictionary of canonical source identities to
+concrete direct-child paths. It uses the same batch canonicalization as row keys
+and successful target matching. This session-only intent survives stale preview
+rows, navigation and skipped members; it is neither a second plan authority nor
+filesystem truth.
+
+Manual replacement creates scope from accepted plans and clears Completed/retry
+state. Append upserts paths without moving existing identities and appends new
+members unchecked. Removal deletes highlighted identities from scope (including
+the sparse model-reset path). Confirmed successful operations replace source
+identities with target identities at the same position; failed and unattempted
+members remain. Clear resets scope/overlay/retry, retaining journal and Undo facts.
+
+Automatic reconciliation and Retry capture `tuple(review_scope.values())` into
+the normal worker. `OrganizerService.refresh_preview_scope` uses explicit-path
+scanner validation in preserved order, fresh metadata lookup and Planner batch
+evaluation/finalization. The Planner still indexes actual root siblings for target
+occupancy; only supplied members become candidates. There is no root-discovery
+fallback. Missing/invalid members are omitted with fresh scoped `scan.skipped`
+diagnostics/counts; their scope intent remains until explicit removal/replacement
+or Clear. Empty refreshed previews still allow Clear. A scope with no visible
+rows continues enforcing same-root append ownership. Request/revision/settings
+generation gates and failed-refresh read-only/Undo behavior are unchanged.
+
+Bottom removal, the concise table context menu and the table-only Delete action
+call `remove_selected`. Right-click outside the selection selects that row and
+makes it current; inside a selection it preserves the group and updates current.
+Blank space opens no menu. Delete is a `WidgetShortcut` attached to the table,
+so root/path/text focus cannot remove rows. Removal remains preview-only and
+reuses service conflict re-evaluation.
+
+Organizer hover hints expose only elided text, icon semantics, or useful extra
+diagnostics/explanations. Summary count tooltips and plain status echoes are absent;
+accessible descriptions and full detail remain. Work elision checks both painted
+lines with their actual font weights/padding. Name columns use the style's text
+rectangle for the hovered cell. Labels/path fields adapt to available width.
+No whole-model hover measurement or per-row widget is introduced.
+
+Checkbox outer/hit geometry is unchanged. The checkmark now uses indicator-local
+floating-point points `(0.23, 0.49)`, `(0.43, 0.70)`, `(0.77, 0.30)` and a round
+1.7 logical-pixel stroke. Its visual bounds center on the floating-point box center,
+avoiding the shared status glyph's asymmetric bounds and integer-center rounding.

@@ -8,8 +8,20 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QResizeEvent
+from PySide6.QtCore import (
+    QEvent,
+    QItemSelectionModel,
+    QModelIndex,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import QAction, QKeySequence, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -45,6 +57,7 @@ from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.delegates.organizer_delegates import (
     OrganizerCheckDelegate,
     OrganizerStatusDelegate,
+    OrganizerTextDelegate,
     OrganizerWorkDelegate,
 )
 from dlsite_organizer.ui.models.organizer_preview_model import (
@@ -292,6 +305,15 @@ class OrganizerPage(QWidget):
         self._column_layout_timer.timeout.connect(self._resize_table_columns)
         self.table.viewport().installEventFilter(self)
         self.table.setModel(self.preview_model)
+        self.remove_action = QAction("从预览移除", self.table)
+        self.remove_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+        self.remove_action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self.remove_action.triggered.connect(self.remove_selected)
+        self.table.addAction(self.remove_action)
+        self.preview_menu = QMenu(self.table)
+        self.preview_menu.addAction(self.remove_action)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_preview_menu)
         self.preview_model.modelReset.connect(self._schedule_column_layout)
         self.preview_model.rowsInserted.connect(self._schedule_column_layout)
         self.preview_model.rowsRemoved.connect(self._schedule_column_layout)
@@ -323,6 +345,8 @@ class OrganizerPage(QWidget):
         self.table.setItemDelegateForColumn(0, OrganizerCheckDelegate(self.table))
         self.table.setItemDelegateForColumn(1, OrganizerStatusDelegate(self.table))
         self.table.setItemDelegateForColumn(2, OrganizerWorkDelegate(self.table))
+        for column in (3, 4):
+            self.table.setItemDelegateForColumn(column, OrganizerTextDelegate(self.table))
         self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.table.setMinimumHeight(150)
         self.table.hide()
@@ -1183,7 +1207,7 @@ class OrganizerPage(QWidget):
                     f"需要恢复的事务：{unresolved.transaction_id} · "
                     f"{unresolved.display_status.value}"
                 )
-                self.recent_transaction_label.setToolTip(
+                self.recent_transaction_label.set_extra_tooltip(
                     f"事务：{unresolved.transaction_id}\n根目录：{unresolved.root}\n"
                     f"状态：{unresolved.display_status.value}"
                 )
@@ -1214,7 +1238,7 @@ class OrganizerPage(QWidget):
         if transaction is None:
             self.undo_button.setEnabled(False)
             self.recent_transaction_label.setText("最近可撤销：无")
-            self.recent_transaction_label.setToolTip("")
+            self.recent_transaction_label.set_extra_tooltip("")
             self._refresh_status_banner()
             self._update_empty_state()
             return
@@ -1234,7 +1258,7 @@ class OrganizerPage(QWidget):
             self.recent_transaction_label.setText(
                 f"最近事务：{transaction.created_at:%Y-%m-%d %H:%M} · 已无可撤销项"
             )
-        self.recent_transaction_label.setToolTip(transaction.transaction_id)
+        self.recent_transaction_label.set_extra_tooltip(transaction.transaction_id)
         self._refresh_status_banner()
         self._update_empty_state()
 
@@ -1282,6 +1306,23 @@ class OrganizerPage(QWidget):
         self._refresh_detail(None)
         self._update_execute_button()
 
+    def _select_context_row(self, pos: QPoint) -> bool:
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return False
+        selection = self.table.selectionModel()
+        flags = QItemSelectionModel.SelectionFlag.NoUpdate
+        if not selection.isRowSelected(index.row(), QModelIndex()):
+            flags = (QItemSelectionModel.SelectionFlag.ClearAndSelect
+                     | QItemSelectionModel.SelectionFlag.Rows)
+        selection.setCurrentIndex(index, flags)
+        self.table.setFocus(Qt.FocusReason.MouseFocusReason)
+        return True
+
+    def _show_preview_menu(self, pos: QPoint) -> None:
+        if self._select_context_row(pos):
+            self.preview_menu.popup(self.table.viewport().mapToGlobal(pos))
+
     @Slot()
     def _view_unresolved_transaction(self) -> None:
         if self.state.unresolved_transaction_id is not None:
@@ -1317,8 +1358,9 @@ class OrganizerPage(QWidget):
         has_rows = self.state.preview is not None and bool(self.state.preview.plans)
         has_selection = bool(self.state.highlighted_keys)
         self.remove_button.setEnabled(active and has_rows and has_selection)
+        self.remove_action.setEnabled(self.remove_button.isEnabled())
         # Clearing is also the safe escape hatch for a stale preview.
-        self.clear_button.setEnabled(not self.is_busy() and has_rows)
+        self.clear_button.setEnabled(not self.is_busy() and self.state.preview is not None)
         self._update_action_labels()
         self._update_bulk_controls()
         self._update_empty_state()
@@ -1354,7 +1396,6 @@ class OrganizerPage(QWidget):
     def _update_preview_context(self) -> None:
         root = self.state.committed_preview_root
         self.preview_root_display.set_path(str(root) if root is not None else "")
-        self.preview_root_display.setToolTip(str(root) if root is not None else "")
         self._update_root_difference()
 
     def _update_root_difference(self) -> None:
@@ -1442,7 +1483,6 @@ class OrganizerPage(QWidget):
             status += f" · 另有 {len(plan.warnings)} 条警告"
         self.detail_summary_label.setText(f"当前行：{code} · {status}")
         self.detail_title_label.setText(title)
-        self.detail_title_label.setToolTip(title)
         self.detail_metadata_label.setText(metadata)
         self.detail_source_path.set_path(str(plan.source_path))
         target = str(plan.target_path) if plan.target_path is not None else (
@@ -1530,6 +1570,11 @@ class OrganizerPage(QWidget):
 
     def eventFilter(self, watched, event) -> bool:
         kind = event.type()
+        if (hasattr(self, "table") and watched is self.table.viewport()
+                and kind is QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.RightButton):
+            self._select_context_row(event.position().toPoint())
+            return True
         if hasattr(self, "drop_overlay"):
             if kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
                 paths = local_directory_paths(event.mimeData())

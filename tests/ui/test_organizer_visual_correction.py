@@ -268,7 +268,9 @@ def test_compact_layout_preserves_table_actions_and_summary_data(qapp, tmp_path)
         assert [kind for kind, _, _ in summary.visible_items()][:4] == [
             "", "ready", "blocked", "warning",
         ]
-        assert "无需重命名 100" in summary.toolTip() and "扫描跳过 3" in summary.toolTip()
+        assert not summary.toolTip()
+        assert "无需重命名 100" in summary.accessibleDescription()
+        assert "扫描跳过 3" in summary.accessibleDescription()
         assert "互斥" in summary.accessibleDescription()
         # Users can still expand details in compact mode without a periodic timer collapsing it.
         page.detail_toggle.setChecked(True)
