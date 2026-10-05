@@ -72,6 +72,9 @@ def test_list_transactions_is_bounded_ordered_and_preserves_legacy_nulls(tmp_pat
     completed_summary = transactions_by_id[completed.transaction_id]
     assert completed_summary.status is TransactionStatus.COMPLETED
     assert completed_summary.root == root
+    assert completed_summary.operation_count == 2
+    assert transactions_by_id[partial.transaction_id].operation_count == 1
+    assert transactions_by_id[unresolved.transaction_id].operation_count == 2
 
     # List rows are headers only; optional legacy fields and operations load on selection.
     completed_record = journal.get_transaction(completed.transaction_id)

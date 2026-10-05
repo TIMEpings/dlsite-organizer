@@ -37,7 +37,9 @@ def _cell_text(page: RenameHistoryPage, table_name: str, row: int, column: int) 
 
 @pytest.mark.parametrize("recovery_error", [None, "progress journal failed"])
 def test_unfinished_undo_shows_recovery_without_rewriting_forward_history(
-    qapp: QApplication, tmp_path: Path, recovery_error: str | None,
+    qapp: QApplication,
+    tmp_path: Path,
+    recovery_error: str | None,
 ) -> None:
     database = Database(tmp_path / "journal.sqlite3")
     database.initialize()
@@ -54,7 +56,10 @@ def test_unfinished_undo_shows_recovery_without_rewriting_forward_history(
     target.rename(source)  # Filesystem mutation happened, but progress is indeterminate.
     if recovery_error:
         journal.mark_undo_recovery_required(
-            transaction.transaction_id, 1, recovery_error, datetime.now(UTC),
+            transaction.transaction_id,
+            1,
+            recovery_error,
+            datetime.now(UTC),
         )
     before = journal.get_transaction(transaction.transaction_id)
     page = RenameHistoryPage(RenameHistoryService(journal))
@@ -64,9 +69,9 @@ def test_unfinished_undo_shows_recovery_without_rewriting_forward_history(
         assert item is not None
         assert "需要检查" in item.text()
         assert "事务状态：需要检查" in page.transaction_summary.text()
-        assert "此前事务状态：已完成" in page.recovery_label.text()
-        assert "恢复阶段：undo" in page.recovery_label.text()
-        assert "阻止新的重命名和普通撤销" in page.recovery_label.text()
+        assert "此前事务记录状态为：已完成" in page.recovery_label.text()
+        assert "恢复阶段：撤销" in page.recovery_label.text()
+        assert "整理页会继续阻止新的重命名和普通撤销" in page.recovery_banner.message_label.text()
         assert not page.observation_section.isHidden()
         assert _cell_text(page, "operations_table", 0, 1) == "成功"
         assert _cell_text(page, "operations_table", 0, 2) == "未撤销"
@@ -126,24 +131,24 @@ def test_successful_history_can_be_opened_without_mutating_files_or_journal(
     assert item is not None
     assert transaction.transaction_id not in item.text()
     assert "已完成" in item.text()
-    list_timestamp = item.text().splitlines()[1]
+    list_timestamp = item.text().splitlines()[0]
     assert list_timestamp == _format_local_wall_time(before.created_at)
     assert "(UTC" not in list_timestamp
-    assert not item.icon().isNull()
     assert page.detail_heading.text() == "事务详情"
     assert transaction.transaction_id not in page.detail_heading.text()
     assert page.transaction_id_value.text() == transaction.transaction_id
     assert "事务状态：已完成" in page.transaction_summary.text()
     assert page.transaction_summary.text().count("事务状态：") == 1
-    assert f"创建时间：{_format_datetime(before.created_at)}" in page.transaction_summary.text()
-    assert str(root) in page.transaction_summary.text()
+    assert f"记录时间：{_format_datetime(before.created_at)}" in page.journal_facts_label.text()
+    assert page.root_path_value.full_path == str(root)
     assert page.operations_table.rowCount() == 1
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
-    assert _cell_text(page, "operations_table", 0, 3) == str(source)
-    assert _cell_text(page, "operations_table", 0, 4) == str(target)
-    assert page.source_path_value.text() == str(source)
-    assert page.target_path_value.text() == str(target)
-    assert page.observation_section.isHidden()
+    assert _cell_text(page, "operations_table", 0, 3) == source.name
+    assert _cell_text(page, "operations_table", 0, 4) == target.name
+    assert page.source_path_value.full_path == str(source)
+    assert page.target_path_value.full_path == str(target)
+    assert not page.observation_section.isHidden()
+    assert page.observations_table.rowCount() == 1
     assert journal.get_transaction(transaction.transaction_id) == before
     assert sorted(path.name for path in root.iterdir()) == before_entries
     assert source.is_dir()
@@ -152,7 +157,134 @@ def test_successful_history_can_be_opened_without_mutating_files_or_journal(
     database.dispose()
 
 
-def test_transaction_detail_heading_has_no_duplicate_status_or_extra_top_gap(
+def test_current_path_observation_never_rewrites_a_successful_journal_fact(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "original"
+    target = root / "renamed"
+    source.mkdir()
+    transaction = journal.create_transaction(root, ((source, target),))
+    source.rename(target)
+    journal.mark_operation_success(transaction.transaction_id, 1, transaction.created_at)
+    journal.mark_transaction_completed(transaction.transaction_id, transaction.created_at)
+    before = journal.get_transaction(transaction.transaction_id)
+
+    page = RenameHistoryPage(RenameHistoryService(journal))
+    page.refresh_history()
+    assert "事务状态：已完成" in page.transaction_summary.text()
+    assert _cell_text(page, "operations_table", 0, 1) == "成功"
+    assert _cell_text(page, "observations_table", 0, 2) == "存在，目录"
+
+    target.rename(root / "moved-externally")
+    page.refresh_observations()
+
+    assert _cell_text(page, "observations_table", 0, 2) == "不存在"
+    assert "1 个不存在" in page.observation_summary.text()
+    assert "事务状态：已完成" in page.transaction_summary.text()
+    assert _cell_text(page, "operations_table", 0, 1) == "成功"
+    assert journal.get_transaction(transaction.transaction_id) == before
+    page.close()
+    database.dispose()
+
+
+def test_undone_history_keeps_forward_success_and_current_paths_separate(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    source = root / "original"
+    target = root / "renamed"
+    source.mkdir()
+    transaction = journal.create_transaction(root, ((source, target),))
+    source.rename(target)
+    journal.mark_operation_success(transaction.transaction_id, 1, transaction.created_at)
+    journal.mark_transaction_completed(transaction.transaction_id, transaction.created_at)
+    journal.begin_undo(transaction.transaction_id, datetime.now(UTC))
+    target.rename(source)
+    journal.mark_undo_success(transaction.transaction_id, 1, datetime.now(UTC))
+    journal.mark_transaction_undone(transaction.transaction_id, datetime.now(UTC))
+    before = journal.get_transaction(transaction.transaction_id)
+
+    page = RenameHistoryPage(RenameHistoryService(journal))
+    page.refresh_history()
+
+    assert before.status is TransactionStatus.UNDONE
+    assert before.operations[0].status.value == "success"
+    assert before.operations[0].undo_status.value == "success"
+    assert "事务状态：已撤销" in page.transaction_summary.text()
+    assert "重命名记录：1 项成功" in page.journal_facts_label.text()
+    assert "撤销记录：已完成 · 1 项已撤销" in page.journal_facts_label.text()
+    assert _cell_text(page, "observations_table", 0, 1) == "存在，目录"
+    assert _cell_text(page, "observations_table", 0, 2) == "不存在"
+    assert journal.get_transaction(transaction.transaction_id) == before
+    page.close()
+    database.dispose()
+
+
+def test_journal_refresh_preserves_the_selected_transaction_when_a_new_one_arrives(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    _create_completed_transactions(journal, root, 3)
+    page = RenameHistoryPage(RenameHistoryService(journal))
+    page.refresh_history()
+    page.transaction_list.setCurrentRow(1)
+    selected = page._selected_transaction
+    assert selected is not None
+    selected_id = selected.transaction_id
+
+    _create_completed_transactions(journal, root, 1)
+    page.refresh_after_mutation()
+
+    current_item = page.transaction_list.currentItem()
+    assert current_item is not None
+    assert current_item.data(page._TRANSACTION_ID_ROLE) == selected_id
+    assert page._selected_transaction is not None
+    assert page._selected_transaction.transaction_id == selected_id
+    first_item = page.transaction_list.item(0)
+    assert first_item is not None
+    assert first_item.data(page._TRANSACTION_ID_ROLE) != selected_id
+    page.close()
+    database.dispose()
+
+
+def test_empty_history_has_one_intentional_empty_state(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    page = RenameHistoryPage(RenameHistoryService(TransactionJournal(database)))
+
+    page.refresh_history()
+
+    assert page.transaction_list.count() == 0
+    assert page.transaction_stack.currentWidget() is page.master_empty_state
+    assert page.empty_title.text() == "暂无重命名历史"
+    assert "完成一次重命名后" in page.empty_description.text()
+    assert page.history_detail.isHidden()
+    assert page.transaction_id_value.text() == ""
+    assert page.operations_table.rowCount() == 0
+    page.close()
+    database.dispose()
+
+
+def test_transaction_detail_heading_has_no_duplicate_status_and_summary_is_tight(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
@@ -178,16 +310,20 @@ def test_transaction_detail_heading_has_no_duplicate_status_or_extra_top_gap(
     assert page.query_status_label.isHidden()
     assert page.transaction_summary.text().count("事务状态：") == 1
     assert "事务状态：" not in page.recovery_label.text()
-    metadata_gap = (
-        page.transaction_summary.geometry().top() - page.detail_heading.geometry().bottom() - 1
+    summary_gap = (
+        page.transaction_summary.geometry().top()
+        - page.transaction_timestamp.geometry().bottom()
+        - 1
     )
-    assert metadata_gap <= page.detail_layout.spacing()
+    history_layout = page.history_detail.layout()
+    assert history_layout is not None
+    assert summary_gap <= history_layout.spacing()
 
     page.close()
     database.dispose()
 
 
-def test_transaction_master_width_is_fixed_from_font_and_detail_uses_remaining_space(
+def test_transaction_master_width_is_resizable_and_detail_uses_remaining_space(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
@@ -208,15 +344,16 @@ def test_transaction_master_width_is_fixed_from_font_and_detail_uses_remaining_s
     master = page.findChild(QWidget, "renameHistoryMaster")
     assert splitter is not None
     assert master is not None
-    assert splitter.handleWidth() == 0
-    assert master.minimumWidth() == master.maximumWidth() == master.width()
+    assert splitter.handleWidth() >= 4
+    assert master.minimumWidth() == 232
+    assert master.maximumWidth() == 300
+    assert 232 <= master.width() <= 300
 
     first_item = page.transaction_list.item(0)
     assert first_item is not None
-    timestamp = first_item.text().splitlines()[1]
+    timestamp = first_item.text().splitlines()[0]
     timestamp_width = page.transaction_list.fontMetrics().horizontalAdvance(timestamp)
-    icon_and_padding = page.transaction_list.iconSize().width() + 8
-    assert page.transaction_list.viewport().width() - icon_and_padding >= timestamp_width
+    assert page.transaction_list.viewport().width() >= timestamp_width
 
     for control in (page.newer_button, page.older_button, page.refresh_button):
         position = control.mapTo(master, QPoint(0, 0))
@@ -233,6 +370,11 @@ def test_transaction_master_width_is_fixed_from_font_and_detail_uses_remaining_s
     assert page.detail_scroll.width() == initial_detail_width + 200
     assert splitter.sizes()[0] == master.width()
     assert splitter.sizes()[1] == page.detail_scroll.width()
+
+    splitter.setSizes([290, splitter.width() - 296])
+    qapp.processEvents()
+    assert 232 <= master.width() <= 300
+    assert page.detail_scroll.width() > master.width()
 
     page.close()
     database.dispose()
@@ -274,26 +416,26 @@ def test_long_paths_and_errors_remain_inspectable_without_expanding_rows(
     table = page.operations_table
     assert table.rowCount() == 2
     assert table.wordWrap() is False
-    assert table.rowHeight(0) <= 30
+    assert table.rowHeight(0) <= 32
     assert table.rowHeight(1) == table.rowHeight(0)
     assert table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     source_item = table.item(0, 3)
     target_item = table.item(0, 4)
-    assert source_item is not None and source_item.text() == str(before.operations[0].source_path)
-    assert target_item is not None and target_item.text() == str(before.operations[0].target_path)
-    assert source_item.toolTip() == source_item.text()
-    assert target_item.toolTip() == target_item.text()
-    assert page.source_path_value.text() == source_item.text()
-    assert page.target_path_value.text() == target_item.text()
+    assert source_item is not None and source_item.text() == before.operations[0].source_path.name
+    assert target_item is not None and target_item.text() == before.operations[0].target_path.name
+    assert source_item.toolTip() == str(before.operations[0].source_path)
+    assert target_item.toolTip() == str(before.operations[0].target_path)
+    assert page.source_path_value.full_path == str(before.operations[0].source_path)
+    assert page.target_path_value.full_path == str(before.operations[0].target_path)
     assert page.execution_error_value.toPlainText() == long_error
 
     page.copy_source_path_button.click()
-    assert qapp.clipboard().text() == source_item.text()
+    assert qapp.clipboard().text() == str(before.operations[0].source_path)
 
     table.setCurrentCell(1, 0)
-    assert page.operation_sequence_label.text() == "记录序号：2"
-    assert page.source_path_value.text() == str(before.operations[1].source_path)
-    assert page.target_path_value.text() == str(before.operations[1].target_path)
+    assert page.operation_sequence_label.text() == "操作记录序号：2"
+    assert page.source_path_value.full_path == str(before.operations[1].source_path)
+    assert page.target_path_value.full_path == str(before.operations[1].target_path)
     assert page.execution_error_value.toPlainText() == before.operations[1].error
     assert journal.get_transaction(transaction.transaction_id) == before
 
@@ -338,9 +480,9 @@ def test_many_operation_rows_scroll_and_select_in_deterministic_order(
     table.setCurrentCell(operation_count - 1, 0)
     qapp.processEvents()
     assert _cell_text(page, "operations_table", operation_count - 1, 0) == "80"
-    assert page.operation_sequence_label.text() == "记录序号：80"
-    assert page.source_path_value.text().endswith("source-079")
-    assert page.target_path_value.text().endswith("target-079")
+    assert page.operation_sequence_label.text() == "操作记录序号：80"
+    assert page.source_path_value.full_path.endswith("source-079")
+    assert page.target_path_value.full_path.endswith("target-079")
 
     page.resize(820, 700)
     qapp.processEvents()
@@ -388,8 +530,8 @@ def test_operation_selection_readability_and_column_sizing(
     assert header.sectionResizeMode(3) == QHeaderView.ResizeMode.Stretch
     assert header.sectionResizeMode(4) == QHeaderView.ResizeMode.Stretch
     assert table.columnWidth(0) < table.columnWidth(1)
-    assert table.columnWidth(1) <= table.fontMetrics().horizontalAdvance("预检失败") + 20
-    assert table.columnWidth(2) <= table.fontMetrics().horizontalAdvance("未撤销") + 20
+    assert table.columnWidth(1) <= 120
+    assert table.columnWidth(2) <= 120
 
     for base_hex, highlight_hex, text_hex in (
         ("#ffffff", "#2463eb", "#18202b"),
@@ -407,6 +549,79 @@ def test_operation_selection_readability_and_column_sizing(
 
     assert page._selected_transaction is not None
     assert page._selected_transaction.transaction_id == transaction.transaction_id
+    page.close()
+    database.dispose()
+
+
+def test_technical_details_are_collapsible_and_follow_the_selected_transaction(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    _create_completed_transactions(journal, root, 2)
+    transactions = journal.list_transactions(limit=2)
+    newest_id, older_id = (item.transaction_id for item in transactions)
+
+    page = RenameHistoryPage(RenameHistoryService(journal))
+    page.refresh_history()
+
+    assert not page.technical_toggle.isChecked()
+    assert page.technical_section.isHidden()
+    first_item = page.transaction_list.item(0)
+    assert first_item is not None
+    assert newest_id not in first_item.text()
+    page.technical_toggle.click()
+    assert not page.technical_section.isHidden()
+    assert page.transaction_id_value.text() == newest_id
+    assert "原始事务状态：completed" in page.technical_facts_label.text()
+
+    page.transaction_list.setCurrentRow(1)
+    assert page.transaction_id_value.text() == older_id
+    assert newest_id not in page.technical_facts_label.text()
+    assert not page.technical_section.isHidden()
+    page.technical_toggle.click()
+    assert page.technical_section.isHidden()
+    page.close()
+    database.dispose()
+
+
+@pytest.mark.parametrize("operation_count", [10, 100, 1000])
+def test_large_transactions_keep_bounded_scrollable_table_views(
+    qapp: QApplication,
+    tmp_path: Path,
+    operation_count: int,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    transaction = journal.create_transaction(
+        root,
+        tuple(
+            (root / f"source-{index:04}", root / f"target-{index:04}")
+            for index in range(operation_count)
+        ),
+    )
+    journal.mark_transaction_completed(transaction.transaction_id, transaction.created_at)
+
+    page = RenameHistoryPage(RenameHistoryService(journal))
+    page.resize(1160, 800)
+    page.show()
+    widget_count_before = len(page.findChildren(QWidget))
+    page.refresh_history()
+    qapp.processEvents()
+
+    assert page.operations_table.rowCount() == operation_count
+    assert page.observations_table.rowCount() == operation_count
+    assert page.operations_table.verticalScrollBar().maximum() > 0
+    assert page.observations_table.verticalScrollBar().maximum() > 0
+    assert page.operations_table.cellWidget(0, 0) is None
+    assert len(page.findChildren(QWidget)) == widget_count_before
     page.close()
     database.dispose()
 
@@ -493,9 +708,7 @@ def test_unresolved_detail_shows_recovery_facts_and_separate_observations(
         transaction.created_at,
     )
     before = journal.get_transaction(transaction.transaction_id)
-    before_entries = sorted(
-        (path.name, path.is_dir(), path.is_file()) for path in root.iterdir()
-    )
+    before_entries = sorted((path.name, path.is_dir(), path.is_file()) for path in root.iterdir())
 
     page = RenameHistoryPage(RenameHistoryService(journal))
     page.refresh_history()
@@ -504,10 +717,10 @@ def test_unresolved_detail_shows_recovery_facts_and_separate_observations(
     assert page.transaction_id_value.text() == transaction.transaction_id
     assert "事务状态：需要检查" in page.transaction_summary.text()
     recovery_text = page.recovery_label.text()
-    assert "恢复阶段：forward" in recovery_text
-    assert "恢复序号：2" in recovery_text
+    assert "恢复阶段：重命名执行" in recovery_text
+    assert "操作序号：2" in recovery_text
     assert "journal update was interrupted" in recovery_text
-    assert "阻止新的重命名和普通撤销" in recovery_text
+    assert "整理页会继续阻止新的重命名和普通撤销" in page.recovery_banner.message_label.text()
 
     assert page.operations_table.rowCount() == 2
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
@@ -525,9 +738,7 @@ def test_unresolved_detail_shows_recovery_facts_and_separate_observations(
     assert "原目录" not in _cell_text(page, "observations_table", 0, 2)
 
     assert journal.get_transaction(transaction.transaction_id) == before
-    after_entries = sorted(
-        (path.name, path.is_dir(), path.is_file()) for path in root.iterdir()
-    )
+    after_entries = sorted((path.name, path.is_dir(), path.is_file()) for path in root.iterdir())
     assert after_entries == before_entries
     page.close()
     database.dispose()
@@ -561,10 +772,11 @@ def test_filesystem_observation_failure_does_not_hide_transaction_facts(
     assert page.transaction_id_value.text() == transaction.transaction_id
     assert "recovery record" in page.recovery_label.text()
     source_observation = _cell_text(page, "observations_table", 0, 1)
-    assert source_observation.startswith("无法检查当前路径状态")
+    assert source_observation.startswith("无法确认当前状态")
     assert "denied: source" in source_observation
     assert source_observation.endswith("…")
     assert len(source_observation) < 340
+    assert page.observation_status_banner.title_label.text() == "当前状态暂时无法确认"
     page.close()
     database.dispose()
 
@@ -642,10 +854,16 @@ def test_pagination_handles_exact_and_partial_last_pages(
 
         page.older_button.click()
         assert page.page_label.text().startswith("第 2 页")
+        assert page._selected_transaction is not None
+        preserved_selection = page._selected_transaction.transaction_id
         _create_completed_transactions(journal, root, 1)
         page.refresh_after_mutation()
-        assert page.page_label.text().startswith("第 1 页")
-        assert page.transaction_list.count() == 50
+        assert page.page_label.text().startswith("第 2 页")
+        assert page._selected_transaction is not None
+        assert page._selected_transaction.transaction_id == preserved_selection
+        assert page.transaction_list.count() == min(
+            page.PAGE_SIZE, transaction_count + 1 - page.PAGE_SIZE
+        )
 
     page.close()
     database.dispose()

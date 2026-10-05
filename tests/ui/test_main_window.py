@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer import __version__
+from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.rename_journal import TransactionJournal
@@ -210,6 +211,69 @@ def test_sidebar_arrow_keys_keep_keyboard_navigation_functional(
         assert window.pages.currentWidget() is window.rename_history_page
     finally:
         window.close()
+
+
+def test_history_selection_survives_navigation_and_hidden_journal_refresh(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    root = tmp_path / "library"
+    root.mkdir()
+    for index in range(3):
+        transaction = journal.create_transaction(
+            root,
+            ((root / f"source-{index}", root / f"target-{index}"),),
+        )
+        journal.mark_operation_success(
+            transaction.transaction_id,
+            1,
+            transaction.created_at,
+        )
+        journal.mark_transaction_completed(transaction.transaction_id, transaction.created_at)
+
+    signals = RuntimeSignals()
+    window = MainWindow(
+        LookupService(FakeProvider(), NamingService()),
+        CoverService(),
+        runtime_signals=signals,
+        rename_history_service=RenameHistoryService(journal),
+    )
+    try:
+        window.navigate_to(MainPage.HISTORY)
+        history = window.rename_history_page
+        history.transaction_list.setCurrentRow(1)
+        selected = history._selected_transaction
+        assert selected is not None
+        selected_id = selected.transaction_id
+
+        window.navigate_to(MainPage.ORGANIZER)
+        newest = journal.create_transaction(
+            root,
+            ((root / "new-source", root / "new-target"),),
+        )
+        journal.mark_operation_success(
+            newest.transaction_id,
+            1,
+            newest.created_at,
+        )
+        journal.mark_transaction_completed(newest.transaction_id, newest.created_at)
+        signals.notify_mutation_history_changed()
+        assert history._selected_transaction is not None
+        assert history._selected_transaction.transaction_id == selected_id
+
+        window.navigate_to(MainPage.HISTORY)
+        current_item = history.transaction_list.currentItem()
+        assert current_item is not None
+        assert current_item.data(history._TRANSACTION_ID_ROLE) == selected_id
+        assert history._selected_transaction is not None
+        assert history._selected_transaction.transaction_id == selected_id
+        assert history.transaction_list.count() == 4
+    finally:
+        window.close()
+        database.dispose()
 
 
 def test_unresolved_organizer_link_opens_read_only_transaction_history(
