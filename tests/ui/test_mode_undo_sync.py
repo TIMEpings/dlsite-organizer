@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.services.test_lookup import FakeProvider
+from tests.services.test_undo_service import FailOnceFilesystem
 
 from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import AppSettings, SettingsService
-from dlsite_organizer.domain.rename_execution import TransactionStatus
+from dlsite_organizer.domain.rename_execution import TransactionStatus, UndoStatus
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.rename_journal import TransactionJournal
@@ -104,6 +106,149 @@ def _connect_mode_switch(full: MainWindow, lightweight: LightweightWindow) -> No
 
     lightweight.full_mode_requested.connect(show_full)
     full.lightweight_requested.connect(show_lightweight)
+
+
+@pytest.mark.parametrize("outcome", ["preflight", "cancel", "first_failure", "resumed_failure",
+                                    "success", "partial", "refresh_failure", "recovery",
+                                    "different_root"])
+def test_organizer_undo_uses_result_despite_runtime_journal_notifications(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    database, journal, signals, full, lightweight = _windows(tmp_path)
+    page = full.organizer_page
+    service = page._organizer_service
+    executor = page._execution_service
+    assert executor is not None
+    root = tmp_path / "library"
+    root.mkdir()
+    for code in ("RJ000001", "RJ000002", "RJ000003", "RJ000005"):
+        (root / f"old {code}").mkdir()
+    notifications = []
+    signals.mutation_history_changed.connect(lambda: notifications.append(True))
+    try:
+        full.show()
+        initial = service.preview(root)
+        execution = executor.execute(root, initial.plans[:2], confirmed=True)
+        qapp.processEvents()
+        if outcome == "resumed_failure":
+            partial = UndoService(journal, filesystem=FailOnceFilesystem(
+                execution.operations[0].target_path.name)).undo(
+                    execution.transaction_id, confirmed=True)
+            assert partial.success_count == 1
+        if outcome == "different_root":
+            other = tmp_path / "other"
+            other.mkdir()
+            (other / "old RJ000004").mkdir()
+            executor.execute(other, service.preview(other).plans, confirmed=True)
+            qapp.processEvents()
+        if outcome == "preflight":
+            execution.operations[0].source_path.mkdir()  # Real preflight occupancy rejection.
+        page.set_preview(service.preview(root))
+        # Keep the unrelated READY row unchecked to prove check intent survives too.
+        ready_row = next(i for i, p in enumerate(page.state.plans) if p.work_code == "RJ000003")
+        # Leave a READY row checked so Execute eligibility can be compared.
+        page.preview_model.bulk_check("select")
+        page.preview_model.setData(page.preview_model.index(ready_row, 0),
+                                   Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        preview = page.preview
+        plans, keys = page.state.plans, page.state.row_keys
+        checks = tuple(page.state.checked(i) for i in range(len(plans)))
+        scope = dict(page.state.review_scope)
+        request, revision = page.state.request_id, page.state.preview_revision
+        eligible = page.execute_button.isEnabled()
+        assert eligible and page.state.preview_current
+        refreshes = []
+        refresh = service.refresh_preview_scope
+
+        def scoped(*args, **kwargs):
+            refreshes.append(args)
+            if outcome == "refresh_failure":
+                raise RuntimeError("controlled refresh failure")
+            return refresh(*args, **kwargs)
+
+        monkeypatch.setattr(service, "refresh_preview_scope", scoped)
+        if outcome in {"partial", "first_failure", "resumed_failure"}:
+            index = 1 if outcome == "first_failure" else 0
+            page._undo_service = UndoService(
+                journal,
+                filesystem=FailOnceFilesystem(execution.operations[index].target_path.name),
+                mutation_history_changed=signals.notify_mutation_history_changed)
+        if outcome == "recovery":
+            def fail(*args):
+                raise OSError("controlled journal failure after filesystem mutation")
+
+            monkeypatch.setattr(journal, "mark_undo_success", fail)
+        monkeypatch.setattr(QMessageBox, "exec", lambda _dialog: (
+            QMessageBox.StandardButton.Cancel if outcome == "cancel"
+            else QMessageBox.StandardButton.Yes))
+        notifications.clear()
+        stale_transitions = []
+        invalidate = page._invalidate_preview
+
+        def invalidated(reason):
+            stale_transitions.append(reason)
+            invalidate(reason)
+
+        monkeypatch.setattr(page, "_invalidate_preview", invalidated)
+        page.undo_button.click()
+        _wait_for(qapp, lambda: not page.is_busy())
+        result = page.state.last_undo_result
+        no_mutation = outcome in {"preflight", "cancel", "first_failure", "resumed_failure"}
+        if outcome != "cancel":
+            assert result is not None and notifications
+        if outcome == "preflight":
+            assert result is not None and result.status is TransactionStatus.FAILED
+            assert result.success_count == 0
+            assert all(op.undo_status is UndoStatus.CONFLICT for op in result.operations)
+            assert "整批未执行" in page.status_label.text()
+        if outcome == "resumed_failure":
+            assert result is not None and result.success_count == 1  # Historical success only.
+        if no_mutation or outcome == "different_root":
+            assert page.preview is preview and page.state.preview_current
+            assert page.state.plans == plans and page.state.row_keys == keys
+            assert tuple(page.state.checked(i) for i in range(len(plans))) == checks
+            assert page.state.review_scope == scope
+            assert (page.state.request_id, page.state.preview_revision) == (request, revision)
+            assert not refreshes and not stale_transitions
+            assert page.state.stale_reason is None and page.status_banner.isHidden()
+            assert page.execute_button.isEnabled() == eligible and page.state.checks_editable
+            if outcome == "preflight":
+                # Process the actual 6500 ms timer, queued runtime signals and worker cleanup.
+                _wait_for(qapp, lambda: not page._feedback_timer.isActive(), timeout_seconds=8)
+                qapp.processEvents()
+                assert not page.status_label.text()
+                assert page.state.preview_current and page.state.stale_reason is None
+                assert page.status_banner.isHidden() and not stale_transitions and not refreshes
+                assert page.state.plans == plans and page.state.row_keys == keys
+                assert tuple(page.state.checked(i) for i in range(len(plans))) == checks
+                assert page.execute_button.isEnabled() == eligible
+        elif outcome == "recovery":
+            assert result is not None and result.status is TransactionStatus.RECOVERY_REQUIRED
+            assert not refreshes and page.state.unresolved_transaction_id is not None
+            assert page.state.stale and not page.execute_button.isEnabled()
+            assert page.status_banner.title_label.text() == "存在未解决的重命名事务"
+            assert page.retry_refresh_button.isHidden()
+        else:
+            assert len(refreshes) == 1 and page.state.request_id == request + 1
+            assert result is not None
+            assert result.success_count == (1 if outcome == "partial" else 2)
+            expected_scope = tuple(
+                op.source_path if op.undo_status is UndoStatus.SUCCESS else op.target_path
+                for op in result.operations)
+            assert tuple(page.state.review_scope.values())[:2] == expected_scope
+            if outcome == "refresh_failure":
+                assert page.state.stale_reason is PreviewStaleReason.REFRESH_FAILED
+                assert page.retry_refresh_button.isEnabled() and not page.execute_button.isEnabled()
+                assert page.preview is preview
+            else:
+                assert page.state.preview_current and page.state.stale_reason is None
+                assert page.state.checks_editable
+                assert page.execute_button.isEnabled() == page.state.can_execute
+    finally:
+        _wait_for(qapp, lambda: not page.is_busy())
+        full.close()
+        lightweight.close()
+        database.dispose()
 
 
 def test_quick_rename_then_full_mode_undo_needs_no_restart(

@@ -875,7 +875,13 @@ class OrganizerPage(QWidget):
 
     @Slot()
     def mark_filesystem_changed(self) -> None:
-        """Invalidate an existing preview after a shared filesystem mutation."""
+        """Handle shared journal notifications; owned Undo results decide preview truth."""
+        # Undo journal notifications include preflight conflicts and intent writes.
+        # Our active Undo's authoritative result owns invalidation/reconciliation;
+        # the generic notification cannot establish that a filesystem change occurred.
+        if self.state.busy is BusyOperation.UNDO:
+            self.refresh_mutation_state()
+            return
         self._invalidate_preview(PreviewStaleReason.FILESYSTEM_CHANGED)
         self._refresh_recent_transaction()
         self._update_execute_button()
