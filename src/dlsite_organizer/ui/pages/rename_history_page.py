@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, tzinfo
 
-from PySide6.QtCore import QSize, Qt, Slot
-from PySide6.QtGui import QBrush, QColor, QPalette, QPen
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Slot
+from PySide6.QtGui import QBrush, QColor, QPainter, QPalette, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -56,6 +56,7 @@ class RenameHistoryPage(QWidget):
 
     PAGE_SIZE = 50
     _TRANSACTION_ID_ROLE = Qt.ItemDataRole.UserRole
+    _MASTER_STATUS_ROLE = Qt.ItemDataRole.UserRole + 1
 
     def __init__(
         self,
@@ -1072,6 +1073,7 @@ class RenameHistoryPage(QWidget):
         item = QListWidgetItem(f"{local_time}\n{count} 项 · {status}")
         item.setSizeHint(QSize(0, 58))
         item.setData(self._TRANSACTION_ID_ROLE, transaction.transaction_id)
+        item.setData(self._MASTER_STATUS_ROLE, transaction.display_status)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, accessible_text)
         item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, accessible_text)
         self.transaction_list.addItem(item)
@@ -1359,6 +1361,57 @@ def _durable_status_color(operation: RenameOperation, column: int) -> QColor:
     return QColor(color)
 
 
+def _master_status_visual(status: TransactionStatus) -> tuple[str, str]:
+    """UI-only shape/color mapping of the existing durable projection."""
+    return {
+        TransactionStatus.PENDING: ("pending", LIGHT_COLORS.text_secondary),
+        TransactionStatus.COMPLETED: ("success", LIGHT_COLORS.success),
+        TransactionStatus.PARTIAL: ("partial", LIGHT_COLORS.warning),
+        TransactionStatus.FAILED: ("error", LIGHT_COLORS.error),
+        TransactionStatus.UNDONE: ("reversed", LIGHT_COLORS.text_secondary),
+        TransactionStatus.UNDO_PARTIAL: ("partial", LIGHT_COLORS.warning),
+        TransactionStatus.RECOVERY_REQUIRED: ("attention", LIGHT_COLORS.warning),
+    }[status]
+
+
+def _paint_master_status_mark(painter, rect: QRectF, shape: str, color: str) -> None:
+    """Small vector marks using the application's rounded line-icon convention."""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.translate(rect.topLeft())
+    painter.setPen(
+        QPen(
+            QColor(color),
+            1.5,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+    )
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    if shape == "success":
+        painter.drawPolyline(QPolygonF([QPointF(2, 7), QPointF(5.5, 10.5), QPointF(12, 3.5)]))
+    elif shape == "reversed":
+        painter.drawArc(QRectF(3, 3, 9, 9), -90 * 16, 270 * 16)
+        painter.drawPolyline(QPolygonF([QPointF(6, 1), QPointF(3, 3), QPointF(6, 5)]))
+    elif shape == "error":
+        painter.drawLine(QPointF(3, 3), QPointF(11, 11))
+        painter.drawLine(QPointF(11, 3), QPointF(3, 11))
+    elif shape == "attention":
+        painter.drawPolygon(QPolygonF([QPointF(7, 1.5), QPointF(13, 12), QPointF(1, 12)]))
+        painter.drawLine(QPointF(7, 5), QPointF(7, 8))
+        painter.drawPoint(QPointF(7, 10))
+    else:
+        painter.drawEllipse(QRectF(2, 2, 10, 10))
+        if shape == "partial":
+            painter.setBrush(QColor(color))
+            painter.drawPie(QRectF(2, 2, 10, 10), 90 * 16, 180 * 16)
+        else:
+            painter.drawLine(QPointF(7, 4), QPointF(7, 7))
+            painter.drawLine(QPointF(7, 7), QPointF(10, 8))
+    painter.restore()
+
+
 class _HistoryMasterDelegate(QStyledItemDelegate):
     """Compact two-line history entries with a local selection accent."""
 
@@ -1388,11 +1441,26 @@ class _HistoryMasterDelegate(QStyledItemDelegate):
         font.setBold(False)
         painter.setFont(font)
         painter.setPen(QColor(LIGHT_COLORS.text_secondary))
+        secondary = rect.adjusted(12, 29, -8, -5)
+        count, separator, label = (lines[1] if len(lines) > 1 else "").partition(" · ")
+        prefix = count + separator
         painter.drawText(
-            rect.adjusted(12, 29, -8, -5),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            lines[1] if len(lines) > 1 else "",
+            secondary, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, prefix
         )
+        status = index.data(RenameHistoryPage._MASTER_STATUS_ROLE)
+        if status is not None:
+            shape, color = _master_status_visual(TransactionStatus(status))
+            left = secondary.left() + painter.fontMetrics().horizontalAdvance(prefix)
+            mark = QRectF(left, secondary.center().y() - 7, 14, 14)
+            _paint_master_status_mark(painter, mark, shape, color)
+            painter.setPen(QColor(color))
+            text_rect = secondary.adjusted(left - secondary.left() + 18, 0, 0, 0)
+            shown = painter.fontMetrics().elidedText(
+                label, Qt.TextElideMode.ElideRight, max(0, text_rect.width())
+            )
+            painter.drawText(
+                text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, shown
+            )
         if option.state & QStyle.StateFlag.State_HasFocus:
             painter.setPen(QColor(LIGHT_COLORS.focus))
             painter.drawLine(rect.bottomLeft(), rect.bottomRight())
