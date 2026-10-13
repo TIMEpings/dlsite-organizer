@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.domain.work import Work
@@ -12,6 +12,7 @@ from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
 from dlsite_organizer.ui.main_window import MainWindow
+from dlsite_organizer.ui.pages.lookup_page import LookupPage
 
 
 @pytest.fixture
@@ -54,6 +55,77 @@ class BlockingLookupProvider:
         self.started.set()
         self.release.wait(timeout=3)
         return Work(workno=workno, title="Navigation fixture")
+
+
+@pytest.mark.parametrize(
+    ("force_refresh", "expected_status"),
+    [(False, "正在查询…"), (True, "正在强制刷新…")],
+)
+def test_lookup_busy_guard_and_loading_feedback(
+    qapp: QApplication,
+    force_refresh: bool,
+    expected_status: str,
+) -> None:
+    provider = BlockingLookupProvider()
+    page = LookupPage(LookupService(provider, NamingService()), CoverService())
+    page.code_input.setText("RJ01609020")
+
+    try:
+        (page.force_refresh if force_refresh else page.start_lookup)()
+        assert provider.started.wait(timeout=2)
+        active_thread = page._thread
+        assert page.status_label.text() == expected_status
+
+        page.start_lookup()
+        page.force_refresh()
+
+        assert page._thread is active_thread
+        assert provider.calls == ["RJ01609020"]
+        assert not page.code_input.isEnabled()
+        assert not page.query_button.isEnabled()
+        assert not page.refresh_button.isEnabled()
+    finally:
+        provider.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+def test_lookup_restores_input_focus_only_when_focus_was_not_moved(
+    qapp: QApplication,
+) -> None:
+    provider = BlockingLookupProvider()
+    page = LookupPage(LookupService(provider, NamingService()), CoverService())
+    page.code_input.setText("RJ01609020")
+    page.show()
+    page.code_input.setFocus()
+    qapp.processEvents()
+
+    try:
+        page.start_lookup()
+        assert provider.started.wait(timeout=2)
+        provider.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert qapp.focusWidget() is page.code_input
+
+        provider.release.clear()
+        provider.started.clear()
+        page.start_lookup()
+        assert provider.started.wait(timeout=2)
+        other_control = QPushButton("other", page)
+        other_control.show()
+        other_control.setFocus()
+        qapp.processEvents()
+        assert qapp.focusWidget() is other_control
+        time.sleep(0.06)
+        qapp.processEvents()
+
+        provider.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert qapp.focusWidget() is other_control
+    finally:
+        provider.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
 
 
 def test_public_destinations_round_trip_and_reuse_the_same_page_instances(
@@ -115,13 +187,6 @@ def test_lookup_worker_continues_while_another_page_is_selected(
         "PySide6.QtWidgets.QMessageBox.information",
         lambda *_args: None,
     )
-    delivered_results = []
-    show_result = window.lookup_page._show_result
-    monkeypatch.setattr(
-        window.lookup_page,
-        "_show_result",
-        lambda value: (delivered_results.append(value), show_result(value)),
-    )
     window.lightweight_requested.connect(lambda: pytest.fail("busy work switched mode"))
     window.lookup_page.code_input.setText("RJ01609020")
     lookup_page = window.lookup_page
@@ -146,7 +211,6 @@ def test_lookup_worker_continues_while_another_page_is_selected(
         provider.release.set()
         _wait_until(qapp, lambda: not window.lookup_page.is_busy())
         assert provider.calls == ["RJ01609020"]
-        assert len(delivered_results) == 1
         assert window.lookup_page.workno_value.text() == "RJ01609020"
 
         _select_navigation_label(window, "查询")

@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QEventLoop, Qt, QTimer
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel
 from tests.services.test_lookup import FakeProvider
 
@@ -62,6 +63,24 @@ def test_lookup_page_uses_generic_work_code_placeholder_and_subtitle(
     assert "输入 RJcode" not in labels
     assert page.status_label.text() == "请输入作品编号开始查询。"
     assert page.status_label.property("state") != "error"
+    assert page.identity_frame.isHidden()
+    assert page.name_section.isHidden()
+    assert page.metadata_frame.isHidden()
+    page.close()
+
+
+def test_lookup_page_idle_and_no_result_error_hide_result_sections(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+
+    page._show_error("未找到作品。")
+
+    assert page.identity_frame.isHidden()
+    assert page.name_section.isHidden()
+    assert page.metadata_frame.isHidden()
+    assert page.status_label.text() == "未找到作品。"
+    assert not page.status_label.isHidden()
     page.close()
 
 
@@ -213,6 +232,77 @@ def test_lookup_page_shows_delivery_freshness(
     )
 
     assert label in page.status_label.text()
+    page.close()
+
+
+def test_copy_acknowledgement_does_not_replace_freshness(qapp: QApplication) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ01609020", title="标题"),
+            formatted_name="[RJ01609020] 标题",
+            freshness=LookupFreshness.CACHE_STALE_FALLBACK,
+        )
+    )
+
+    page.copy_name()
+
+    assert page.status_label.text() == "查询完成 · 旧缓存"
+    assert page.copy_feedback.text() == "已复制名称"
+    assert QApplication.clipboard().text() == "[RJ01609020] 标题"
+    page.close()
+
+
+def test_lookup_page_provider_text_is_plain_and_name_is_selectable(qapp: QApplication) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    title = "<b>不应加粗</b> " + "很长的タイトル" * 15
+    name = "[RJ00000001] " + "Folder/" * 35
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ00000001", title=title),
+            formatted_name=name,
+        )
+    )
+
+    assert page.title_value.text() == title
+    assert page.title_value.textFormat() == Qt.TextFormat.PlainText
+    assert page.name_output.text() == name
+    assert page.name_output.textFormat() == Qt.TextFormat.PlainText
+    assert page.name_output.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse
+    page.close()
+
+
+def test_lookup_primary_controls_tab_order_and_copy_keyboard_activation(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ01609020", title="键盘测试"),
+            formatted_name="[RJ01609020] 键盘测试",
+        )
+    )
+    page.show()
+    page.code_input.setFocus()
+    qapp.processEvents()
+
+    QTest.keyClick(page.code_input, Qt.Key.Key_Tab)
+    assert qapp.focusWidget() is page.query_button
+    QTest.keyClick(page.query_button, Qt.Key.Key_Tab)
+    assert qapp.focusWidget() is page.refresh_button
+    QTest.keyClick(page.refresh_button, Qt.Key.Key_Backtab)
+    assert qapp.focusWidget() is page.query_button
+    QTest.keyClick(page.query_button, Qt.Key.Key_Backtab)
+    assert qapp.focusWidget() is page.code_input
+
+    page.copy_button.setFocus()
+    qapp.processEvents()
+    assert qapp.focusWidget() is page.copy_button
+    QTest.keyClick(page.copy_button, Qt.Key.Key_Space)
+
+    assert QApplication.clipboard().text() == "[RJ01609020] 键盘测试"
+    assert page.copy_feedback.text() == "已复制名称"
+    assert page.status_label.text() == "查询完成 · 实时"
     page.close()
 
 
