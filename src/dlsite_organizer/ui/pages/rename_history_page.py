@@ -3,9 +3,28 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, tzinfo
+from math import cos, hypot, radians, sin
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Slot
-from PySide6.QtGui import QBrush, QColor, QPainter, QPalette, QPen, QPolygonF
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    QPointF,
+    QRectF,
+    QSize,
+    Qt,
+    Slot,
+)
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPolygonF,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -24,8 +43,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QStyle,
     QStyledItemDelegate,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -69,10 +87,12 @@ class RenameHistoryPage(QWidget):
         self._selected_id: str | None = None
         self._selected_transaction: RenameTransaction | None = None
         self._operations: tuple[RenameOperation, ...] = ()
-        self._observations: tuple[OperationPathObservations, ...] = ()
+        self._observations_by_sequence: dict[int, OperationPathObservations] = {}
         self._build_ui()
         self.transaction_list.currentItemChanged.connect(self._selection_changed)
-        self.operations_table.currentCellChanged.connect(self._operation_selection_changed)
+        self.operations_table.selectionModel().currentChanged.connect(
+            self._operation_selection_changed
+        )
         self.refresh_button.clicked.connect(self.refresh_history)
         self.newer_button.clicked.connect(self._show_newer_page)
         self.older_button.clicked.connect(self._show_older_page)
@@ -87,7 +107,7 @@ class RenameHistoryPage(QWidget):
         layout.addWidget(
             PageHeader(
                 "重命名历史",
-                "查看已记录的重命名事务，并将记录事实与当前路径观察分开展示。",
+                "查看已记录的重命名事务，并在操作列表中查看记录结果与当前路径观察。",
             )
         )
 
@@ -214,45 +234,6 @@ class RenameHistoryPage(QWidget):
         self.recovery_label.hide()
         history_layout.addWidget(self.recovery_label)
 
-        history_layout.addWidget(_section_divider())
-        self.observation_section = QWidget()
-        observation_layout = QVBoxLayout(self.observation_section)
-        observation_layout.setContentsMargins(0, 0, 0, 0)
-        observation_layout.setSpacing(7)
-        observation_header = QHBoxLayout()
-        self.observation_heading = _section_title("当前文件系统")
-        observation_header.addWidget(self.observation_heading)
-        self.observe_button = QPushButton("重新观察")
-        self.observe_button.setStyleSheet("QPushButton { min-height: 24px; padding: 2px 8px; }")
-        self.observe_button.setAccessibleName("重新观察当前文件系统路径")
-        observation_header.addWidget(self.observe_button)
-        observation_header.addStretch(1)
-        observation_layout.addLayout(observation_header)
-        self.observation_updated_label = QLabel("")
-        self.observation_updated_label.setObjectName("pageDescription")
-        observation_layout.addWidget(self.observation_updated_label)
-        self.observation_summary = QLabel("")
-        self.observation_summary.setWordWrap(True)
-        observation_layout.addWidget(self.observation_summary)
-        self.observation_caveat = QLabel(
-            "这里只检查记录的路径现在是否存在及其类型；路径存在不证明它仍指向原目录。"
-        )
-        self.observation_caveat.setObjectName("pageDescription")
-        self.observation_caveat.setWordWrap(True)
-        self.observation_status_banner = StatusBanner(self)
-        observation_layout.addWidget(self.observation_status_banner)
-        self.observations_table = QTableWidget(0, 3)
-        self.observations_table.setObjectName("renameHistoryObservations")
-        self.observations_table.setAccessibleName("記錄路徑的當前文件系統觀察")
-        self.observations_table.setHorizontalHeaderLabels(["操作", "源路徑现在", "目标路径现在"])
-        self._configure_observations_table(self.observations_table)
-        observation_layout.addWidget(self.observations_table)
-        self.single_observation = _FactGrid()
-        observation_layout.addWidget(self.single_observation)
-        observation_layout.addWidget(self.observation_caveat)
-        history_layout.addWidget(self.observation_section)
-        self.observation_section.hide()
-
         self.technical_section = QWidget()
         technical_layout = QVBoxLayout(self.technical_section)
         technical_layout.setContentsMargins(0, 0, 0, 0)
@@ -304,13 +285,39 @@ class RenameHistoryPage(QWidget):
 
         history_layout.addWidget(_section_divider())
         self.operations_heading = _section_title("重命名操作")
-        history_layout.addWidget(self.operations_heading)
-        self.operations_table = QTableWidget(0, 5)
+        observation_header = QHBoxLayout()
+        observation_header.setContentsMargins(0, 0, 0, 0)
+        observation_header.addWidget(self.operations_heading)
+        observation_header.addStretch(1)
+        self.observation_updated_label = QLabel("")
+        self.observation_updated_label.setObjectName("pageDescription")
+        self.observe_button = QPushButton("重新观察")
+        self.observe_button.setStyleSheet(
+            "QPushButton { min-height: 24px; padding: 2px 8px; }"
+        )
+        self.observe_button.setAccessibleName("重新观察当前文件系统路径")
+        observation_header.addWidget(self.observation_updated_label)
+        observation_header.addWidget(self.observe_button)
+        history_layout.addLayout(observation_header)
+        self.operations_table = QTableView()
         self.operations_table.setObjectName("renameHistoryOperations")
         self.operations_table.setAccessibleName("重命名操作历史，重命名与撤销结果分别显示")
-        self.operations_table.setHorizontalHeaderLabels(["", "重命名", "撤销", "来源", "→ 目标"])
+        self.operations_model = _OperationTableModel(self)
+        self.operations_table.setModel(self.operations_model)
         self._configure_operations_table(self.operations_table)
         history_layout.addWidget(self.operations_table)
+        self.observation_summary = QLabel("")
+        self.observation_summary.setObjectName("pageDescription")
+        self.observation_summary.setWordWrap(True)
+        history_layout.addWidget(self.observation_summary)
+        self.observation_caveat = QLabel(
+            "路径观察只显示当前存在状态和类型；路径存在不证明它仍指向原目录。"
+        )
+        self.observation_caveat.setObjectName("pageDescription")
+        self.observation_caveat.setWordWrap(True)
+        history_layout.addWidget(self.observation_caveat)
+        self.observation_status_banner = StatusBanner(self)
+        history_layout.addWidget(self.observation_status_banner)
 
         self.operation_detail_section = QWidget()
         operation_detail_layout = QVBoxLayout(self.operation_detail_section)
@@ -328,11 +335,25 @@ class RenameHistoryPage(QWidget):
             "源路径",
             "复制源路径",
         )
+        self.source_observation_value = QLabel("")
+        self.source_observation_value.setObjectName("pageDescription")
+        operation_detail_layout.addWidget(self.source_observation_value)
+        self.source_observation_diagnostic = QLabel("")
+        self.source_observation_diagnostic.setObjectName("pageDescription")
+        self.source_observation_diagnostic.setWordWrap(True)
+        operation_detail_layout.addWidget(self.source_observation_diagnostic)
         self.target_path_value, self.copy_target_path_button = self._add_path_detail_row(
             operation_detail_layout,
             "目标路径",
             "复制目标路径",
         )
+        self.target_observation_value = QLabel("")
+        self.target_observation_value.setObjectName("pageDescription")
+        operation_detail_layout.addWidget(self.target_observation_value)
+        self.target_observation_diagnostic = QLabel("")
+        self.target_observation_diagnostic.setObjectName("pageDescription")
+        self.target_observation_diagnostic.setWordWrap(True)
+        operation_detail_layout.addWidget(self.target_observation_diagnostic)
         self.execution_error_value = self._add_error_detail_row(
             operation_detail_layout,
             "执行错误",
@@ -361,8 +382,7 @@ class RenameHistoryPage(QWidget):
             (self.older_button, self.refresh_button),
             (self.refresh_button, self.copy_root_path_button),
             (self.copy_root_path_button, self.observe_button),
-            (self.observe_button, self.observations_table),
-            (self.observations_table, self.operations_table),
+            (self.observe_button, self.operations_table),
             (self.operations_table, self.source_path_value),
             (self.source_path_value, self.copy_source_path_button),
             (self.copy_source_path_button, self.target_path_value),
@@ -421,7 +441,7 @@ class RenameHistoryPage(QWidget):
         return value
 
     @staticmethod
-    def _configure_operations_table(table: QTableWidget) -> None:
+    def _configure_operations_table(table: QTableView) -> None:
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -433,11 +453,11 @@ class RenameHistoryPage(QWidget):
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.setMinimumHeight(90)
-        table.setMaximumHeight(205)
+        table.setMaximumHeight(320)
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.verticalHeader().setVisible(False)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        table.verticalHeader().setDefaultSectionSize(32)
+        table.verticalHeader().setDefaultSectionSize(54)
         header = table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         metrics = table.fontMetrics()
@@ -463,33 +483,10 @@ class RenameHistoryPage(QWidget):
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         table.setItemDelegate(_OperationRowDelegate(table))
 
-    @staticmethod
-    def _configure_observations_table(table: QTableWidget) -> None:
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        table.setWordWrap(False)
-        table.setSortingEnabled(False)
-        table.setAlternatingRowColors(False)
-        table.setShowGrid(False)
-        table.setFrameShape(QFrame.Shape.NoFrame)
-        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        table.setMinimumHeight(76)
-        table.setMaximumHeight(205)
-        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        table.verticalHeader().setVisible(False)
-        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        table.verticalHeader().setDefaultSectionSize(30)
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(0, 72)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        table.setItemDelegate(_OperationRowDelegate(table))
-
     def _resize_operations_table(self) -> None:
         table = self.operations_table
-        sequence_text = str(max(1, table.rowCount()))
+        row_count = self.operations_model.rowCount()
+        sequence_text = str(max(1, row_count))
         sequence_width = (
             max(
                 table.fontMetrics().horizontalAdvance("#"),
@@ -498,12 +495,12 @@ class RenameHistoryPage(QWidget):
             + 16
         )
         table.setColumnWidth(0, sequence_width)
-        visible_rows = min(table.rowCount(), 5)
+        visible_rows = min(row_count, 5)
         header_height = table.horizontalHeader().sizeHint().height()
         row_height = table.verticalHeader().defaultSectionSize()
         frame_height = table.frameWidth() * 2 + 4
         height = max(90, header_height + visible_rows * row_height + frame_height)
-        table.setFixedHeight(min(height, 205))
+        table.setFixedHeight(min(height, 320))
 
     @Slot()
     def refresh_history(self) -> None:
@@ -627,7 +624,7 @@ class RenameHistoryPage(QWidget):
             )
 
         by_sequence = {item.sequence: item for item in observations}
-        completed: list[OperationPathObservations] = []
+        completed: dict[int, OperationPathObservations] = {}
         for operation in transaction.operations:
             observation = by_sequence.get(operation.sequence)
             if observation is None:
@@ -645,54 +642,35 @@ class RenameHistoryPage(QWidget):
                         "当前观察没有返回此操作的结果",
                     ),
                 )
-            completed.append(observation)
-        self._observations = tuple(completed)
+            completed[operation.sequence] = observation
+        self._observations_by_sequence = completed
+        self.operations_model.set_observations(completed)
 
-        table = self.observations_table
-        table.setRowCount(len(self._observations))
         error_details: list[str] = []
         target_present = 0
         target_absent = 0
         target_unknown = 0
-        for row, observation in enumerate(self._observations):
-            table.setItem(row, 0, _cell(str(observation.sequence)))
-            for column, path_observation in (
-                (1, observation.source),
-                (2, observation.target),
-            ):
-                item = _cell(_observation_text(path_observation))
+        for observation in completed.values():
+            for path_observation in (observation.source, observation.target):
                 if path_observation.state is CurrentPathState.ERROR:
-                    item.setToolTip(_short_error(path_observation.error or "当前状态无法确认"))
                     error_details.append(path_observation.error or "访问失败")
-                table.setItem(row, column, item)
             if observation.target.state is CurrentPathState.ABSENT:
                 target_absent += 1
             elif observation.target.state is CurrentPathState.ERROR:
                 target_unknown += 1
             else:
                 target_present += 1
-        self._resize_observations_table()
-        single = len(self._observations) == 1
-        self.observations_table.setVisible(not single)
-        self.single_observation.setVisible(single)
-        self.observation_summary.setVisible(not single)
-        if single:
-            observation = self._observations[0]
-            self.single_observation.set_facts(
-                [
-                    ("源路径", _observation_text(observation.source)),
-                    ("目标路径", _observation_text(observation.target)),
-                ]
-            )
 
         observed_at = datetime.now().astimezone()
-        self.observation_updated_label.setText(f"最近观察 · {_format_local_wall_time(observed_at)}")
-        self.observation_updated_label.setAccessibleDescription(
-            f"当前文件系统路径观察时间：{_format_datetime(observed_at)}"
+        self.observation_updated_label.setText(
+            f"最近观察：{_format_local_wall_time(observed_at)}"
         )
-        if transaction.operations:
+        self.observation_updated_label.setAccessibleDescription(
+            f"当前文件系统路径观察时间：{observed_at.isoformat(timespec='microseconds')}"
+        )
+        if len(transaction.operations) > 1:
             self.observation_summary.setText(
-                f"{len(transaction.operations)} 个记录目标 · "
+                f"目标路径：{len(transaction.operations)} 项 · "
                 + " · ".join(
                     f"{count} 个{label}"
                     for count, label in (
@@ -703,8 +681,10 @@ class RenameHistoryPage(QWidget):
                     if count
                 )
             )
+            self.observation_summary.show()
         else:
-            self.observation_summary.setText("此事务没有操作路径可观察。")
+            self.observation_summary.clear()
+            self.observation_summary.hide()
         if error_details:
             self.observation_status_banner.show_status(
                 BannerState.WARNING,
@@ -713,6 +693,11 @@ class RenameHistoryPage(QWidget):
             )
         else:
             self.observation_status_banner.clear_status()
+        current = self.operations_table.currentIndex()
+        if current.isValid():
+            operation = self.operations_model.operation_at(current.row())
+            if operation is not None:
+                self._show_operation_detail_for(operation)
 
     @Slot(QListWidgetItem, QListWidgetItem)
     def _selection_changed(
@@ -735,6 +720,12 @@ class RenameHistoryPage(QWidget):
         self._show_transaction(transaction)
 
     def _show_transaction(self, transaction: RenameTransaction) -> None:
+        previous_id = self._selected_id
+        current = self.operations_table.currentIndex()
+        previous_sequence = None
+        if current.isValid() and self._selected_id == transaction.transaction_id:
+            previous_operation = self.operations_model.operation_at(current.row())
+            previous_sequence = previous_operation.sequence if previous_operation else None
         self._selected_id = transaction.transaction_id
         self._selected_transaction = transaction
         self.query_status_label.clear()
@@ -755,8 +746,13 @@ class RenameHistoryPage(QWidget):
         self.root_path_value.set_path(str(transaction.root))
         self._render_recovery(transaction)
         self._update_technical_details(transaction)
-        self._render_operations(transaction)
-        self.observation_section.show()
+        self._observations_by_sequence = {}
+        self._render_operations(
+            transaction,
+            preserve_sequence=(
+                previous_sequence if previous_id == transaction.transaction_id else None
+            ),
+        )
         self.refresh_observations()
         if self.technical_toggle.isChecked():
             self.technical_section.show()
@@ -855,7 +851,7 @@ class RenameHistoryPage(QWidget):
                 BannerState.BLOCKED,
                 "事务需要检查",
                 (
-                    f"{stage}记录尚未确认完成。当前路径观察会单独显示，不会改写记录结果。"
+                    f"{stage}记录尚未确认完成。当前路径观察仅作参考，不会改写记录结果。"
                     "整理页会继续阻止新的重命名和普通撤销。"
                 ),
             )
@@ -879,57 +875,50 @@ class RenameHistoryPage(QWidget):
         self.recovery_label.setText("\n".join(details))
         self.recovery_label.show()
 
-    def _render_operations(self, transaction: RenameTransaction) -> None:
+    def _render_operations(
+        self,
+        transaction: RenameTransaction,
+        *,
+        preserve_sequence: int | None = None,
+    ) -> None:
         self._operations = transaction.operations
         table = self.operations_table
         table.blockSignals(True)
-        table.setRowCount(len(self._operations))
+        self.operations_model.set_operations(self._operations)
         self._resize_operations_table()
-        for row, operation in enumerate(self._operations):
-            values = (
-                str(operation.sequence),
-                _execution_overview_text(operation.status),
-                _undo_overview_text(operation),
-                operation.source_path.name or str(operation.source_path),
-                operation.target_path.name or str(operation.target_path),
-            )
-            for column, value in enumerate(values):
-                item = _cell(value)
-                if column in {3, 4}:
-                    path = operation.source_path if column == 3 else operation.target_path
-                    item.setToolTip(str(path))
-                    item.setData(Qt.ItemDataRole.AccessibleTextRole, str(path))
-                if column in {1, 2}:
-                    color = _durable_status_color(operation, column)
-                    item.setForeground(QBrush(color))
-                if column == 0:
-                    item.setForeground(QBrush(QColor(LIGHT_COLORS.text_muted)))
-                table.setItem(row, column, item)
+        preserved_row = 0
         if self._operations:
-            table.setCurrentCell(0, 0)
-            table.selectRow(0)
+            preserved_row = next(
+                (
+                    row
+                    for row, operation in enumerate(self._operations)
+                    if operation.sequence == preserve_sequence
+                ),
+                0,
+            )
+            table.setCurrentIndex(self.operations_model.index(preserved_row, 0))
+            table.selectRow(preserved_row)
         else:
             table.clearSelection()
         table.blockSignals(False)
         if self._operations:
-            self._show_operation_detail(0)
+            self._show_operation_detail_for(self._operations[preserved_row])
         else:
             self._clear_operation_detail()
 
     def _operation_selection_changed(
-        self,
-        current_row: int,
-        _current_column: int,
-        _previous_row: int,
-        _previous_column: int,
+        self, current: QModelIndex, _previous: QModelIndex
     ) -> None:
-        self._show_operation_detail(current_row)
+        self._show_operation_detail(current.row())
 
     def _show_operation_detail(self, row: int) -> None:
-        if row < 0 or row >= len(self._operations):
+        operation = self.operations_model.operation_at(row)
+        if operation is None:
             self._clear_operation_detail()
             return
-        operation = self._operations[row]
+        self._show_operation_detail_for(operation)
+
+    def _show_operation_detail_for(self, operation: RenameOperation) -> None:
         self.operation_sequence_label.setText(f"操作 {operation.sequence}")
         self.operation_status_label.set_facts(
             [
@@ -939,6 +928,17 @@ class RenameHistoryPage(QWidget):
         )
         self.source_path_value.set_path(str(operation.source_path))
         self.target_path_value.set_path(str(operation.target_path))
+        observation = self._observations_by_sequence.get(operation.sequence)
+        self._set_selected_path_observation(
+            self.source_observation_value,
+            self.source_observation_diagnostic,
+            observation.source if observation else None,
+        )
+        self._set_selected_path_observation(
+            self.target_observation_value,
+            self.target_observation_diagnostic,
+            observation.target if observation else None,
+        )
         self.execution_error_value.setPlainText(operation.error or "")
         execution_group = self.execution_error_value.parentWidget()
         assert execution_group is not None
@@ -950,11 +950,32 @@ class RenameHistoryPage(QWidget):
         self.operation_detail_section.show()
         self._update_technical_operation(operation)
 
+    @staticmethod
+    def _set_selected_path_observation(
+        label: QLabel,
+        diagnostic: QLabel,
+        observation: CurrentPathObservation | None,
+    ) -> None:
+        label.setText(_observation_text(observation) if observation else "当前：无法观察")
+        detail = (
+            observation.error
+            if observation and observation.state is CurrentPathState.ERROR
+            else ""
+        )
+        diagnostic.setText(_short_error(detail) if detail else "")
+        diagnostic.setVisible(bool(detail))
+
     def _clear_operation_detail(self) -> None:
         self.operation_sequence_label.clear()
         self.operation_status_label.clear()
         self.source_path_value.set_path("")
         self.target_path_value.set_path("")
+        self.source_observation_value.clear()
+        self.source_observation_diagnostic.clear()
+        self.source_observation_diagnostic.hide()
+        self.target_observation_value.clear()
+        self.target_observation_diagnostic.clear()
+        self.target_observation_diagnostic.hide()
         self.execution_error_value.clear()
         self.undo_error_value.clear()
         self.operation_detail_section.hide()
@@ -1047,9 +1068,10 @@ class RenameHistoryPage(QWidget):
         self.recovery_banner.clear_status()
         self.recovery_label.clear()
         self.recovery_label.hide()
-        self.observation_section.hide()
-        self.observations_table.setRowCount(0)
         self.observation_status_banner.clear_status()
+        self.observation_summary.clear()
+        self.observation_summary.hide()
+        self.observation_updated_label.clear()
         self.technical_toggle.setChecked(False)
         self.technical_toggle.setEnabled(False)
         self.transaction_id_value.setText(transaction_id)
@@ -1057,9 +1079,10 @@ class RenameHistoryPage(QWidget):
         self.technical_operation_label.clear()
         self.operations_heading.hide()
         self.operations_table.hide()
-        self.operations_table.setRowCount(0)
+        self.operations_model.set_operations(())
+        self.operations_model.set_observations({})
         self._operations = ()
-        self._observations = ()
+        self._observations_by_sequence = {}
         self._clear_operation_detail()
 
     def _add_transaction_item(
@@ -1103,9 +1126,8 @@ class RenameHistoryPage(QWidget):
         self.recovery_label.clear()
         self.recovery_label.hide()
         self.recovery_banner.clear_status()
-        self.observation_section.hide()
-        self.observations_table.setRowCount(0)
         self.observation_summary.clear()
+        self.observation_summary.hide()
         self.observation_updated_label.clear()
         self.observation_status_banner.clear_status()
         self.technical_toggle.setChecked(False)
@@ -1114,19 +1136,11 @@ class RenameHistoryPage(QWidget):
         self.technical_operation_label.clear()
         self.operations_heading.show()
         self.operations_table.show()
-        self.operations_table.setRowCount(0)
+        self.operations_model.set_operations(())
+        self.operations_model.set_observations({})
         self._operations = ()
-        self._observations = ()
+        self._observations_by_sequence = {}
         self._clear_operation_detail()
-
-    def _resize_observations_table(self) -> None:
-        table = self.observations_table
-        visible_rows = min(table.rowCount(), 4)
-        header_height = table.horizontalHeader().sizeHint().height()
-        row_height = table.verticalHeader().defaultSectionSize()
-        frame_height = table.frameWidth() * 2 + 4
-        height = max(76, header_height + visible_rows * row_height + frame_height)
-        table.setFixedHeight(min(height, 205))
 
     @Slot()
     def _show_older_page(self) -> None:
@@ -1154,12 +1168,6 @@ def _section_divider() -> QFrame:
     divider.setFixedHeight(1)
     divider.setStyleSheet(f"border: 0; background: {LIGHT_COLORS.border};")
     return divider
-
-
-def _cell(value: str) -> QTableWidgetItem:
-    item = QTableWidgetItem(value)
-    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-    return item
 
 
 def _local_datetime(value: datetime, local_timezone: tzinfo | None = None) -> datetime:
@@ -1263,21 +1271,18 @@ def _undo_overview_text(operation: RenameOperation) -> str:
     }[operation.undo_status]
 
 
-def _observation_text(observation: CurrentPathObservation) -> str:
+def _observation_text(observation: CurrentPathObservation | None) -> str:
+    if observation is None:
+        return "当前：无法观察"
     label = {
-        CurrentPathState.DIRECTORY: "存在，目录",
-        CurrentPathState.FILE: "存在，文件",
-        CurrentPathState.OTHER: "存在，其他类型",
-        CurrentPathState.LINK_LIKE: "存在，链接类项目",
+        CurrentPathState.DIRECTORY: "存在 · 目录",
+        CurrentPathState.FILE: "存在 · 文件",
+        CurrentPathState.OTHER: "存在 · 其他类型",
+        CurrentPathState.LINK_LIKE: "存在 · 链接类对象",
         CurrentPathState.ABSENT: "不存在",
-        CurrentPathState.ERROR: "无法确认当前状态",
+        CurrentPathState.ERROR: "无法观察",
     }[observation.state]
-    if observation.error:
-        error = observation.error
-        if len(error) > 300:
-            error = f"{error[:299]}…"
-        label = f"{label}：{error}"
-    return label
+    return f"当前：{label}"
 
 
 def _is_unresolved(transaction: RenameTransaction) -> bool:
@@ -1374,6 +1379,33 @@ def _master_status_visual(status: TransactionStatus) -> tuple[str, str]:
     }[status]
 
 
+def _undo_arrow_geometry() -> tuple[QPainterPath, QPointF, tuple[QPointF, QPointF]]:
+    """Return a curved undo shaft and tangent-aligned wings in one logical space."""
+    tip = QPointF(2.6, 4.2)
+    first_control = QPointF(4.8, 4.5)
+    shaft = QPainterPath(tip)
+    shaft.cubicTo(first_control, QPointF(11.8, 2.2), QPointF(11.5, 7.2))
+    shaft.cubicTo(QPointF(11.2, 11.0), QPointF(7.2, 12.2), QPointF(4.6, 10.0))
+
+    tangent_x = tip.x() - first_control.x()
+    tangent_y = tip.y() - first_control.y()
+    tangent_length = hypot(tangent_x, tangent_y)
+    direction_x = tangent_x / tangent_length
+    direction_y = tangent_y / tangent_length
+    wing_length = 3.8
+    wing_angle = radians(29)
+    wings = tuple(
+        QPointF(
+            tip.x()
+            - (direction_x * cos(angle) - direction_y * sin(angle)) * wing_length,
+            tip.y()
+            - (direction_x * sin(angle) + direction_y * cos(angle)) * wing_length,
+        )
+        for angle in (-wing_angle, wing_angle)
+    )
+    return shaft, tip, (wings[0], wings[1])
+
+
 def _paint_master_status_mark(painter, rect: QRectF, shape: str, color: str) -> None:
     """Small vector marks using the application's rounded line-icon convention."""
     painter.save()
@@ -1392,8 +1424,10 @@ def _paint_master_status_mark(painter, rect: QRectF, shape: str, color: str) -> 
     if shape == "success":
         painter.drawPolyline(QPolygonF([QPointF(2, 7), QPointF(5.5, 10.5), QPointF(12, 3.5)]))
     elif shape == "reversed":
-        painter.drawArc(QRectF(3, 3, 9, 9), -90 * 16, 270 * 16)
-        painter.drawPolyline(QPolygonF([QPointF(6, 1), QPointF(3, 3), QPointF(6, 5)]))
+        shaft, tip, wings = _undo_arrow_geometry()
+        painter.drawPath(shaft)
+        for wing in wings:
+            painter.drawLine(tip, wing)
     elif shape == "error":
         painter.drawLine(QPointF(3, 3), QPointF(11, 11))
         painter.drawLine(QPointF(11, 3), QPointF(3, 11))
@@ -1467,6 +1501,108 @@ class _HistoryMasterDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+_EMPTY_MODEL_INDEX = QModelIndex()
+
+
+class _OperationTableModel(QAbstractTableModel):
+    """Project each journal operation beside its sequence-matched observation."""
+
+    _HEADERS = ("#", "重命名", "撤销", "来源", "→ 目标")
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._operations: tuple[RenameOperation, ...] = ()
+        self._observations: dict[int, OperationPathObservations] = {}
+
+    def rowCount(
+        self, parent: QModelIndex | QPersistentModelIndex = _EMPTY_MODEL_INDEX
+    ) -> int:
+        return 0 if parent.isValid() else len(self._operations)
+
+    def columnCount(
+        self, parent: QModelIndex | QPersistentModelIndex = _EMPTY_MODEL_INDEX
+    ) -> int:
+        return 0 if parent.isValid() else len(self._HEADERS)
+
+    def headerData(
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> str | None:
+        if (
+            orientation is Qt.Orientation.Horizontal
+            and role == Qt.ItemDataRole.DisplayRole
+            and 0 <= section < len(self._HEADERS)
+        ):
+            return self._HEADERS[section]
+        return None
+
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ):
+        if not index.isValid() or not (0 <= index.row() < len(self._operations)):
+            return None
+        operation = self._operations[index.row()]
+        column = index.column()
+        observation = self._observations.get(operation.sequence)
+        if role == Qt.ItemDataRole.DisplayRole:
+            if column == 0:
+                return str(operation.sequence)
+            if column == 1:
+                return _execution_overview_text(operation.status)
+            if column == 2:
+                return _undo_overview_text(operation)
+            path = operation.source_path if column == 3 else operation.target_path
+            current = None
+            if observation is not None:
+                current = observation.source if column == 3 else observation.target
+            return f"{path.name or path}\n{_observation_text(current)}"
+        if role == Qt.ItemDataRole.AccessibleTextRole:
+            if column in {3, 4}:
+                path = operation.source_path if column == 3 else operation.target_path
+                current = None
+                if observation is not None:
+                    current = observation.source if column == 3 else observation.target
+                return f"{path}；{_observation_text(current)}"
+            return self.data(index, Qt.ItemDataRole.DisplayRole)
+        if role == Qt.ItemDataRole.ToolTipRole and column in {3, 4}:
+            return str(operation.source_path if column == 3 else operation.target_path)
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if column in {1, 2}:
+                return QBrush(_durable_status_color(operation, column))
+            if column == 0:
+                return QBrush(QColor(LIGHT_COLORS.text_muted))
+        return None
+
+    def flags(self, index: QModelIndex | QPersistentModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def operation_at(self, row: int) -> RenameOperation | None:
+        return self._operations[row] if 0 <= row < len(self._operations) else None
+
+    def set_operations(self, operations: tuple[RenameOperation, ...]) -> None:
+        self.beginResetModel()
+        self._operations = operations
+        self._observations = {}
+        self.endResetModel()
+
+    def set_observations(
+        self, observations: dict[int, OperationPathObservations]
+    ) -> None:
+        self._observations = observations
+        if self._operations:
+            self.dataChanged.emit(
+                self.index(0, 3),
+                self.index(len(self._operations) - 1, 4),
+                [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.AccessibleTextRole],
+            )
+
+
 class _OperationRowDelegate(QStyledItemDelegate):
     """Paint readable palette-aware row selection and elide overview paths."""
 
@@ -1494,18 +1630,49 @@ class _OperationRowDelegate(QStyledItemDelegate):
             else option.palette.color(QPalette.ColorRole.Base)
         )
         painter.fillRect(option.rect, background)
-        painter.setFont(option.font)
-        painter.setPen(text_color)
-        text = option.fontMetrics.elidedText(
-            str(index.data(Qt.ItemDataRole.DisplayRole) or ""),
-            Qt.TextElideMode.ElideMiddle,
-            max(0, option.rect.width() - 16),
-        )
-        painter.drawText(
-            option.rect.adjusted(8, 0, -8, 0),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
+        display = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        if index.column() in {3, 4}:
+            primary, _, secondary = display.partition("\n")
+            text_rect = option.rect.adjusted(8, 5, -8, -4)
+            primary_font = option.font
+            primary_font.setWeight(QFont.Weight.Medium)
+            painter.setFont(primary_font)
+            painter.setPen(text_color)
+            primary = option.fontMetrics.elidedText(
+                primary,
+                Qt.TextElideMode.ElideMiddle,
+                max(0, text_rect.width()),
+            )
+            painter.drawText(
+                QRectF(text_rect.left(), text_rect.top(), text_rect.width(), 22),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                primary,
+            )
+            painter.setFont(option.font)
+            painter.setPen(QColor(LIGHT_COLORS.text_secondary))
+            secondary = option.fontMetrics.elidedText(
+                secondary,
+                Qt.TextElideMode.ElideRight,
+                max(0, text_rect.width()),
+            )
+            painter.drawText(
+                QRectF(text_rect.left(), text_rect.top() + 23, text_rect.width(), 18),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                secondary,
+            )
+        else:
+            painter.setFont(option.font)
+            painter.setPen(text_color)
+            text = option.fontMetrics.elidedText(
+                display,
+                Qt.TextElideMode.ElideMiddle,
+                max(0, option.rect.width() - 16),
+            )
+            painter.drawText(
+                option.rect.adjusted(8, 0, -8, 0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                text,
+            )
         painter.setPen(QColor(LIGHT_COLORS.border))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
         if selected and index.column() == 0:
