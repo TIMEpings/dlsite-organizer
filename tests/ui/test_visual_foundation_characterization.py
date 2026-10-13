@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 from PySide6.QtCore import QPoint, Qt, qInstallMessageHandler
+from PySide6.QtGui import QFontDatabase, QFontInfo, QFontMetrics
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter
 from tests.services.test_lookup import FakeProvider
 
@@ -27,6 +31,41 @@ def qapp() -> QApplication:
 
 def _window() -> MainWindow:
     return MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+
+
+@pytest.fixture
+def geometry_font_environment(qapp: QApplication):
+    """Load installed Windows fonts only for this geometry characterization."""
+    original_font = qapp.font()
+    registered_ids: list[int] = []
+    if qapp.platformName().casefold() == "offscreen":
+        font_directory = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        font_files = (
+            (font_directory / "segoeui.ttf", "Segoe UI"),
+            (font_directory / "segoeuib.ttf", "Segoe UI"),
+            (font_directory / "msyh.ttc", "Microsoft YaHei"),
+        )
+        for path, family in font_files:
+            assert path.is_file(), f"Required installed system font is unavailable: {path}"
+            font_id = QFontDatabase.addApplicationFont(str(path))
+            assert font_id >= 0, f"Qt could not register installed system font: {path}"
+            registered_ids.append(font_id)
+            assert family in QFontDatabase.applicationFontFamilies(font_id)
+
+    families = set(QFontDatabase.families())
+    assert "Segoe UI" in families, "Segoe UI must be available in the geometry font environment"
+    assert "Microsoft YaHei" in families, (
+        "Microsoft YaHei must be available in the geometry font environment"
+    )
+
+    try:
+        yield
+    finally:
+        # MainWindow applies its theme to the shared QApplication. Restore the
+        # pre-test font and registrations so later tests keep their own setup.
+        qapp.setFont(original_font)
+        for font_id in reversed(registered_ids):
+            assert QFontDatabase.removeApplicationFont(font_id)
 
 
 def test_sidebar_top_breathing_space_aligns_first_item_with_page_header(
@@ -106,7 +145,9 @@ def test_page_header_uses_compact_centralized_typography(qapp: QApplication) -> 
     header.close()
 
 
-def test_page_content_alignment_policy_and_page_header_axes(qapp: QApplication) -> None:
+def test_page_content_alignment_policy_and_page_header_axes(
+    qapp: QApplication, geometry_font_environment,
+) -> None:
     expected = {
         MainPage.LOOKUP: (
             1120,
@@ -127,7 +168,7 @@ def test_page_content_alignment_policy_and_page_header_axes(qapp: QApplication) 
     qapp.processEvents()
 
     try:
-        for width in (1160, 1460, 1600):
+        for width in (1024, 1160, 1460, 1600):
             window.resize(width, 1000)
             qapp.processEvents()
             for route, (max_width, alignment) in expected.items():
@@ -143,6 +184,8 @@ def test_page_content_alignment_policy_and_page_header_axes(qapp: QApplication) 
                 scroll = page.findChild(QScrollArea)
                 assert scroll is not None
                 viewport = scroll.viewport()
+                assert container.width() <= viewport.width()
+                assert scroll.horizontalScrollBar().maximum() == 0
                 content_origin = container.mapTo(viewport, QPoint(0, 0))
                 if alignment is ContentAlignment.LEFT_BOUNDED_WORKSPACE:
                     assert abs(content_origin.x()) <= 1
@@ -158,10 +201,20 @@ def test_page_content_alignment_policy_and_page_header_axes(qapp: QApplication) 
                     )
                     body_left = body.mapTo(page, QPoint(0, 0)).x()
                     assert abs(header_left - body_left) <= 2
+                    if route is MainPage.SETTINGS:
+                        resolved_font = QFontInfo(qapp.font())
+                        metrics = QFontMetrics(qapp.font())
+                        assert resolved_font.family() == "Segoe UI"
+                        assert metrics.height() > 0
+                        assert container.minimumSizeHint().width() <= max_width
+                        if width >= 1460:
+                            assert container.width() == max_width
                 else:
                     assert abs(
                         2 * content_origin.x() + container.width() - viewport.width()
                     ) <= 1
+                    if width >= 1460:
+                        assert container.width() == max_width
 
         assert window.organizer_page.findChild(ConstrainedContent) is None
         assert window.rename_history_page.findChild(ConstrainedContent) is None
