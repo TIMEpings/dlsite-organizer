@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from PySide6.QtCore import Qt, QThread, Slot
+from PySide6.QtCore import Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -54,9 +54,16 @@ class LookupPage(QWidget):
         self._thread: QThread | None = None
         self._worker: LookupWorker | None = None
         self._formatted_name = ""
+        self._focus_before_request: QWidget | None = None
+        self._focus_after_busy_entry: QWidget | None = None
+        self._focus_moved_while_busy = False
+        self._watch_busy_focus = False
         self.refresh_button = QPushButton("强制刷新")
 
         self._build_ui()
+        self._focus_watch_timer = QTimer(self)
+        self._focus_watch_timer.setInterval(50)
+        self._focus_watch_timer.timeout.connect(self._track_busy_focus)
         set_button_role(self.query_button, ButtonRole.PRIMARY)
         set_button_role(self.refresh_button, ButtonRole.SECONDARY)
         set_button_role(self.copy_button, ButtonRole.SECONDARY)
@@ -88,6 +95,7 @@ class LookupPage(QWidget):
         query_row = QHBoxLayout()
         query_row.setSpacing(10)
         self.code_input = QLineEdit()
+        self.code_input.setObjectName("lookupCodeInput")
         self.code_input.setPlaceholderText("输入完整RJ|BJ|VJ号")
         self.code_input.setClearButtonEnabled(True)
         self.code_input.setMinimumHeight(40)
@@ -104,27 +112,80 @@ class LookupPage(QWidget):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        result_frame = QFrame()
-        result_frame.setObjectName("resultCard")
-        result_layout = QHBoxLayout(result_frame)
-        result_layout.setContentsMargins(22, 22, 22, 22)
-        result_layout.setSpacing(24)
-
-        self.cover_label = QLabel("暂无封面")
+        self.identity_frame = QWidget()
+        self.identity_frame.setObjectName("lookupIdentity")
+        result_layout = QHBoxLayout(self.identity_frame)
+        result_layout.setContentsMargins(0, 2, 0, 2)
+        result_layout.setSpacing(16)
+        self.cover_label = QLabel()
         self.cover_label.setObjectName("coverPlaceholder")
         self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.cover_label.setFixedSize(210, 280)
-        result_layout.addWidget(self.cover_label)
+        self.cover_label.setFixedSize(96, 128)
+        result_layout.addWidget(self.cover_label, 0, Qt.AlignmentFlag.AlignTop)
 
-        details = QVBoxLayout()
-        details.setSpacing(14)
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-        form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(12)
-        self.workno_value = _value_label()
+        identity_details = QVBoxLayout()
+        identity_details.setSpacing(5)
         self.title_value = _value_label()
+        self.title_value.setObjectName("lookupTitle")
+        title_font = self.title_value.font()
+        title_font.setPointSize(title_font.pointSize() + 2)
+        title_font.setBold(True)
+        self.title_value.setFont(title_font)
+        identity_details.addWidget(self.title_value)
+        self.workno_value = _value_label()
+        self.workno_value.setObjectName("lookupWorkno")
         self.maker_value = _value_label()
+        self.maker_value.setObjectName("lookupMaker")
+        identity_details.addWidget(_fact_row("作品编号", self.workno_value))
+        identity_details.addWidget(_fact_row("社团", self.maker_value))
+        self.cover_status_label = QLabel("正在读取封面…")
+        self.cover_status_label.setObjectName("lookupCoverStatus")
+        self.cover_status_label.setVisible(False)
+        identity_details.addWidget(self.cover_status_label)
+        result_layout.addLayout(identity_details, 1)
+        layout.addWidget(self.identity_frame)
+
+        self.name_section = QWidget()
+        self.name_section.setObjectName("lookupNameSection")
+        name_layout = QVBoxLayout(self.name_section)
+        name_layout.setContentsMargins(0, 0, 0, 0)
+        name_layout.setSpacing(7)
+        output_label = QLabel("格式化名称")
+        output_label.setObjectName("sectionLabel")
+        name_layout.addWidget(output_label)
+        output_row = QHBoxLayout()
+        output_row.setSpacing(10)
+        self.name_output = _value_label()
+        self.name_output.setObjectName("lookupFormattedName")
+        self.name_output.setMinimumHeight(40)
+        self.name_output.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.copy_button = QPushButton("复制名称")
+        self.copy_button.setMinimumSize(108, 40)
+        self.copy_button.setEnabled(False)
+        output_row.addWidget(self.name_output, 1)
+        output_row.addWidget(self.copy_button, 0, Qt.AlignmentFlag.AlignRight)
+        name_layout.addLayout(output_row)
+        self.copy_feedback = QLabel()
+        self.copy_feedback.setObjectName("lookupCopyFeedback")
+        self.copy_feedback.setAlignment(Qt.AlignmentFlag.AlignRight)
+        name_layout.addWidget(self.copy_feedback)
+        layout.addWidget(self.name_section)
+
+        self.metadata_frame = QFrame()
+        self.metadata_frame.setObjectName("lookupMetadata")
+        metadata_layout = QVBoxLayout(self.metadata_frame)
+        metadata_layout.setContentsMargins(0, 4, 0, 0)
+        metadata_layout.setSpacing(8)
+        metadata_heading = QLabel("作品信息")
+        metadata_heading.setObjectName("sectionLabel")
+        metadata_layout.addWidget(metadata_heading)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(8)
         self.maker_id_value = _value_label()
         self.release_value = _value_label()
         self.series_value = _value_label()
@@ -132,9 +193,6 @@ class LookupPage(QWidget):
         self.tags_value = _value_label()
         self.language_value = _value_label()
         self.age_value = _value_label()
-        form.addRow("作品编号", self.workno_value)
-        form.addRow("标题", self.title_value)
-        form.addRow("社团", self.maker_value)
         form.addRow("社团编号", self.maker_id_value)
         form.addRow("系列", self.series_value)
         form.addRow("CV", self.cvs_value)
@@ -142,26 +200,8 @@ class LookupPage(QWidget):
         form.addRow("语言", self.language_value)
         form.addRow("年龄分级", self.age_value)
         form.addRow("发售日期", self.release_value)
-        details.addLayout(form)
-        details.addStretch(1)
-        result_layout.addLayout(details, 1)
-        layout.addWidget(result_frame, 1)
-
-        output_label = QLabel("格式化名称")
-        output_label.setObjectName("sectionLabel")
-        layout.addWidget(output_label)
-        output_row = QHBoxLayout()
-        output_row.setSpacing(10)
-        self.name_output = QLineEdit()
-        self.name_output.setReadOnly(True)
-        self.name_output.setPlaceholderText("查询成功后显示")
-        self.name_output.setMinimumHeight(40)
-        self.copy_button = QPushButton("复制名称")
-        self.copy_button.setMinimumSize(108, 40)
-        self.copy_button.setEnabled(False)
-        output_row.addWidget(self.name_output, 1)
-        output_row.addWidget(self.copy_button)
-        layout.addLayout(output_row)
+        metadata_layout.addLayout(form)
+        layout.addWidget(self.metadata_frame)
 
         relation_frame = QFrame()
         self.relation_frame = relation_frame
@@ -172,6 +212,9 @@ class LookupPage(QWidget):
         relation_heading = QLabel("作品关系")
         relation_heading.setObjectName("sectionLabel")
         relation_layout.addWidget(relation_heading)
+        current_heading = QLabel("当前响应")
+        current_heading.setObjectName("subsectionLabel")
+        relation_layout.addWidget(current_heading)
         relation_form = QFormLayout()
         relation_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         relation_form.setHorizontalSpacing(18)
@@ -189,45 +232,27 @@ class LookupPage(QWidget):
         relation_layout.addLayout(relation_form)
         self.relation_details_value = _value_label()
         relation_layout.addWidget(self.relation_details_value)
-        relation_layout.addWidget(QLabel("历史确认关系"))
+        historical_heading = QLabel("历史确认关系")
+        historical_heading.setObjectName("subsectionLabel")
+        relation_layout.addWidget(historical_heading)
         self.historical_relations_value = _value_label()
         relation_layout.addWidget(self.historical_relations_value)
         layout.addWidget(relation_frame)
         self._clear_relations()
         relation_frame.setVisible(False)
+        self.identity_frame.setVisible(False)
+        self.name_section.setVisible(False)
+        self.metadata_frame.setVisible(False)
         scroll_area.setWidget(content)
         page_layout.addWidget(scroll_area)
+        layout.addStretch(1)
 
     @Slot()
     def start_lookup(self) -> None:
         """Start one background lookup unless another is still active."""
         if self._thread is not None:
             return
-        self._set_loading(True)
-        self._clear_result()
-        self.status_label.setProperty("state", "loading")
-        self.status_label.setText("正在查询…")
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
-
-        thread = QThread()
-        worker = LookupWorker(
-            self._lookup_service,
-            self._cover_service,
-            self.code_input.text(),
-        )
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.result_ready.connect(self._show_result)
-        worker.cover_ready.connect(self._show_cover)
-        worker.failed.connect(self._show_error)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._lookup_finished)
-        self._thread = thread
-        self._worker = worker
-        thread.start()
+        self._run_lookup(force_refresh=False)
 
     @Slot()
     def force_refresh(self) -> None:
@@ -239,8 +264,9 @@ class LookupPage(QWidget):
         self.start_lookup() if not force_refresh else self._run_lookup(force_refresh=True)
 
     def _run_lookup(self, *, force_refresh: bool) -> None:
-        self._set_loading(True)
-        self._clear_result()
+        if self._thread is not None:
+            return
+        self._enter_busy_state(force_refresh)
         thread = QThread()
         worker = LookupWorker(
             self._lookup_service, self._cover_service, self.code_input.text(), force_refresh
@@ -257,11 +283,37 @@ class LookupPage(QWidget):
         self._thread, self._worker = thread, worker
         thread.start()
 
+    def _enter_busy_state(self, force_refresh: bool) -> None:
+        """Clear the previous projection and announce the admitted request."""
+        self._focus_before_request = QApplication.focusWidget()
+        self._focus_moved_while_busy = False
+        self._set_loading(True)
+        self._clear_result()
+        self.status_label.setProperty("state", "loading")
+        self.status_label.setText(
+            "正在强制刷新…" if force_refresh else "正在查询…"
+        )
+        self._refresh_status_style()
+        self._watch_busy_focus = True
+        self._focus_after_busy_entry = QApplication.focusWidget()
+        self._focus_watch_timer.start()
+
+    @Slot()
+    def _track_busy_focus(self) -> None:
+        if (
+            self._watch_busy_focus
+            and QApplication.focusWidget() is not self._focus_after_busy_entry
+        ):
+            self._focus_moved_while_busy = True
+
     @Slot(object)
     def _show_result(self, value: object) -> None:
         result = cast(LookupResult, value)
         self._current_result = result
         work = result.work
+        self.identity_frame.setVisible(True)
+        self.name_section.setVisible(True)
+        self.metadata_frame.setVisible(True)
         self.code_input.setText(work.workno)
         self.workno_value.setText(work.workno)
         self.title_value.setText(work.title)
@@ -276,18 +328,25 @@ class LookupPage(QWidget):
         self._formatted_name = result.formatted_name
         self.name_output.setText(result.formatted_name)
         self.copy_button.setEnabled(True)
+        self.copy_feedback.clear()
+        self.cover_label.setPixmap(QPixmap())
+        self.cover_label.setText("暂无封面")
+        self.cover_status_label.setVisible(bool(work.cover_url and self._thread is not None))
         self._show_relations(
             result.translation,
             result.historical_relations,
             result.translation_attribution,
         )
-        self.status_label.setProperty("state", "success")
         label = {
             LookupFreshness.LIVE: "实时",
             LookupFreshness.CACHE_FRESH: "缓存",
             LookupFreshness.CACHE_STALE_FALLBACK: "旧缓存",
         }[result.freshness]
-        self.status_label.setText(f"查询完成 · {label}")
+        freshness_text = f"查询完成 · {label}"
+        self.status_label.setProperty(
+            "state", "stale" if result.freshness is LookupFreshness.CACHE_STALE_FALLBACK else "success"
+        )
+        self.status_label.setText(freshness_text)
         self._refresh_status_style()
 
     @Slot(bytes)
@@ -302,6 +361,7 @@ class LookupPage(QWidget):
         )
         self.cover_label.setText("")
         self.cover_label.setPixmap(scaled)
+        self.cover_status_label.setVisible(False)
 
     @Slot(str)
     def _show_error(self, message: str) -> None:
@@ -313,7 +373,18 @@ class LookupPage(QWidget):
     def _lookup_finished(self) -> None:
         self._thread = None
         self._worker = None
+        self.cover_status_label.setVisible(False)
+        self._focus_watch_timer.stop()
+        self._watch_busy_focus = False
         self._set_loading(False)
+        primary_controls = {self.code_input, self.query_button, self.refresh_button}
+        if (
+            self.isVisible()
+            and self._focus_before_request in primary_controls
+            and not self._focus_moved_while_busy
+        ):
+            self.code_input.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._focus_before_request = None
 
     @Slot()
     def copy_name(self) -> None:
@@ -322,9 +393,7 @@ class LookupPage(QWidget):
             return
         clipboard = QApplication.clipboard()
         clipboard.setText(self._formatted_name)
-        self.status_label.setProperty("state", "success")
-        self.status_label.setText("已复制格式化名称。")
-        self._refresh_status_style()
+        self.copy_feedback.setText("已复制名称")
 
     def is_busy(self) -> bool:
         """Return whether a worker thread is currently active."""
@@ -339,6 +408,10 @@ class LookupPage(QWidget):
         self._formatted_name = ""
         self.copy_button.setEnabled(False)
         self.name_output.clear()
+        self.copy_feedback.clear()
+        self.identity_frame.setVisible(False)
+        self.name_section.setVisible(False)
+        self.metadata_frame.setVisible(False)
         for label in (
             self.workno_value,
             self.title_value,
@@ -353,7 +426,8 @@ class LookupPage(QWidget):
         ):
             label.setText("—")
         self.cover_label.clear()
-        self.cover_label.setText("暂无封面")
+        self.cover_label.setPixmap(QPixmap())
+        self.cover_status_label.setVisible(False)
         self._clear_relations()
 
     def _show_relations(
@@ -425,10 +499,23 @@ class LookupPage(QWidget):
 
 def _value_label() -> QLabel:
     label = QLabel("—")
+    label.setTextFormat(Qt.TextFormat.PlainText)
     label.setWordWrap(True)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
     return label
+
+
+def _fact_row(caption: str, value: QLabel) -> QWidget:
+    row = QWidget()
+    row_layout = QHBoxLayout(row)
+    row_layout.setContentsMargins(0, 0, 0, 0)
+    row_layout.setSpacing(8)
+    label = QLabel(caption)
+    label.setObjectName("lookupFactCaption")
+    row_layout.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
+    row_layout.addWidget(value, 1)
+    return row
 
 
 def _role_label(role: TranslationRole | None) -> str:
