@@ -18,6 +18,7 @@ from dlsite_organizer.ui.pages.rename_history_page import (
     RenameHistoryPage,
     _master_status_visual,
     _paint_master_status_mark,
+    _undo_arrow_geometry,
 )
 
 
@@ -59,9 +60,8 @@ def test_master_durable_status_contract(status, label, category):
         for state in (
             QStyle.StateFlag.State_Enabled,
             QStyle.StateFlag.State_Enabled | QStyle.StateFlag.State_MouseOver,
-            QStyle.StateFlag.State_Enabled
-            | QStyle.StateFlag.State_Selected
-            | QStyle.StateFlag.State_HasFocus,
+            QStyle.StateFlag.State_Enabled | QStyle.StateFlag.State_Selected,
+            QStyle.StateFlag.State_Enabled | QStyle.StateFlag.State_HasFocus,
         ):
             image = QImage(248, 58, QImage.Format.Format_ARGB32)
             image.fill(Qt.GlobalColor.white)
@@ -86,14 +86,68 @@ def test_master_durable_status_contract(status, label, category):
             assert any(x >= icon_left + 18 for x, _ in ink)
             assert all(12 <= x < 239 and 30 <= y < 52 for x, y in ink)
             masks.append(ink)
-        assert masks[0] == masks[1] == masks[2]
+        assert all(mask == masks[0] for mask in masks)
         assert app is not None
     finally:
         page.close()
 
 
+def test_undone_arrowhead_and_shaft_form_one_connected_mark():
+    image = QImage(20, 20, QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    shape, color = _master_status_visual(TransactionStatus.UNDONE)
+    _paint_master_status_mark(painter, QRectF(3, 3, 14, 14), shape, color)
+    painter.end()
+    ink = {
+        (x, y)
+        for x in range(20)
+        for y in range(20)
+        if image.pixelColor(x, y).alpha() > 24
+    }
+    assert ink
+    components = 0
+    remaining = set(ink)
+    while remaining:
+        components += 1
+        stack = [remaining.pop()]
+        while stack:
+            x, y = stack.pop()
+            for neighbor in (
+                (x - 1, y - 1), (x, y - 1), (x + 1, y - 1),
+                (x - 1, y),                 (x + 1, y),
+                (x - 1, y + 1), (x, y + 1), (x + 1, y + 1),
+            ):
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    stack.append(neighbor)
+    assert components == 1
+
+
+def test_undone_arrowhead_uses_the_shaft_endpoint_tangent():
+    shaft, tip, wings = _undo_arrow_geometry()
+    start = shaft.elementAt(0)
+    control = shaft.elementAt(1)
+    assert (start.x, start.y) == pytest.approx((tip.x(), tip.y()))
+
+    tangent_x = tip.x() - control.x
+    tangent_y = tip.y() - control.y
+    tangent_length = (tangent_x**2 + tangent_y**2) ** 0.5
+    direction_x = tangent_x / tangent_length
+    direction_y = tangent_y / tangent_length
+    wing_vectors = [(wing.x() - tip.x(), wing.y() - tip.y()) for wing in wings]
+    bisector_x = sum(vector[0] for vector in wing_vectors)
+    bisector_y = sum(vector[1] for vector in wing_vectors)
+    bisector_length = (bisector_x**2 + bisector_y**2) ** 0.5
+    alignment = (
+        bisector_x / bisector_length * -direction_x
+        + bisector_y / bisector_length * -direction_y
+    )
+    assert alignment == pytest.approx(1.0, abs=1e-6)
+
+
 @pytest.mark.parametrize("status", list(TransactionStatus))
-def test_vector_mark_is_unclipped_at_native_dpr(status):
+def test_vector_mark_is_unclipped_under_fractional_dpr_scale(status):
     image = QImage(30, 30, QImage.Format.Format_ARGB32)
     image.setDevicePixelRatio(1.25)
     image.fill(Qt.GlobalColor.transparent)
@@ -103,6 +157,7 @@ def test_vector_mark_is_unclipped_at_native_dpr(status):
     painter.end()
     ink = [(x, y) for x in range(30) for y in range(30) if image.pixelColor(x, y).alpha() > 0]
     assert ink
+    # This image exercises a fractional painter transform; it is not native DPI coverage.
     # All antialiased ink stays inside the assigned 14-logical-pixel square.
     assert all(
         floor(5 * 1.25) <= x < ceil(19 * 1.25) and floor(5 * 1.25) <= y < ceil(19 * 1.25)

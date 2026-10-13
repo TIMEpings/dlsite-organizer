@@ -51,16 +51,17 @@ def test_observation_layout_and_compact_facts(history, count: int) -> None:
         undo_group = page.undo_error_value.parentWidget()
         assert execution_group is not None and execution_group.isHidden()
         assert undo_group is not None and undo_group.isHidden()
-        assert page.observations_table.isHidden() is (count == 1)
-        assert page.single_observation.isHidden() is (count != 1)
+        assert not hasattr(page, "observations_table")
+        assert not hasattr(page, "single_observation")
+        assert page.observation_summary.isHidden() is (count == 1)
         assert page.technical_section.isHidden()
         assert page.detail_scroll.horizontalScrollBar().maximum() == 0
         table = page.operations_table
         assert not table.showGrid()
         assert table.selectionBehavior() == QAbstractItemView.SelectionBehavior.SelectRows
         assert table.editTriggers() == QAbstractItemView.EditTrigger.NoEditTriggers
-        status = table.item(0, 1)
-        assert status is not None and status.foreground().color().isValid()
+        status = table.model().index(0, 1)
+        assert status.data(Qt.ItemDataRole.ForegroundRole).color().isValid()
         if count > 1:
             table.setFocus()
             QApplication.sendEvent(
@@ -107,10 +108,8 @@ def test_semantic_status_color_survives_delegate_selection(history) -> None:
     try:
         page.refresh_history()
         table = page.operations_table
-        status = table.item(0, 1)
-        assert status is not None
-        color = status.foreground().color().rgba()
         index = table.model().index(0, 1)
+        color = index.data(Qt.ItemDataRole.ForegroundRole).color().rgba()
         counts = []
         for selected in (False, True):
             image = QImage(120, 32, QImage.Format.Format_ARGB32)
@@ -158,11 +157,11 @@ def test_history_keyboard_navigation_and_disclosure_remain_read_only(history) ->
         table = page.operations_table
         table.setFocus()
         key(table, Qt.Key.Key_PageDown)
-        assert table.currentRow() > 0
+        assert table.currentIndex().row() > 0
         key(table, Qt.Key.Key_PageUp)
-        assert table.currentRow() == 0
+        assert table.currentIndex().row() == 0
         key(table, Qt.Key.Key_Delete)
-        assert table.rowCount() == 20
+        assert table.model().rowCount() == 20
         page.copy_source_path_button.setFocus()
         key(page.copy_source_path_button, Qt.Key.Key_Tab)
         assert app.focusWidget() is page.target_path_value

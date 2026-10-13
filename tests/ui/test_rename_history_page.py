@@ -30,6 +30,9 @@ def qapp() -> QApplication:
 
 def _cell_text(page: RenameHistoryPage, table_name: str, row: int, column: int) -> str:
     table = getattr(page, table_name)
+    model = table.model() if hasattr(table, "model") else None
+    if model is not None:
+        return str(model.index(row, column).data())
     item = table.item(row, column)
     assert item is not None
     return item.text()
@@ -72,11 +75,11 @@ def test_unfinished_undo_shows_recovery_without_rewriting_forward_history(
         assert "此前事务记录状态为：已完成" in page.recovery_label.text()
         assert "恢复阶段：撤销" in page.recovery_label.text()
         assert "整理页会继续阻止新的重命名和普通撤销" in page.recovery_banner.message_label.text()
-        assert not page.observation_section.isHidden()
+        assert not hasattr(page, "observation_section")
         assert _cell_text(page, "operations_table", 0, 1) == "成功"
         assert _cell_text(page, "operations_table", 0, 2) == "未撤销"
-        assert _cell_text(page, "observations_table", 0, 1) == "存在，目录"
-        assert _cell_text(page, "observations_table", 0, 2) == "不存在"
+        assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 3)
+        assert "当前：不存在" in _cell_text(page, "operations_table", 0, 4)
         assert journal.get_transaction(transaction.transaction_id) == before
         assert before.status is TransactionStatus.COMPLETED
         assert source.is_dir()
@@ -144,14 +147,15 @@ def test_successful_history_can_be_opened_without_mutating_files_or_journal(
         in page.journal_facts_label.text()
     )
     assert page.root_path_value.full_path == str(root)
-    assert page.operations_table.rowCount() == 1
+    assert page.operations_model.rowCount() == 1
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
-    assert _cell_text(page, "operations_table", 0, 3) == source.name
-    assert _cell_text(page, "operations_table", 0, 4) == target.name
+    assert _cell_text(page, "operations_table", 0, 3).splitlines()[0] == source.name
+    assert _cell_text(page, "operations_table", 0, 4).splitlines()[0] == target.name
     assert page.source_path_value.full_path == str(source)
     assert page.target_path_value.full_path == str(target)
-    assert not page.observation_section.isHidden()
-    assert page.observations_table.rowCount() == 1
+    assert not hasattr(page, "observations_table")
+    assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 3)
+    assert "当前：不存在" in _cell_text(page, "operations_table", 0, 4)
     assert journal.get_transaction(transaction.transaction_id) == before
     assert sorted(path.name for path in root.iterdir()) == before_entries
     assert source.is_dir()
@@ -182,13 +186,13 @@ def test_current_path_observation_never_rewrites_a_successful_journal_fact(
     page.refresh_history()
     assert "已完成" in page.transaction_summary.text()
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
-    assert _cell_text(page, "observations_table", 0, 2) == "存在，目录"
+    assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 4)
 
     target.rename(root / "moved-externally")
     page.refresh_observations()
 
-    assert _cell_text(page, "observations_table", 0, 2) == "不存在"
-    assert "1 个不存在" in page.observation_summary.text()
+    assert "当前：不存在" in _cell_text(page, "operations_table", 0, 4)
+    assert page.observation_summary.isHidden()
     assert "已完成" in page.transaction_summary.text()
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
     assert journal.get_transaction(transaction.transaction_id) == before
@@ -227,8 +231,8 @@ def test_undone_history_keeps_forward_success_and_current_paths_separate(
     assert "已撤销" in page.transaction_summary.text()
     assert "重命名：1 项成功" in page.journal_facts_label.text()
     assert "撤销：已完成 · 1 项成功" in page.journal_facts_label.text()
-    assert _cell_text(page, "observations_table", 0, 1) == "存在，目录"
-    assert _cell_text(page, "observations_table", 0, 2) == "不存在"
+    assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 3)
+    assert "当前：不存在" in _cell_text(page, "operations_table", 0, 4)
     assert journal.get_transaction(transaction.transaction_id) == before
     page.close()
     database.dispose()
@@ -282,7 +286,7 @@ def test_empty_history_has_one_intentional_empty_state(
     assert "完成一次重命名后" in page.empty_description.text()
     assert page.history_detail.isHidden()
     assert page.transaction_id_value.text() == ""
-    assert page.operations_table.rowCount() == 0
+    assert page.operations_model.rowCount() == 0
     page.close()
     database.dispose()
 
@@ -417,17 +421,17 @@ def test_long_paths_and_errors_remain_inspectable_without_expanding_rows(
     qapp.processEvents()
 
     table = page.operations_table
-    assert table.rowCount() == 2
+    assert table.model().rowCount() == 2
     assert table.wordWrap() is False
-    assert table.rowHeight(0) <= 32
+    assert table.rowHeight(0) == 54
     assert table.rowHeight(1) == table.rowHeight(0)
     assert table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    source_item = table.item(0, 3)
-    target_item = table.item(0, 4)
-    assert source_item is not None and source_item.text() == before.operations[0].source_path.name
-    assert target_item is not None and target_item.text() == before.operations[0].target_path.name
-    assert source_item.toolTip() == str(before.operations[0].source_path)
-    assert target_item.toolTip() == str(before.operations[0].target_path)
+    source_index = table.model().index(0, 3)
+    target_index = table.model().index(0, 4)
+    assert source_index.data().splitlines()[0] == before.operations[0].source_path.name
+    assert target_index.data().splitlines()[0] == before.operations[0].target_path.name
+    assert source_index.data(Qt.ItemDataRole.ToolTipRole) == str(before.operations[0].source_path)
+    assert target_index.data(Qt.ItemDataRole.ToolTipRole) == str(before.operations[0].target_path)
     assert page.source_path_value.full_path == str(before.operations[0].source_path)
     assert page.target_path_value.full_path == str(before.operations[0].target_path)
     assert page.execution_error_value.toPlainText() == long_error
@@ -435,7 +439,7 @@ def test_long_paths_and_errors_remain_inspectable_without_expanding_rows(
     page.copy_source_path_button.click()
     assert qapp.clipboard().text() == str(before.operations[0].source_path)
 
-    table.setCurrentCell(1, 0)
+    table.setCurrentIndex(table.model().index(1, 0))
     assert page.operation_sequence_label.text() == "操作 2"
     assert page.source_path_value.full_path == str(before.operations[1].source_path)
     assert page.target_path_value.full_path == str(before.operations[1].target_path)
@@ -472,7 +476,7 @@ def test_many_operation_rows_scroll_and_select_in_deterministic_order(
     qapp.processEvents()
 
     table = page.operations_table
-    assert table.rowCount() == operation_count
+    assert table.model().rowCount() == operation_count
     assert [_cell_text(page, "operations_table", row, 0) for row in range(3)] == [
         "1",
         "2",
@@ -480,7 +484,7 @@ def test_many_operation_rows_scroll_and_select_in_deterministic_order(
     ]
     assert table.verticalScrollBar().maximum() > 0
     table.verticalScrollBar().setValue(table.verticalScrollBar().maximum())
-    table.setCurrentCell(operation_count - 1, 0)
+    table.setCurrentIndex(table.model().index(operation_count - 1, 0))
     qapp.processEvents()
     assert _cell_text(page, "operations_table", operation_count - 1, 0) == "80"
     assert page.operation_sequence_label.text() == "操作 80"
@@ -518,7 +522,7 @@ def test_operation_selection_readability_and_column_sizing(
     page.refresh_history()
     qapp.processEvents()
     table = page.operations_table
-    table.setCurrentCell(0, 1)
+    table.setCurrentIndex(table.model().index(0, 1))
     qapp.processEvents()
 
     assert table.selectionBehavior() == table.SelectionBehavior.SelectRows
@@ -619,11 +623,9 @@ def test_large_transactions_keep_bounded_scrollable_table_views(
     page.refresh_history()
     qapp.processEvents()
 
-    assert page.operations_table.rowCount() == operation_count
-    assert page.observations_table.rowCount() == operation_count
+    assert page.operations_model.rowCount() == operation_count
     assert page.operations_table.verticalScrollBar().maximum() > 0
-    assert page.observations_table.verticalScrollBar().maximum() > 0
-    assert page.operations_table.cellWidget(0, 0) is None
+    assert not hasattr(page, "observations_table")
     assert len(page.findChildren(QWidget)) == widget_count_before
     page.close()
     database.dispose()
@@ -725,20 +727,19 @@ def test_unresolved_detail_shows_recovery_facts_and_separate_observations(
     assert "journal update was interrupted" in recovery_text
     assert "整理页会继续阻止新的重命名和普通撤销" in page.recovery_banner.message_label.text()
 
-    assert page.operations_table.rowCount() == 2
+    assert page.operations_model.rowCount() == 2
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
     assert _cell_text(page, "operations_table", 1, 1) == "失败"
-    page.operations_table.setCurrentCell(1, 0)
+    page.operations_table.setCurrentIndex(page.operations_model.index(1, 0))
     assert page.execution_error_value.toPlainText() == "recorded operation failure"
 
-    assert not page.observation_section.isHidden()
-    assert page.observations_table.rowCount() == 2
-    assert _cell_text(page, "observations_table", 0, 1) == "存在，目录"
-    assert _cell_text(page, "observations_table", 0, 2) == "存在，目录"
-    assert _cell_text(page, "observations_table", 1, 1) == "不存在"
-    assert _cell_text(page, "observations_table", 1, 2) == "存在，文件"
+    assert not hasattr(page, "observation_section")
+    assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 3)
+    assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 4)
+    assert "当前：不存在" in _cell_text(page, "operations_table", 1, 3)
+    assert "当前：存在 · 文件" in _cell_text(page, "operations_table", 1, 4)
     assert "路径存在不证明它仍指向原目录" in page.observation_caveat.text()
-    assert "原目录" not in _cell_text(page, "observations_table", 0, 2)
+    assert "原目录" not in _cell_text(page, "operations_table", 0, 4)
 
     assert journal.get_transaction(transaction.transaction_id) == before
     after_entries = sorted((path.name, path.is_dir(), path.is_file()) for path in root.iterdir())
@@ -774,11 +775,11 @@ def test_filesystem_observation_failure_does_not_hide_transaction_facts(
 
     assert page.transaction_id_value.text() == transaction.transaction_id
     assert "recovery record" in page.recovery_label.text()
-    source_observation = _cell_text(page, "observations_table", 0, 1)
-    assert source_observation.startswith("无法确认当前状态")
-    assert "denied: source" in source_observation
-    assert source_observation.endswith("…")
-    assert len(source_observation) < 340
+    source_observation = _cell_text(page, "operations_table", 0, 3)
+    assert "当前：无法观察" in source_observation
+    assert page.source_observation_diagnostic.text().startswith("denied: source")
+    assert page.source_observation_diagnostic.text().endswith("…")
+    assert len(page.source_observation_diagnostic.text()) < 340
     assert page.observation_status_banner.title_label.text() == "当前状态暂时无法确认"
     page.close()
     database.dispose()
@@ -899,7 +900,7 @@ def test_failed_direct_open_clears_the_previously_selected_transaction(
     assert page.transaction_id_value.text() == "disappeared-transaction"
     assert "transaction no longer exists" in page.query_status_label.text()
     assert page.transaction_summary.text() == ""
-    assert page.operations_table.rowCount() == 0
+    assert page.operations_model.rowCount() == 0
     assert page._selected_transaction is None
     page.close()
     database.dispose()
