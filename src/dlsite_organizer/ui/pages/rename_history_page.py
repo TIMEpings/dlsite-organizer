@@ -19,6 +19,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QFontMetricsF,
     QPainter,
     QPainterPath,
     QPalette,
@@ -196,23 +197,11 @@ class RenameHistoryPage(QWidget):
         self.detail_heading.setObjectName("sectionLabel")
         history_layout.addWidget(self.detail_heading)
 
-        self.transaction_timestamp = QLabel("")
-        self.transaction_timestamp.setStyleSheet("font-size: 20px; font-weight: 600;")
-        self.transaction_timestamp.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        history_layout.addWidget(self.transaction_timestamp)
-
         self.query_status_label = QLabel("")
         self.query_status_label.setObjectName("statusLabel")
         self.query_status_label.setWordWrap(True)
         self.query_status_label.hide()
         history_layout.addWidget(self.query_status_label)
-
-        self.transaction_summary = QLabel("")
-        self.transaction_summary.setObjectName("pageDescription")
-        self.transaction_summary.setWordWrap(True)
-        history_layout.addWidget(self.transaction_summary)
 
         self.recovery_banner = StatusBanner(self)
         history_layout.addWidget(self.recovery_banner)
@@ -736,12 +725,6 @@ class RenameHistoryPage(QWidget):
         self.technical_toggle.setEnabled(True)
         self.operations_heading.show()
         self.operations_table.show()
-        self.transaction_timestamp.setText(_format_local_wall_time(transaction.created_at))
-        self.transaction_timestamp.setAccessibleDescription(
-            f"事务创建时间：{_format_datetime(transaction.created_at)}"
-        )
-        status = _transaction_status_text(transaction.display_status)
-        self.transaction_summary.setText(f"{len(transaction.operations)} 项 · {status}")
         self._render_journal_facts(transaction)
         self.root_path_value.set_path(str(transaction.root))
         self._render_recovery(transaction)
@@ -1061,8 +1044,6 @@ class RenameHistoryPage(QWidget):
         self.detail_heading.setText("事务详情不可用")
         self.query_status_label.setText(f"无法读取事务详情：{_short_error(str(error))}")
         self.query_status_label.show()
-        self.transaction_timestamp.clear()
-        self.transaction_summary.clear()
         self.journal_facts_label.clear()
         self.root_path_value.set_path("")
         self.recovery_banner.clear_status()
@@ -1118,8 +1099,6 @@ class RenameHistoryPage(QWidget):
         self.empty_description.setText(description)
         self.empty_state.show()
         self.history_detail.hide()
-        self.transaction_summary.clear()
-        self.transaction_timestamp.clear()
         self.root_path_value.set_path("")
         self.transaction_id_value.clear()
         self.journal_facts_label.clear()
@@ -1379,6 +1358,20 @@ def _master_status_visual(status: TransactionStatus) -> tuple[str, str]:
     }[status]
 
 
+def _master_status_mark_rect(
+    secondary: QRectF,
+    metrics: QFontMetricsF,
+    label: str,
+    left: float = 0,
+    size: float = 14,
+) -> QRectF:
+    """Center the shared mark box on the status label's measured glyph bounds."""
+    baseline = secondary.top() + (secondary.height() - metrics.height()) / 2 + metrics.ascent()
+    glyph_bounds = metrics.tightBoundingRect(label)
+    visual_center = baseline + glyph_bounds.center().y()
+    return QRectF(left, visual_center - size / 2, size, size)
+
+
 def _undo_arrow_geometry() -> tuple[QPainterPath, QPointF, tuple[QPointF, QPointF]]:
     """Return a curved undo shaft and tangent-aligned wings in one logical space."""
     tip = QPointF(2.6, 4.2)
@@ -1475,26 +1468,27 @@ class _HistoryMasterDelegate(QStyledItemDelegate):
         font.setBold(False)
         painter.setFont(font)
         painter.setPen(QColor(LIGHT_COLORS.text_secondary))
-        secondary = rect.adjusted(12, 29, -8, -5)
+        secondary = QRectF(rect.adjusted(12, 29, -8, -5))
         count, separator, label = (lines[1] if len(lines) > 1 else "").partition(" · ")
         prefix = count + separator
-        painter.drawText(
-            secondary, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, prefix
-        )
+        metrics = QFontMetricsF(font)
+        baseline = secondary.top() + (secondary.height() - metrics.height()) / 2 + metrics.ascent()
+        painter.drawText(QPointF(secondary.left(), baseline), prefix)
         status = index.data(RenameHistoryPage._MASTER_STATUS_ROLE)
         if status is not None:
             shape, color = _master_status_visual(TransactionStatus(status))
-            left = secondary.left() + painter.fontMetrics().horizontalAdvance(prefix)
-            mark = QRectF(left, secondary.center().y() - 7, 14, 14)
+            left = secondary.left() + metrics.horizontalAdvance(prefix)
+            mark = _master_status_mark_rect(secondary, metrics, label, left)
             _paint_master_status_mark(painter, mark, shape, color)
             painter.setPen(QColor(color))
-            text_rect = secondary.adjusted(left - secondary.left() + 18, 0, 0, 0)
-            shown = painter.fontMetrics().elidedText(
-                label, Qt.TextElideMode.ElideRight, max(0, text_rect.width())
+            text_rect = QRectF(secondary).adjusted(left - secondary.left() + 18, 0, 0, 0)
+            shown = metrics.elidedText(
+                label, Qt.TextElideMode.ElideRight, max(0, round(text_rect.width()))
             )
-            painter.drawText(
-                text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, shown
-            )
+            painter.save()
+            painter.setClipRect(text_rect)
+            painter.drawText(QPointF(text_rect.left(), baseline), shown)
+            painter.restore()
         if option.state & QStyle.StateFlag.State_HasFocus:
             painter.setPen(QColor(LIGHT_COLORS.focus))
             painter.drawLine(rect.bottomLeft(), rect.bottomRight())

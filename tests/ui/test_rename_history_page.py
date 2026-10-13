@@ -71,7 +71,7 @@ def test_unfinished_undo_shows_recovery_without_rewriting_forward_history(
         item = page.transaction_list.item(0)
         assert item is not None
         assert "需要检查" in item.text()
-        assert "需要检查" in page.transaction_summary.text()
+        assert "事务状态：需要检查" in page.journal_facts_label.text()
         assert "此前事务记录状态为：已完成" in page.recovery_label.text()
         assert "恢复阶段：撤销" in page.recovery_label.text()
         assert "整理页会继续阻止新的重命名和普通撤销" in page.recovery_banner.message_label.text()
@@ -140,8 +140,8 @@ def test_successful_history_can_be_opened_without_mutating_files_or_journal(
     assert page.detail_heading.text() == "事务详情"
     assert transaction.transaction_id not in page.detail_heading.text()
     assert page.transaction_id_value.text() == transaction.transaction_id
-    assert "已完成" in page.transaction_summary.text()
-    assert page.transaction_summary.text().count("已完成") == 1
+    assert "事务状态：已完成" in page.journal_facts_label.text()
+    assert page.journal_facts_label.text().count("已完成") == 1
     assert (
         f"记录时间：{_format_local_wall_time(before.created_at)[:16]}"
         in page.journal_facts_label.text()
@@ -184,7 +184,7 @@ def test_current_path_observation_never_rewrites_a_successful_journal_fact(
 
     page = RenameHistoryPage(RenameHistoryService(journal))
     page.refresh_history()
-    assert "已完成" in page.transaction_summary.text()
+    assert "事务状态：已完成" in page.journal_facts_label.text()
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
     assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 4)
 
@@ -193,7 +193,7 @@ def test_current_path_observation_never_rewrites_a_successful_journal_fact(
 
     assert "当前：不存在" in _cell_text(page, "operations_table", 0, 4)
     assert page.observation_summary.isHidden()
-    assert "已完成" in page.transaction_summary.text()
+    assert "事务状态：已完成" in page.journal_facts_label.text()
     assert _cell_text(page, "operations_table", 0, 1) == "成功"
     assert journal.get_transaction(transaction.transaction_id) == before
     page.close()
@@ -228,7 +228,7 @@ def test_undone_history_keeps_forward_success_and_current_paths_separate(
     assert before.status is TransactionStatus.UNDONE
     assert before.operations[0].status.value == "success"
     assert before.operations[0].undo_status.value == "success"
-    assert "已撤销" in page.transaction_summary.text()
+    assert "事务状态：已撤销" in page.journal_facts_label.text()
     assert "重命名：1 项成功" in page.journal_facts_label.text()
     assert "撤销：已完成 · 1 项成功" in page.journal_facts_label.text()
     assert "当前：存在 · 目录" in _cell_text(page, "operations_table", 0, 3)
@@ -315,16 +315,13 @@ def test_transaction_detail_heading_has_no_duplicate_status_and_summary_is_tight
     assert page.detail_heading.text() == "事务详情"
     assert "已完成" not in page.detail_heading.text()
     assert page.query_status_label.isHidden()
-    assert page.transaction_summary.text().count("已完成") == 1
+    assert page.journal_facts_label.text().count("已完成") == 1
     assert "事务状态：" not in page.recovery_label.text()
-    summary_gap = (
-        page.transaction_summary.geometry().top()
-        - page.transaction_timestamp.geometry().bottom()
-        - 1
-    )
+    assert not hasattr(page, "transaction_timestamp")
+    assert not hasattr(page, "transaction_summary")
     history_layout = page.history_detail.layout()
     assert history_layout is not None
-    assert summary_gap <= history_layout.spacing()
+    assert page.journal_facts_label.geometry().top() < page.operations_heading.geometry().top()
 
     page.close()
     database.dispose()
@@ -720,7 +717,7 @@ def test_unresolved_detail_shows_recovery_facts_and_separate_observations(
 
     assert page.detail_heading.text() == "事务详情"
     assert page.transaction_id_value.text() == transaction.transaction_id
-    assert "需要检查" in page.transaction_summary.text()
+    assert "事务状态：需要检查" in page.journal_facts_label.text()
     recovery_text = page.recovery_label.text()
     assert "恢复阶段：重命名执行" in recovery_text
     assert "操作序号：2" in recovery_text
@@ -899,7 +896,7 @@ def test_failed_direct_open_clears_the_previously_selected_transaction(
     assert page.detail_heading.text() == "事务详情不可用"
     assert page.transaction_id_value.text() == "disappeared-transaction"
     assert "transaction no longer exists" in page.query_status_label.text()
-    assert page.transaction_summary.text() == ""
+    assert page.journal_facts_label.text() == ""
     assert page.operations_model.rowCount() == 0
     assert page._selected_transaction is None
     page.close()
