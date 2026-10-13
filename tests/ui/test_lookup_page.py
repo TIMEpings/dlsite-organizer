@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
 
 import pytest
-from PySide6.QtCore import QEventLoop, Qt, QTimer
+from PySide6.QtCore import QBuffer, QEventLoop, QIODevice, QPoint, Qt, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QStyle, QStyleOptionButton
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.domain.relation import (
@@ -27,6 +28,36 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysisStatus,
 )
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
+from dlsite_organizer.ui.theme import light_stylesheet
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    image = QImage(width, height, QImage.Format.Format_RGB32)
+    image.fill(QColor("#dce7f8"))
+    painter = QPainter(image)
+    painter.setPen(QColor("#365ea8"))
+    painter.drawText(image.rect(), Qt.AlignmentFlag.AlignCenter, "TEST COVER")
+    painter.end()
+    buffer = QBuffer()
+    assert buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    assert image.save(buffer, "PNG")  # pyright: ignore[reportCallIssue, reportArgumentType]
+    content = bytes(buffer.data())  # pyright: ignore[reportArgumentType]
+    buffer.close()
+    return content
+
+
+def _render_button_state(button, state: QStyle.StateFlag) -> QImage:
+    option = QStyleOptionButton()
+    option.initFrom(button)
+    option.rect = button.rect()
+    option.text = button.text()
+    option.state = QStyle.StateFlag.State_Enabled | state
+    image = QImage(button.size(), QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    button.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, button)
+    painter.end()
+    return image
 
 
 @pytest.fixture
@@ -248,8 +279,10 @@ def test_copy_acknowledgement_does_not_replace_freshness(qapp: QApplication) -> 
     page.copy_name()
 
     assert page.status_label.text() == "查询完成 · 旧缓存"
-    assert page.copy_feedback.text() == "已复制名称"
+    assert page.copy_feedback.text() == "已复制"
     assert QApplication.clipboard().text() == "[RJ01609020] 标题"
+    QTest.qWait(page._copy_feedback_timer.interval() + 100)
+    assert page.copy_feedback.text() == ""
     page.close()
 
 
@@ -272,7 +305,7 @@ def test_lookup_page_provider_text_is_plain_and_name_is_selectable(qapp: QApplic
     page.close()
 
 
-def test_lookup_primary_controls_tab_order_and_copy_keyboard_activation(
+def test_lookup_primary_controls_tab_order_and_formatted_name_keyboard_activation(
     qapp: QApplication,
 ) -> None:
     page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
@@ -297,14 +330,30 @@ def test_lookup_primary_controls_tab_order_and_copy_keyboard_activation(
     QTest.keyClick(page.query_button, Qt.Key.Key_Backtab)
     assert qapp.focusWidget() is page.code_input
 
-    page.copy_button.setFocus()
+    page.name_output.setFocus()
     qapp.processEvents()
-    assert qapp.focusWidget() is page.copy_button
-    QTest.keyClick(page.copy_button, Qt.Key.Key_Space)
+    assert qapp.focusWidget() is page.name_output
+    QTest.keyClick(page.name_output, Qt.Key.Key_Space)
 
     assert QApplication.clipboard().text() == formatted_name
-    assert page.copy_feedback.text() == "已复制名称"
+    assert page.copy_feedback.text() == "已复制"
     assert page.status_label.text() == "查询完成 · 实时"
+    page.close()
+
+
+def test_formatted_name_enter_activates_complete_copy(qapp: QApplication) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    expected = "[RJ00000001] [complete] 名称/完整"
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="标题"), formatted_name=expected)
+    )
+    page.show()
+    page.name_output.setFocus()
+    qapp.processEvents()
+    QTest.keyClick(page.name_output, Qt.Key.Key_Return)
+
+    assert QApplication.clipboard().text() == expected
+    assert page.copy_feedback.text() == "已复制"
     page.close()
 
 
@@ -327,6 +376,110 @@ def test_lookup_page_force_refresh_uses_bypass_cache_path_and_is_disabled_while_
     assert not page.refresh_button.isEnabled()
     page._set_loading(False)
     assert page.refresh_button.isEnabled()
+    page.close()
+
+
+@pytest.mark.parametrize("width,height", [(960, 640), (1160, 800), (1540, 900)])
+def test_lookup_query_buttons_share_geometry_and_keep_distinct_roles(
+    qapp: QApplication, width: int, height: int
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page.resize(width - 184, height - 40)
+    page.setStyleSheet(light_stylesheet())
+    page.show()
+    qapp.processEvents()
+
+    assert page.query_button.size() == page.refresh_button.size()
+    assert page.query_button.height() == page.refresh_button.height() >= 40
+    assert page.query_button.geometry().right() < page.refresh_button.geometry().left()
+    assert page.query_button.property("visualRole") == "primary"
+    assert page.refresh_button.property("visualRole") == "secondary"
+    page._set_loading(True)
+    assert not page.query_button.isEnabled()
+    assert not page.refresh_button.isEnabled()
+    page._set_loading(False)
+    assert page.query_button.isEnabled()
+    assert page.refresh_button.isEnabled()
+    page.close()
+
+
+def test_lookup_query_buttons_show_hover_pressed_and_focus_feedback(qapp: QApplication) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page.setStyleSheet(light_stylesheet())
+    page.show()
+    qapp.processEvents()
+
+    for button in (page.query_button, page.refresh_button):
+        normal = _render_button_state(button, QStyle.StateFlag.State_None)
+        hover = _render_button_state(button, QStyle.StateFlag.State_MouseOver)
+        assert hover != normal
+        pressed = _render_button_state(button, QStyle.StateFlag.State_Sunken)
+        assert pressed != hover
+        focused = _render_button_state(button, QStyle.StateFlag.State_HasFocus)
+        assert focused != normal
+
+    page.close()
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "source_size", "expected_range"),
+    [
+        (960, 640, (1600, 900), (250, 270)),
+        (1160, 800, (1600, 900), (300, 320)),
+        (1540, 900, (1600, 900), (340, 380)),
+        (960, 640, (600, 900), (200, 230)),
+        (960, 640, (800, 800), (250, 270)),
+    ],
+)
+def test_lookup_cover_uses_available_width_and_preserves_source_aspect(
+    qapp: QApplication,
+    width: int,
+    height: int,
+    source_size: tuple[int, int],
+    expected_range: tuple[int, int],
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    # MainWindow reserves 184 logical px for navigation/chrome around this page.
+    page.resize(width - 184, height - 40)
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="景色标题"), formatted_name="name")
+    )
+    page.show()
+    qapp.processEvents()
+    page._show_cover(_png_bytes(*source_size))
+    qapp.processEvents()
+
+    displayed = page.cover_label.pixmap().size()
+    ratio_error = abs(displayed.width() / displayed.height() - source_size[0] / source_size[1])
+    assert expected_range[0] <= displayed.width() <= expected_range[1]
+    assert ratio_error < 0.01
+    assert page.cover_label.size() == displayed
+    scroll = page.findChild(QScrollArea)
+    assert scroll is not None
+    assert scroll.horizontalScrollBar().maximum() == 0
+
+    page.resize(
+        {960: 1160, 1160: 1540, 1540: 960}[width] - 184,
+        {960: 800, 1160: 900, 1540: 640}[width] - 40,
+    )
+    qapp.processEvents()
+    resized = page.cover_label.pixmap().size()
+    assert abs(resized.width() / resized.height() - source_size[0] / source_size[1]) < 0.01
+    page.close()
+
+
+def test_lookup_cover_missing_and_invalid_images_keep_restrained_placeholder(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="封面缺失"), formatted_name="name")
+    )
+    assert page.cover_label.text() == "暂无封面"
+    initial_size = page.cover_label.size()
+    page._show_cover(b"not an image")
+    assert page.cover_label.text() == "暂无封面"
+    assert page.cover_label.size() == initial_size
     page.close()
 
 
@@ -366,7 +519,7 @@ def test_lookup_page_renders_current_and_historical_confirmed_relations(
 
 
 @pytest.mark.parametrize(("width", "height"), [(960, 640), (1160, 800), (1540, 900)])
-def test_formatted_name_copy_action_stays_with_heading_and_name_wraps(
+def test_formatted_name_is_focusable_copy_target_and_wraps(
     qapp: QApplication, width: int, height: int
 ) -> None:
     formatted_name = "[RJ01609020][测试社团]" + "静かな夜の物語与中文故事" * 90
@@ -387,26 +540,134 @@ def test_formatted_name_copy_action_stays_with_heading_and_name_wraps(
         if label.text() == "格式化名称"
     )
     heading_right = heading.mapTo(page.name_section, heading.rect().topRight()).x()
-    button_left = page.copy_button.mapTo(page.name_section, page.copy_button.rect().topLeft()).x()
     content_width = page.name_section.width()
 
-    assert 0 <= button_left - heading_right <= 36
-    assert page.copy_button.geometry().right() < content_width * 0.6
-    assert abs(page.copy_button.geometry().center().y() - heading.geometry().center().y()) <= 8
+    assert heading_right < content_width
+    assert not hasattr(page, "copy_button")
     assert page.name_output.text() == formatted_name
     assert page.name_output.wordWrap()
     assert page.name_output.height() > page.name_output.fontMetrics().height()
     assert page.name_output.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByKeyboard
-    assert page.copy_button.focusPolicy() != Qt.FocusPolicy.NoFocus
-    page.copy_button.setFocus()
-    QTest.keyClick(page.copy_button, Qt.Key.Key_Space)
+    assert page.name_output.focusPolicy() != Qt.FocusPolicy.NoFocus
+    page.name_output.setFocus()
+    QTest.keyClick(page.name_output, Qt.Key.Key_Space)
     assert QApplication.clipboard().text() == formatted_name
-    assert page.copy_feedback.text() == "已复制名称"
+    assert page.copy_feedback.text() == "已复制"
     assert page.status_label.text() == "查询完成 · 实时"
 
     scroll = page.findChild(QScrollArea)
     assert scroll is not None
     assert scroll.horizontalScrollBar().maximum() == 0
+    page.close()
+
+
+def _wait_for_click_copy(qapp: QApplication) -> None:
+    QTest.qWait(QApplication.doubleClickInterval() + 30)
+    qapp.processEvents()
+
+
+def test_formatted_name_single_click_copies_exact_authoritative_value_once(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    expected = "[RJ00000001] " + "完整格式化名称/" * 12
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="标题"), formatted_name=expected)
+    )
+    page.show()
+    qapp.processEvents()
+    copies: list[str] = []
+    clipboard = QApplication.clipboard()
+    clipboard.dataChanged.connect(lambda: copies.append(clipboard.text()))
+    QTest.mouseClick(page.name_output, Qt.MouseButton.LeftButton, pos=QPoint(20, 16))
+    _wait_for_click_copy(qapp)
+
+    assert copies == [expected]
+    assert QApplication.clipboard().text() == expected
+    assert page.copy_feedback.text() == "已复制"
+    page.close()
+
+
+def test_formatted_name_drag_and_double_click_selection_do_not_copy_whole_value(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    expected = "[RJ00000001] selection should survive"
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="标题"), formatted_name=expected)
+    )
+    page.show()
+    qapp.processEvents()
+    clipboard = QApplication.clipboard()
+    clipboard.setText("sentinel")
+    start = QPoint(4, page.name_output.height() // 2)
+    end = QPoint(min(page.name_output.width() - 4, 100), page.name_output.height() // 2)
+    QTest.mousePress(page.name_output, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(page.name_output, end, delay=50)
+    QTest.mouseRelease(page.name_output, Qt.MouseButton.LeftButton, pos=end)
+    _wait_for_click_copy(qapp)
+    assert clipboard.text() == "sentinel"
+    assert page.name_output.hasSelectedText()
+
+    page.name_output.setSelection(0, 0)
+    QTest.mouseDClick(
+        page.name_output,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(10, page.name_output.height() // 2),
+    )
+    _wait_for_click_copy(qapp)
+    assert clipboard.text() == "sentinel"
+    assert page.name_output.hasSelectedText()
+    assert page.name_output.selectedText() != expected
+    QTest.keyClick(page.name_output, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    assert clipboard.text() == page.name_output.selectedText()
+
+    clipboard.setText("right click sentinel")
+    QTest.mouseClick(
+        page.name_output,
+        Qt.MouseButton.RightButton,
+        pos=QPoint(20, page.name_output.height() // 2),
+    )
+    assert clipboard.text() == "right click sentinel"
+    page.close()
+
+
+def test_formatted_name_does_not_copy_while_empty_or_after_query_failure(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    QApplication.clipboard().setText("sentinel")
+    page.show()
+    QTest.mouseClick(page.name_output, Qt.MouseButton.LeftButton)
+    _wait_for_click_copy(qapp)
+    assert QApplication.clipboard().text() == "sentinel"
+
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="标题"), formatted_name="fresh name")
+    )
+    page._clear_result()
+    QTest.mouseClick(page.name_output, Qt.MouseButton.LeftButton)
+    _wait_for_click_copy(qapp)
+    assert QApplication.clipboard().text() == "sentinel"
+    page.close()
+
+
+def test_pending_single_click_never_copies_a_replaced_result(qapp: QApplication) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="first"), formatted_name="first result")
+    )
+    page.show()
+    qapp.processEvents()
+    QApplication.clipboard().setText("sentinel")
+    QTest.mouseClick(page.name_output, Qt.MouseButton.LeftButton, pos=QPoint(20, 16))
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000002", title="second"), formatted_name="second result")
+    )
+    _wait_for_click_copy(qapp)
+
+    assert QApplication.clipboard().text() == "sentinel"
+    assert page.copy_feedback.text() == ""
     page.close()
 
 

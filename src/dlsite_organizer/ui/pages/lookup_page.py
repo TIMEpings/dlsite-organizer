@@ -3,10 +3,11 @@
 from __future__ import annotations
 # ruff: noqa
 
+from collections.abc import Callable
 from typing import cast
 
-from PySide6.QtCore import Qt, QThread, QTimer, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QPoint, QSize, Qt, QThread, QTimer, Slot
+from PySide6.QtGui import QKeyEvent, QMouseEvent, QPixmap, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFormLayout,
@@ -32,6 +33,7 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysisStatus,
 )
 from dlsite_organizer.ui.theme import ButtonRole, set_button_role
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, Shape
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
 from dlsite_organizer.ui.widgets.constrained_content import (
     ConstrainedContent,
@@ -55,6 +57,11 @@ class LookupPage(QWidget):
         self._thread: QThread | None = None
         self._worker: LookupWorker | None = None
         self._formatted_name = ""
+        self._cover_pixmap = QPixmap()
+        self._lookup_content_layout: QVBoxLayout | None = None
+        self._cover_resize_timer = QTimer(self)
+        self._cover_resize_timer.setSingleShot(True)
+        self._cover_resize_timer.timeout.connect(self._render_cover)
         self._focus_before_request: QWidget | None = None
         self._focus_after_busy_entry: QWidget | None = None
         self._focus_moved_while_busy = False
@@ -67,11 +74,14 @@ class LookupPage(QWidget):
         self._focus_watch_timer.timeout.connect(self._track_busy_focus)
         set_button_role(self.query_button, ButtonRole.PRIMARY)
         set_button_role(self.refresh_button, ButtonRole.SECONDARY)
-        set_button_role(self.copy_button, ButtonRole.SECONDARY)
+        self.refresh_button.setStyleSheet(_secondary_lookup_button_states())
         self.query_button.clicked.connect(self.start_lookup)
         self.refresh_button.clicked.connect(self.force_refresh)
         self.code_input.returnPressed.connect(self.start_lookup)
-        self.copy_button.clicked.connect(self.copy_name)
+        self._copy_feedback_timer = QTimer(self)
+        self._copy_feedback_timer.setSingleShot(True)
+        self._copy_feedback_timer.setInterval(1400)
+        self._copy_feedback_timer.timeout.connect(self.copy_feedback.clear)
 
     def _build_ui(self) -> None:
         page_layout = QVBoxLayout(self)
@@ -86,6 +96,7 @@ class LookupPage(QWidget):
         )
         scroll_area.setAlignment(content.alignment.value | Qt.AlignmentFlag.AlignTop)
         layout = content.content_layout
+        self._lookup_content_layout = layout
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(18)
 
@@ -102,7 +113,8 @@ class LookupPage(QWidget):
         self.code_input.setMinimumHeight(40)
         self.query_button = QPushButton("查询")
         self.query_button.setObjectName("primaryButton")
-        self.query_button.setMinimumSize(96, 40)
+        self.query_button.setFixedSize(120, 40)
+        self.refresh_button.setFixedSize(120, 40)
         query_row.addWidget(self.code_input, 1)
         query_row.addWidget(self.query_button)
         query_row.addWidget(self.refresh_button)
@@ -121,7 +133,7 @@ class LookupPage(QWidget):
         self.cover_label = QLabel()
         self.cover_label.setObjectName("coverPlaceholder")
         self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.cover_label.setFixedSize(96, 128)
+        self.cover_label.setWordWrap(True)
         result_layout.addWidget(self.cover_label, 0, Qt.AlignmentFlag.AlignTop)
 
         identity_details = QVBoxLayout()
@@ -172,24 +184,42 @@ class LookupPage(QWidget):
         output_label = QLabel("格式化名称")
         output_label.setObjectName("sectionLabel")
         heading_row.addWidget(output_label)
-        self.copy_button = QPushButton("复制名称")
-        self.copy_button.setMinimumSize(108, 40)
-        self.copy_button.setEnabled(False)
-        heading_row.addWidget(self.copy_button)
+        self.copy_feedback = QLabel()
+        self.copy_feedback.setObjectName("lookupCopyFeedback")
+        self.copy_feedback.setAccessibleName("复制状态")
+        self.copy_feedback.setStyleSheet(f"color: {LIGHT_COLORS.success};")
+        heading_row.addWidget(self.copy_feedback)
         heading_row.addStretch(1)
         name_layout.addLayout(heading_row)
-        self.name_output = _value_label()
+        self.name_output = _CopyableNameLabel(self._name_copy_requested)
         self.name_output.setObjectName("lookupFormattedName")
         self.name_output.setMinimumHeight(40)
+        self.name_output.setTextFormat(Qt.TextFormat.PlainText)
+        self.name_output.setWordWrap(True)
+        self.name_output.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.name_output.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.name_output.setAccessibleName("格式化名称")
+        self.name_output.setAccessibleDescription("按回车或空格复制完整格式化名称")
+        self.name_output.setStyleSheet(
+            f"""
+QLabel#lookupFormattedName {{
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: {Shape.CONTROL_RADIUS}px;
+  padding: 4px 6px;
+}}
+QLabel#lookupFormattedName:hover {{ background: {LIGHT_COLORS.surface_secondary}; }}
+QLabel#lookupFormattedName:focus {{ border-color: {LIGHT_COLORS.focus}; }}
+QLabel#lookupFormattedName:focus:hover {{ background: {LIGHT_COLORS.surface_secondary}; }}
+"""
+        )
         self.name_output.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         name_layout.addWidget(self.name_output)
-        self.copy_feedback = QLabel()
-        self.copy_feedback.setObjectName("lookupCopyFeedback")
-        self.copy_feedback.setAlignment(Qt.AlignmentFlag.AlignRight)
-        name_layout.addWidget(self.copy_feedback)
         layout.addWidget(self.name_section)
 
         self.metadata_frame = QFrame()
@@ -345,10 +375,10 @@ class LookupPage(QWidget):
         self.age_value.setText(_age_label(work.age_category))
         self._formatted_name = result.formatted_name
         self.name_output.setText(result.formatted_name)
-        self.copy_button.setEnabled(True)
         self.copy_feedback.clear()
-        self.cover_label.setPixmap(QPixmap())
-        self.cover_label.setText("暂无封面")
+        self._copy_feedback_timer.stop()
+        self._cover_pixmap = QPixmap()
+        self._set_cover_placeholder()
         self.cover_status_label.setVisible(bool(work.cover_url and self._thread is not None))
         self._show_relations(
             result.translation,
@@ -372,13 +402,8 @@ class LookupPage(QWidget):
         pixmap = QPixmap()
         if not pixmap.loadFromData(content):
             return
-        scaled = pixmap.scaled(
-            self.cover_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.cover_label.setText("")
-        self.cover_label.setPixmap(scaled)
+        self._cover_pixmap = pixmap
+        self._render_cover()
         self.cover_status_label.setVisible(False)
 
     @Slot(str)
@@ -411,7 +436,76 @@ class LookupPage(QWidget):
             return
         clipboard = QApplication.clipboard()
         clipboard.setText(self._formatted_name)
-        self.copy_feedback.setText("已复制名称")
+        self.copy_feedback.setText("已复制")
+        self._copy_feedback_timer.start()
+
+    def _name_copy_requested(self, captured_name: str) -> None:
+        """Copy only if the result clicked is still the currently displayed result."""
+        if (
+            captured_name
+            and captured_name == self._formatted_name
+            and not self.name_section.isHidden()
+        ):
+            self.copy_name()
+
+    def _set_cover_placeholder(self) -> None:
+        self.cover_label.setPixmap(QPixmap())
+        if self.cover_label.text() != "暂无封面":
+            self.cover_label.setText("暂无封面")
+        width = self._cover_display_width()
+        target_size = QSize(width, min(150, max(96, round(width * 0.56))))
+        if self.cover_label.size() != target_size:
+            self.cover_label.setFixedSize(target_size)
+
+    def _cover_display_width(self) -> int:
+        scroll_area = self.findChild(QScrollArea, "lookupScrollArea")
+        available = (
+            scroll_area.viewport().width()
+            if scroll_area is not None
+            else self.identity_frame.width()
+        )
+        if available < 600:
+            return max(96, round(available * 0.2))
+        return max(160, min(380, round(available * 0.28 + 43)))
+
+    def _render_cover(self) -> None:
+        if self._cover_pixmap.isNull():
+            self._set_cover_placeholder()
+            return
+        max_width = self._cover_display_width()
+        max_height = 320
+        scaled = self._cover_pixmap.scaled(
+            QSize(max_width, max_height),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.cover_label.setText("")
+        self.cover_label.setFixedSize(scaled.size())
+        self.cover_label.setPixmap(scaled)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_responsive_content_margins()
+        if self.identity_frame.isVisible():
+            self._cover_resize_timer.start(0)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._apply_responsive_content_margins()
+        if self.identity_frame.isVisible():
+            self._cover_resize_timer.start(0)
+
+    def _apply_responsive_content_margins(self) -> None:
+        layout = self._lookup_content_layout
+        scroll_area = self.findChild(QScrollArea, "lookupScrollArea")
+        if layout is None or scroll_area is None:
+            return
+        horizontal_margin = 16 if scroll_area.viewport().width() < 600 else 24
+        margins = layout.contentsMargins()
+        if margins.left() != horizontal_margin or margins.right() != horizontal_margin:
+            layout.setContentsMargins(
+                horizontal_margin, margins.top(), horizontal_margin, margins.bottom()
+            )
 
     def is_busy(self) -> bool:
         """Return whether a worker thread is currently active."""
@@ -424,7 +518,7 @@ class LookupPage(QWidget):
 
     def _clear_result(self) -> None:
         self._formatted_name = ""
-        self.copy_button.setEnabled(False)
+        self._copy_feedback_timer.stop()
         self.name_output.clear()
         self.copy_feedback.clear()
         self.identity_frame.setVisible(False)
@@ -443,8 +537,8 @@ class LookupPage(QWidget):
             self.age_value,
         ):
             label.setText("—")
-        self.cover_label.clear()
-        self.cover_label.setPixmap(QPixmap())
+        self._cover_pixmap = QPixmap()
+        self._set_cover_placeholder()
         self.cover_status_label.setVisible(False)
         self._clear_relations()
 
@@ -513,6 +607,99 @@ class LookupPage(QWidget):
     def _refresh_status_style(self) -> None:
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
+
+
+class _CopyableNameLabel(QLabel):
+    """Selectable formatted name with delayed single-click copy activation."""
+
+    def __init__(
+        self,
+        copy_requested: Callable[[str], None],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._copy_requested = copy_requested
+        self._press_position: QPoint | None = None
+        self._press_name = ""
+        self._dragged = False
+        self._double_click = False
+        self._captured_name = ""
+        self._single_click_timer = QTimer(self)
+        self._single_click_timer.setSingleShot(True)
+        self._single_click_timer.setInterval(QApplication.doubleClickInterval())
+        self._single_click_timer.timeout.connect(self._copy_captured_name)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._single_click_timer.stop()
+            self._press_position = event.position().toPoint()
+            self._press_name = self.text()
+            self._dragged = False
+            self._double_click = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if (
+            self._press_position is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+            and (event.position().toPoint() - self._press_position).manhattanLength()
+            >= QApplication.startDragDistance()
+        ):
+            self._dragged = True
+            self._single_click_timer.stop()
+        super().mouseMoveEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        self._single_click_timer.stop()
+        self._double_click = True
+        self._dragged = False
+        super().mouseDoubleClickEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        super().mouseReleaseEvent(event)
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if not self._double_click and not self._dragged:
+            self._captured_name = self._press_name
+            if self._captured_name:
+                self._single_click_timer.start()
+        self._press_position = None
+        self._press_name = ""
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            name = self.text()
+            if name:
+                self._copy_requested(name)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    @Slot()
+    def _copy_captured_name(self) -> None:
+        name, self._captured_name = self._captured_name, ""
+        if name:
+            self._copy_requested(name)
+
+
+def _secondary_lookup_button_states() -> str:
+    colors = LIGHT_COLORS
+    return f"""
+QPushButton[visualRole="secondary"]:hover {{
+  background: {colors.surface_secondary};
+  border-color: {colors.border_strong};
+}}
+QPushButton[visualRole="secondary"]:pressed {{
+  background: {colors.selection};
+  border-color: {colors.focus};
+}}
+QPushButton[visualRole="secondary"]:focus {{ border-color: {colors.focus}; }}
+QPushButton[visualRole="secondary"]:disabled {{
+  color: {colors.text_muted};
+  background: {colors.surface_secondary};
+  border-color: {colors.border};
+}}
+"""
 
 
 def _value_label() -> QLabel:
