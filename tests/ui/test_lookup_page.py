@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.domain.relation import (
@@ -276,10 +276,12 @@ def test_lookup_primary_controls_tab_order_and_copy_keyboard_activation(
     qapp: QApplication,
 ) -> None:
     page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    work = Work(workno="RJ01609020", title="键盘测试")
+    formatted_name = NamingService().format(work)
     page._show_result(
         LookupResult(
-            work=Work(workno="RJ01609020", title="键盘测试"),
-            formatted_name="[RJ01609020] 键盘测试",
+            work=work,
+            formatted_name=formatted_name,
         )
     )
     page.show()
@@ -300,7 +302,7 @@ def test_lookup_primary_controls_tab_order_and_copy_keyboard_activation(
     assert qapp.focusWidget() is page.copy_button
     QTest.keyClick(page.copy_button, Qt.Key.Key_Space)
 
-    assert QApplication.clipboard().text() == "[RJ01609020] 键盘测试"
+    assert QApplication.clipboard().text() == formatted_name
     assert page.copy_feedback.text() == "已复制名称"
     assert page.status_label.text() == "查询完成 · 实时"
     page.close()
@@ -360,4 +362,101 @@ def test_lookup_page_renders_current_and_historical_confirmed_relations(
     assert "RJ01636950" in page.historical_relations_value.text()
     labels = "\n".join(label.text() for label in page.findChildren(QLabel))
     assert all(term not in labels for term in ("候选", "人工", "Candidate", "Review"))
+    page.close()
+
+
+@pytest.mark.parametrize(("width", "height"), [(960, 640), (1160, 800), (1540, 900)])
+def test_formatted_name_copy_action_stays_with_heading_and_name_wraps(
+    qapp: QApplication, width: int, height: int
+) -> None:
+    formatted_name = "[RJ01609020][测试社团]" + "静かな夜の物語与中文故事" * 90
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page.resize(width, height)
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ01609020", title="静かな夜の物語", maker_name="测试社团"),
+            formatted_name=formatted_name,
+        )
+    )
+    page.show()
+    qapp.processEvents()
+
+    heading = next(
+        label
+        for label in page.name_section.findChildren(QLabel)
+        if label.text() == "格式化名称"
+    )
+    heading_right = heading.mapTo(page.name_section, heading.rect().topRight()).x()
+    button_left = page.copy_button.mapTo(page.name_section, page.copy_button.rect().topLeft()).x()
+    content_width = page.name_section.width()
+
+    assert 0 <= button_left - heading_right <= 36
+    assert page.copy_button.geometry().right() < content_width * 0.6
+    assert abs(page.copy_button.geometry().center().y() - heading.geometry().center().y()) <= 8
+    assert page.name_output.text() == formatted_name
+    assert page.name_output.wordWrap()
+    assert page.name_output.height() > page.name_output.fontMetrics().height()
+    assert page.name_output.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByKeyboard
+    assert page.copy_button.focusPolicy() != Qt.FocusPolicy.NoFocus
+    page.copy_button.setFocus()
+    QTest.keyClick(page.copy_button, Qt.Key.Key_Space)
+    assert QApplication.clipboard().text() == formatted_name
+    assert page.copy_feedback.text() == "已复制名称"
+    assert page.status_label.text() == "查询完成 · 实时"
+
+    scroll = page.findChild(QScrollArea)
+    assert scroll is not None
+    assert scroll.horizontalScrollBar().maximum() == 0
+    page.close()
+
+
+@pytest.mark.parametrize("title", ["普通作品标题", "長い日本語タイトルと中文作品名称・" * 30])
+def test_identity_fact_columns_align_with_title_and_long_maker(
+    qapp: QApplication, title: str
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page.resize(480, 640)
+    page._show_result(
+        LookupResult(
+            work=Work(
+                workno="RJ01609020",
+                title=title,
+                maker_name="社团名称很长" * 30,
+            ),
+            formatted_name="[RJ01609020] 标题",
+        )
+    )
+    page.show()
+    qapp.processEvents()
+
+    captions = page.identity_frame.findChildren(QLabel, "lookupFactCaption")
+    assert [caption.text() for caption in captions] == ["作品编号", "社团"]
+    caption_x = [
+        caption.mapTo(page.identity_frame, caption.rect().topLeft()).x()
+        for caption in captions
+    ]
+    value_x = [
+        value.mapTo(page.identity_frame, value.rect().topLeft()).x()
+        for value in (page.workno_value, page.maker_value)
+    ]
+    row_top_deltas = [
+        abs(
+            caption.mapTo(page.identity_frame, caption.rect().topLeft()).y()
+            - value.mapTo(page.identity_frame, value.rect().topLeft()).y()
+        )
+        for caption, value in zip(captions, (page.workno_value, page.maker_value), strict=True)
+    ]
+
+    assert caption_x[0] == caption_x[1]
+    assert value_x[0] == value_x[1]
+    assert row_top_deltas == [0, 0]
+    assert page.workno_value.text() == "RJ01609020"
+    assert page.maker_value.text() == "社团名称很长" * 30
+    assert page.maker_value.wordWrap()
+    assert page.maker_value.height() > page.maker_value.fontMetrics().height()
+    assert page.title_value.text() == title
+
+    scroll = page.findChild(QScrollArea)
+    assert scroll is not None
+    assert scroll.horizontalScrollBar().maximum() == 0
     page.close()

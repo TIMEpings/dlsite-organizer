@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -136,8 +137,24 @@ class LookupPage(QWidget):
         self.workno_value.setObjectName("lookupWorkno")
         self.maker_value = _value_label()
         self.maker_value.setObjectName("lookupMaker")
-        identity_details.addWidget(_fact_row("作品编号", self.workno_value))
-        identity_details.addWidget(_fact_row("社团", self.maker_value))
+        facts = QGridLayout()
+        facts.setContentsMargins(0, 0, 0, 0)
+        facts.setHorizontalSpacing(8)
+        facts.setVerticalSpacing(5)
+        for row, (caption, value) in enumerate(
+            (("作品编号", self.workno_value), ("社团", self.maker_value))
+        ):
+            label = QLabel(caption)
+            label.setObjectName("lookupFactCaption")
+            facts.addWidget(
+                label,
+                row,
+                0,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            )
+            facts.addWidget(value, row, 1, Qt.AlignmentFlag.AlignTop)
+        facts.setColumnStretch(1, 1)
+        identity_details.addLayout(facts)
         self.cover_status_label = QLabel("正在读取封面…")
         self.cover_status_label.setObjectName("lookupCoverStatus")
         self.cover_status_label.setVisible(False)
@@ -150,11 +167,17 @@ class LookupPage(QWidget):
         name_layout = QVBoxLayout(self.name_section)
         name_layout.setContentsMargins(0, 0, 0, 0)
         name_layout.setSpacing(7)
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(10)
         output_label = QLabel("格式化名称")
         output_label.setObjectName("sectionLabel")
-        name_layout.addWidget(output_label)
-        output_row = QHBoxLayout()
-        output_row.setSpacing(10)
+        heading_row.addWidget(output_label)
+        self.copy_button = QPushButton("复制名称")
+        self.copy_button.setMinimumSize(108, 40)
+        self.copy_button.setEnabled(False)
+        heading_row.addWidget(self.copy_button)
+        heading_row.addStretch(1)
+        name_layout.addLayout(heading_row)
         self.name_output = _value_label()
         self.name_output.setObjectName("lookupFormattedName")
         self.name_output.setMinimumHeight(40)
@@ -162,12 +185,7 @@ class LookupPage(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
-        self.copy_button = QPushButton("复制名称")
-        self.copy_button.setMinimumSize(108, 40)
-        self.copy_button.setEnabled(False)
-        output_row.addWidget(self.name_output, 1)
-        output_row.addWidget(self.copy_button, 0, Qt.AlignmentFlag.AlignRight)
-        name_layout.addLayout(output_row)
+        name_layout.addWidget(self.name_output)
         self.copy_feedback = QLabel()
         self.copy_feedback.setObjectName("lookupCopyFeedback")
         self.copy_feedback.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -504,18 +522,6 @@ def _value_label() -> QLabel:
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
     return label
-
-
-def _fact_row(caption: str, value: QLabel) -> QWidget:
-    row = QWidget()
-    row_layout = QHBoxLayout(row)
-    row_layout.setContentsMargins(0, 0, 0, 0)
-    row_layout.setSpacing(8)
-    label = QLabel(caption)
-    label.setObjectName("lookupFactCaption")
-    row_layout.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
-    row_layout.addWidget(value, 1)
-    return row
 
 
 def _role_label(role: TranslationRole | None) -> str:
