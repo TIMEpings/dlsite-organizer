@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -30,6 +31,15 @@ def _write_marker(suffix: str, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _event(name: str) -> None:
+    marker = os.environ.get("DLSITE_ORGANIZER_TEST_MARKER")
+    if marker:
+        with Path(f"{marker}.events.jsonl").open("a", encoding="utf-8") as stream:
+            # Python 3.12 monotonic_ns uses coarse GetTickCount64 on Windows.
+            # QueryPerformanceCounter orders adjacent events across processes.
+            stream.write(json.dumps({"event": name, "time_ns": time.perf_counter_ns()}) + "\n")
+
+
 original_build_components = application_main.build_components
 
 
@@ -48,6 +58,7 @@ def tracked_build_components(settings):
         _mark("quick")
         if args:
             _write_marker("quick-count", str(len(args[0])))
+            _write_marker("quick-paths", json.dumps([str(path) for path in args[0]]))
         return original_rename(*args, **kwargs)
 
     service.rename = tracked_rename  # type: ignore[method-assign]
@@ -66,6 +77,44 @@ def tracked_database_init(self, path):
 
 Database.__init__ = tracked_database_init  # type: ignore[method-assign]
 
+original_dispose = Database.dispose
+
+
+def tracked_dispose(self):
+    original_dispose(self)
+    _event("database-disposed")
+    _mark("database-disposed")
+
+
+Database.dispose = tracked_dispose  # type: ignore[method-assign]
+
+original_start = application_main.InstanceCoordinator.start
+
+
+def tracked_start(self, *args, **kwargs):
+    role = original_start(self, *args, **kwargs)
+    if role is application_main.CoordinatorRole.PRIMARY:
+        _event("primary-owned")
+        _mark("primary-owned")
+    else:
+        _event("secondary-contending")
+        _mark("secondary-contending")
+    return role
+
+
+application_main.InstanceCoordinator.start = tracked_start  # type: ignore[method-assign]
+
+original_release_lock = application_main.InstanceCoordinator.release_lock
+
+
+def tracked_release_lock(self):
+    _event("lock-release")
+    original_release_lock(self)
+    _mark("lock-released")
+
+
+application_main.InstanceCoordinator.release_lock = tracked_release_lock  # type: ignore[method-assign]
+
 original_listen = application_main.InstanceCoordinator.listen
 
 
@@ -73,26 +122,87 @@ def tracked_listen(coordinator):
     result = original_listen(coordinator)
     if result:
         _mark("ready")
-        barrier = os.environ.get("DLSITE_ORGANIZER_TEST_SHUTDOWN_GAP_BARRIER")
-        if barrier:
-            def enter_gap() -> None:
-                coordinator.stop_server()
-                _mark("shutdown-gap")
-
-                def release_when_signaled() -> None:
-                    if Path(barrier).exists():
-                        coordinator.release_lock()
-                    else:
-                        QTimer.singleShot(25, release_when_signaled)
-
-                release_when_signaled()
-
-            QTimer.singleShot(0, enter_gap)
     return result
 
 
 application_main.InstanceCoordinator.listen = tracked_listen  # type: ignore[method-assign]
-application_main._schedule_startup_smoke = lambda *_args: None
+
+
+def schedule_test_shutdown(_application, _window, _lightweight, lifecycle):
+    barrier = os.environ.get("DLSITE_ORGANIZER_TEST_SHUTDOWN_GAP_BARRIER")
+    if not barrier:
+        return
+    original_can_finalize = lifecycle._can_finalize
+    deadline = time.monotonic() + 10
+    gate_opened = False
+
+    def gated_can_finalize() -> bool:
+        nonlocal gate_opened
+        can_finalize = original_can_finalize()
+        if not Path(barrier).is_file():
+            if time.monotonic() >= deadline:
+                _mark("shutdown-gate-timeout")
+                _application.exit(4)
+            return False
+        if not gate_opened:
+            gate_opened = True
+            _event("shutdown-gate-open")
+        return can_finalize
+
+    # Delay eligibility only. Production request_shutdown, its asynchronous
+    # polling timer, and its finalizer still own all cleanup and lock release.
+    lifecycle._can_finalize = gated_can_finalize
+    startup_timer = QTimer(lifecycle)
+    startup_timer.setInterval(25)
+
+    def enter_gap() -> None:
+        durable = lifecycle.durable_handoff
+        assert durable is not None
+        if not durable._timer.isActive():
+            if time.monotonic() >= deadline:
+                startup_timer.stop()
+                _mark("shutdown-gate-timeout")
+                _application.exit(4)
+            return
+        startup_timer.stop()
+        _event("shutdown-requested")
+        lifecycle.request_shutdown()
+        assert lifecycle.is_shutting_down
+        assert lifecycle.quick_action_controller.is_shutting_down
+        assert not durable._timer.isActive()
+        assert lifecycle._coordinator.server is None
+        assert lifecycle._coordinator._lock.isLocked()
+        _event("admission-stopped-lock-held")
+        _mark("shutdown-gap")
+
+    # Observe normal durable startup rather than assume zero-timer ordering.
+    startup_timer.timeout.connect(enter_gap)
+    startup_timer.start()
+
+
+application_main._schedule_startup_smoke = schedule_test_shutdown
+
+original_lifecycle_init = application_main.ApplicationLifecycle.__init__
+
+
+def tracked_lifecycle_init(self, *args, **kwargs):
+    original_lifecycle_init(self, *args, **kwargs)
+    self.shutdown_completed.connect(lambda: _mark("shutdown-completed"))
+    shutdown_file = os.environ.get("DLSITE_ORGANIZER_TEST_SHUTDOWN_FILE")
+    if shutdown_file:
+        timer = QTimer(self)
+        timer.setInterval(25)
+
+        def shutdown_when_signaled() -> None:
+            if Path(shutdown_file).is_file():
+                timer.stop()
+                self.request_shutdown()
+
+        timer.timeout.connect(shutdown_when_signaled)
+        timer.start()
+
+
+application_main.ApplicationLifecycle.__init__ = tracked_lifecycle_init  # type: ignore[method-assign]
 
 original_show_lightweight_mode = application_main.ApplicationLifecycle.show_lightweight_mode
 
@@ -118,6 +228,14 @@ original_submit = application_main.QuickActionController.submit
 
 
 def tracked_submit(self, *args, **kwargs):
+    if os.environ.get("DLSITE_ORGANIZER_TEST_SHUTDOWN_FILE") and not getattr(
+        self, "_test_completion_observed", False
+    ):
+        # DurableHandoff registered its completion slot during bootstrap. This
+        # later observer runs after its journal write, so the parent need not
+        # open the journal while Windows atomic replacement is still possible.
+        self.request_finished.connect(lambda _outcome: _mark("controller-finished"))
+        self._test_completion_observed = True
     marker = os.environ.get("DLSITE_ORGANIZER_TEST_MARKER")
     if marker:
         count_path = Path(marker).with_name(f"{Path(marker).name}.controller-submit-count")

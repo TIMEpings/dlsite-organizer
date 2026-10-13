@@ -17,6 +17,8 @@ def _child_environment(profile_parent: Path, marker: Path) -> dict[str, str]:
     repository = Path(__file__).resolve().parents[2]
     environment = os.environ.copy()
     environment["LOCALAPPDATA"] = str(profile_parent)
+    environment["APPDATA"] = str(profile_parent)
+    environment["PYTHONUTF8"] = "1"
     environment["QT_QPA_PLATFORM"] = "offscreen"
     environment["DLSITE_ORGANIZER_TEST_MODE"] = "1"
     environment["DLSITE_ORGANIZER_TEST_MARKER"] = str(marker)
@@ -350,7 +352,8 @@ def test_durable_request_survives_startup_beyond_old_deadline(tmp_path: Path) ->
 
 
 def test_shutdown_gap_secondary_takes_lock_and_drains_request(tmp_path: Path) -> None:
-    barrier = tmp_path / "release-lock"
+    barrier = tmp_path / "finish-old-shutdown"
+    new_shutdown = tmp_path / "shutdown-new-primary"
     old_marker = tmp_path / "old-primary"
     new_marker = tmp_path / "new-primary"
     environment = _child_environment(tmp_path, old_marker)
@@ -366,7 +369,8 @@ def test_shutdown_gap_secondary_takes_lock_and_drains_request(tmp_path: Path) ->
     new: subprocess.Popen[str] | None = None
     try:
         _wait_for_marker(old, old_marker, "shutdown-gap")
-        path = tmp_path / "RJ00000003 invalid"
+        # Exercise real Quick Rename completion without incidental metadata I/O.
+        path = tmp_path / "not-a-work-folder"
         path.mkdir()
         request = LocalCommand(
             PROTOCOL_VERSION,
@@ -374,7 +378,12 @@ def test_shutdown_gap_secondary_takes_lock_and_drains_request(tmp_path: Path) ->
             LocalCommandName.QUICK_RENAME,
             {"paths": [str(path)]},
         )
-        publish(tmp_path / "dlsite-organizer", request)
+        profile = tmp_path / "dlsite-organizer"
+        pending = publish(profile, request)
+        published_payload = pending.read_bytes()
+        journal = profile / "handoff" / "v1" / "journal" / f"{request.request_id}.json"
+        new_environment = _child_environment(tmp_path, new_marker)
+        new_environment["DLSITE_ORGANIZER_TEST_SHUTDOWN_FILE"] = str(new_shutdown)
         new = subprocess.Popen(
             [
                 sys.executable,
@@ -385,17 +394,77 @@ def test_shutdown_gap_secondary_takes_lock_and_drains_request(tmp_path: Path) ->
                 request.request_id,
             ],
             cwd=Path(__file__).resolve().parents[2],
-            env=_child_environment(tmp_path, new_marker),
+            env=new_environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
-        assert not new_marker.with_name("new-primary.components").exists()
+        # A failed production election proves contention, not just a process
+        # that has been spawned but has yet to attempt ownership.
+        _wait_for_marker(new, new_marker, "secondary-contending")
+        assert old.poll() is None
+        assert new.poll() is None
+        for suffix in ("components", "database", "primary-owned", "ready", "quick"):
+            assert not new_marker.with_name(f"new-primary.{suffix}").exists()
+        for suffix in ("database-disposed", "lock-released", "quick", "controller-submit-count"):
+            assert not old_marker.with_name(f"old-primary.{suffix}").exists()
+        assert pending.read_bytes() == published_payload
+        assert not journal.exists()
+
         barrier.write_text("release", encoding="ascii")
+        old_stdout, old_stderr = old.communicate(timeout=10)
+        assert old.returncode == 0, f"stdout={old_stdout}\nstderr={old_stderr}"
+        assert "Traceback" not in old_stderr
+        assert old_marker.with_name("old-primary.shutdown-completed").is_file()
+        assert old_marker.with_name("old-primary.lock-released").is_file()
+        _wait_for_marker(new, new_marker, "ready")
         _wait_for_marker(new, new_marker, "quick")
+        _wait_for_marker(new, new_marker, "controller-finished")
+        record = json.loads(journal.read_text(encoding="utf-8"))
+        new_shutdown.write_text("shutdown", encoding="ascii")
+        new_stdout, new_stderr = new.communicate(timeout=10)
+        assert new.returncode == 0, f"stdout={new_stdout}\nstderr={new_stderr}"
+        assert "Traceback" not in new_stderr
+        assert new_marker.with_name("new-primary.shutdown-completed").is_file()
+        assert new_marker.with_name("new-primary.lock-released").is_file()
         assert new_marker.with_name("new-primary.controller-submit-count").read_text() == "1"
+        assert new_marker.with_name("new-primary.quick-count").read_text() == "1"
+        processed_paths = json.loads(new_marker.with_name("new-primary.quick-paths").read_text())
+        assert processed_paths == [str(path)]
+        assert not old_marker.with_name("old-primary.controller-submit-count").exists()
+        assert not old_marker.with_name("old-primary.quick").exists()
+        assert record["id"] == request.request_id
+        assert record["status"] == "ACCEPTED"
+        assert record["operation"] == "QUICK_RENAME"
+        assert record["path_count"] == 1
+        assert record["tracked"] is True
+        assert record["state"] == "terminal"
+        assert record["execution"] == "completed"
+        assert json.loads(journal.read_text()) == record
+        for directory in ("prepared", "pending", "claimed", "recoverable", "quarantine"):
+            assert not list((profile / "handoff" / "v1" / directory).glob("*.json"))
+
+        def event_time(marker: Path, name: str) -> int:
+            events = [
+                json.loads(line)
+                for line in Path(f"{marker}.events.jsonl").read_text().splitlines()
+            ]
+            return min(event["time_ns"] for event in events if event["event"] == name)
+
+        assert (
+            event_time(old_marker, "primary-owned")
+            < event_time(old_marker, "shutdown-requested")
+            < event_time(old_marker, "admission-stopped-lock-held")
+            < event_time(new_marker, "secondary-contending")
+            < event_time(old_marker, "shutdown-gate-open")
+            < event_time(old_marker, "database-disposed")
+            < event_time(old_marker, "lock-release")
+            < event_time(new_marker, "primary-owned")
+        )
+        assert not old_marker.with_name("old-primary.shutdown-gate-timeout").exists()
     finally:
         barrier.touch()
+        new_shutdown.touch()
         if new is not None:
             _stop_process(new)
         _stop_process(old)
