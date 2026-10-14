@@ -1,6 +1,8 @@
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
@@ -13,7 +15,13 @@ from PySide6.QtWidgets import (
 )
 from tests.services.test_lookup import FakeProvider
 
-from dlsite_organizer.app.settings import AppSettings, SettingsService, load_settings
+from dlsite_organizer.app.settings import (
+    AppSettings,
+    CacheSettings,
+    ProviderSettings,
+    SettingsService,
+    load_settings,
+)
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.explorer_integration import (
@@ -254,8 +262,8 @@ def test_settings_numeric_controls_display_and_collect_configured_values(
     service = SettingsService(
         AppSettings(
             database_path=tmp_path / "metadata.sqlite3",
-            provider={"timeout_seconds": timeout},
-            cache={"ttl_hours": ttl},
+            provider=ProviderSettings(timeout_seconds=timeout),
+            cache=CacheSettings(ttl_hours=ttl),
         ),
         config_path=tmp_path / "config.toml",
     )
@@ -276,8 +284,8 @@ def test_unedited_numeric_controls_survive_unrelated_saves_and_reload(
     service = SettingsService(
         AppSettings(
             database_path=tmp_path / "metadata.sqlite3",
-            provider={"timeout_seconds": 1.25},
-            cache={"ttl_hours": 10000.25},
+            provider=ProviderSettings(timeout_seconds=1.25),
+            cache=CacheSettings(ttl_hours=10000.25),
         ),
         config_path=config_path,
     )
@@ -350,8 +358,8 @@ def test_reset_restores_editable_numeric_defaults(
     service = SettingsService(
         AppSettings(
             database_path=tmp_path / "metadata.sqlite3",
-            provider={"timeout_seconds": 1.25},
-            cache={"ttl_hours": 10000.25},
+            provider=ProviderSettings(timeout_seconds=1.25),
+            cache=CacheSettings(ttl_hours=10000.25),
         ),
         config_path=tmp_path / "config.toml",
     )
@@ -378,8 +386,8 @@ def test_failed_numeric_save_preserves_disk_and_service_model(
     service = SettingsService(
         AppSettings(
             database_path=tmp_path / "metadata.sqlite3",
-            provider={"timeout_seconds": 1.25},
-            cache={"ttl_hours": 10000.25},
+            provider=ProviderSettings(timeout_seconds=1.25),
+            cache=CacheSettings(ttl_hours=10000.25),
         ),
         config_path=config_path,
     )
@@ -399,6 +407,94 @@ def test_failed_numeric_save_preserves_disk_and_service_model(
     assert config_path.read_text(encoding="utf-8") == previous_disk
     assert service.settings == previous_model
     assert page.settings_status_label.text().startswith("保存失败：")
+    page.close()
+
+
+def test_database_path_display_tracks_custom_configured_value(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    custom_path = tmp_path / "custom-profile" / "metadata.sqlite3"
+    service = SettingsService(
+        AppSettings(database_path=custom_path), config_path=tmp_path / "config.toml"
+    )
+    page = SettingsPage(service)
+
+    assert page.database_path_label.text() == str(service.settings.database_path)
+    assert Path(page.database_path_label.text()) == custom_path
+    assert not custom_path.exists()
+    page.close()
+
+
+def test_reset_and_save_preserve_custom_database_path(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    custom_path = tmp_path / "custom-profile" / "metadata.sqlite3"
+    service = SettingsService(AppSettings(database_path=custom_path), config_path=config_path)
+    page = SettingsPage(service)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    page.reset_defaults()
+    assert page.database_path_label.text() == str(custom_path)
+    assert page._collect_values()["database_path"] == custom_path
+    page.save_settings()
+
+    assert load_settings(config_path).database_path == custom_path
+    assert service.settings.database_path == custom_path
+    assert page.database_path_label.text() == str(custom_path)
+    assert not custom_path.exists()
+    page.close()
+
+
+def test_cancelled_reset_preserves_custom_database_path_and_draft(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custom_path = tmp_path / "custom-profile" / "metadata.sqlite3"
+    service = SettingsService(
+        AppSettings(database_path=custom_path, naming_template="{title}"),
+        config_path=tmp_path / "config.toml",
+    )
+    page = SettingsPage(service)
+    page.template_input.setText("DRAFT {title}")
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Cancel,
+    )
+
+    page.reset_defaults()
+
+    assert page.database_path_label.text() == str(custom_path)
+    assert page.template_input.text() == "DRAFT {title}"
+    assert page._collect_values()["database_path"] == custom_path
+    assert not custom_path.exists()
+    page.close()
+
+
+def test_database_path_display_and_opener_follow_service_publication(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initial_path = tmp_path / "initial" / "metadata.sqlite3"
+    updated_path = tmp_path / "updated" / "metadata.sqlite3"
+    service = SettingsService(
+        AppSettings(database_path=initial_path), config_path=tmp_path / "config.toml"
+    )
+    page = SettingsPage(service)
+    opened: list[QUrl] = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+
+    service.save(service.settings.model_copy(update={"database_path": updated_path}))
+    page.open_database_button.click()
+
+    assert page.database_path_label.text() == str(updated_path)
+    assert len(opened) == 1
+    assert Path(opened[0].toLocalFile()) == updated_path.parent
+    assert not initial_path.exists()
+    assert not updated_path.exists()
     page.close()
 
 

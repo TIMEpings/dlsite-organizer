@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -282,7 +283,9 @@ class SettingsPage(QWidget):
             self._settings_service.config_path, "打开所在文件夹"
         )
         database_row, self.database_path_label, self.open_database_button = self._path_row(
-            self._settings_service.settings.database_path, "打开所在文件夹"
+            self._settings_service.settings.database_path,
+            "打开所在文件夹",
+            path_getter=lambda: self._settings_service.settings.database_path,
         )
         logs_row, self.logs_path_label, self.open_logs_button = self._path_row(
             default_logs_path(), "打开日志文件夹"
@@ -329,7 +332,11 @@ class SettingsPage(QWidget):
         self.remove_explorer_button.clicked.connect(self.remove_explorer_integration)
 
     def _path_row(
-        self, path: Path, button_text: str
+        self,
+        path: Path,
+        button_text: str,
+        *,
+        path_getter: Callable[[], Path] | None = None,
     ) -> tuple[QWidget, QLabel, QPushButton]:
         row = QWidget()
         row_layout = QHBoxLayout(row)
@@ -341,7 +348,8 @@ class SettingsPage(QWidget):
         button = QPushButton(button_text)
         button.setObjectName("openPathButton")
         set_button_role(button, ButtonRole.QUIET)
-        button.clicked.connect(lambda _checked=False, value=path: self._open_path(value))
+        get_path = path_getter or (lambda: path)
+        button.clicked.connect(lambda _checked=False: self._open_path(get_path()))
         row_layout.addWidget(path_label, 1)
         row_layout.addWidget(button)
         return row, path_label, button
@@ -581,7 +589,10 @@ class SettingsPage(QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._load_settings(self._settings_service.defaults())
+        defaults = self._settings_service.defaults().model_copy(
+            update={"database_path": self._settings_service.settings.database_path}
+        )
+        self._load_settings(defaults)
         self.settings_status_label.setProperty("state", "success")
         self.settings_status_label.setText("默认值已载入当前页面；点击“保存设置”后才会写入。")
         self._refresh_status_style()
