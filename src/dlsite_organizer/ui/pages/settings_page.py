@@ -12,7 +12,6 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -258,28 +257,22 @@ class SettingsPage(QWidget):
         self.base_url_input.setToolTip("DLsite base URL；不包含 section 路径。")
         self.cache_enabled = QCheckBox("启用 metadata cache")
         self.cache_enabled.setObjectName("cacheEnabledInput")
-        self.cache_ttl_input = QDoubleSpinBox()
-        self.cache_ttl_input.setObjectName("cacheTtlInput")
-        self.cache_ttl_input.setRange(0.1, 8760.0)
-        self.cache_ttl_input.setDecimals(1)
-        self.cache_ttl_input.setSuffix(" 小时")
+        cache_ttl_row, self.cache_ttl_input = self._numeric_setting_row(
+            "cacheTtlInput", "小时"
+        )
         self.cache_ttl_input.setToolTip(
             "已有 cache 不会按新 locale 静默重解释；下一次 live/force refresh 使用新 locale。"
         )
         self.allow_stale_input = QCheckBox("网络错误时允许使用旧 cache")
-        self.timeout_input = QDoubleSpinBox()
-        self.timeout_input.setObjectName("timeoutInput")
-        self.timeout_input.setRange(3.0, 120.0)
-        self.timeout_input.setDecimals(1)
-        self.timeout_input.setSuffix(" 秒")
+        timeout_row, self.timeout_input = self._numeric_setting_row("timeoutInput", "秒")
         self.timeout_input.setToolTip("网络请求超时，推荐范围 3–120 秒。")
         metadata_form.addRow("元数据语言", self.metadata_locale_input)
         metadata_form.addRow("DLsite section", self.provider_section_input)
         metadata_form.addRow("DLsite base URL", self.base_url_input)
         metadata_form.addRow("缓存", self.cache_enabled)
-        metadata_form.addRow("缓存 TTL", self.cache_ttl_input)
+        metadata_form.addRow("缓存 TTL", cache_ttl_row)
         metadata_form.addRow("缓存回退", self.allow_stale_input)
-        metadata_form.addRow("网络超时", self.timeout_input)
+        metadata_form.addRow("网络超时", timeout_row)
         content_layout.addWidget(metadata_box)
 
         data_box = QGroupBox("数据与诊断")
@@ -353,6 +346,18 @@ class SettingsPage(QWidget):
         row_layout.addWidget(button)
         return row, path_label, button
 
+    def _numeric_setting_row(self, object_name: str, unit: str) -> tuple[QWidget, QLineEdit]:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        input_field = QLineEdit()
+        input_field.setObjectName(object_name)
+        unit_label = QLabel(unit)
+        unit_label.setObjectName(f"{object_name}Unit")
+        row_layout.addWidget(input_field, 1)
+        row_layout.addWidget(unit_label)
+        return row, input_field
+
     def _load_settings(self, settings: AppSettings) -> None:
         self.template_input.setText(settings.naming_template)
         self.date_format_input.setText(settings.date_format)
@@ -369,9 +374,9 @@ class SettingsPage(QWidget):
             max(0, self.metadata_locale_input.findData(settings.provider.metadata_locale))
         )
         self.cache_enabled.setChecked(settings.cache.enabled)
-        self.cache_ttl_input.setValue(settings.cache.ttl_hours)
+        self.cache_ttl_input.setText(repr(settings.cache.ttl_hours))
         self.allow_stale_input.setChecked(settings.cache.allow_stale_on_error)
-        self.timeout_input.setValue(settings.provider.timeout_seconds)
+        self.timeout_input.setText(repr(settings.provider.timeout_seconds))
         self.startup_mode_input.setCurrentIndex(
             max(0, self.startup_mode_input.findData(settings.startup_mode.value))
         )
@@ -491,16 +496,23 @@ class SettingsPage(QWidget):
             **current["provider"],
             "section": self.provider_section_input.text(),
             "base_url": self.base_url_input.text(),
-            "timeout_seconds": self.timeout_input.value(),
+            "timeout_seconds": self._numeric_value(self.timeout_input, "网络超时"),
             "metadata_locale": self.metadata_locale_input.currentData(),
         }
         current["cache"] = {
             **current["cache"],
             "enabled": self.cache_enabled.isChecked(),
-            "ttl_hours": self.cache_ttl_input.value(),
+            "ttl_hours": self._numeric_value(self.cache_ttl_input, "缓存 TTL"),
             "allow_stale_on_error": self.allow_stale_input.isChecked(),
         }
         return current
+
+    @staticmethod
+    def _numeric_value(input_field: QLineEdit, label: str) -> float:
+        try:
+            return float(input_field.text())
+        except ValueError as exc:
+            raise ValueError(f"{label}必须是有效数字") from exc
 
     def _settings_from_widgets(self) -> AppSettings:
         return AppSettings.model_validate(self._collect_values())

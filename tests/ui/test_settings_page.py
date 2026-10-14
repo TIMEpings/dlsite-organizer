@@ -1,7 +1,16 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QMessageBox, QScrollArea, QVBoxLayout
+from PySide6.QtWidgets import (
+    QApplication,
+    QDoubleSpinBox,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QScrollArea,
+    QVBoxLayout,
+)
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.app.settings import AppSettings, SettingsService, load_settings
@@ -226,3 +235,181 @@ def test_reset_defaults_requires_confirmation_and_does_not_write(
     assert page.metadata_locale_input.currentData() == defaults.provider.metadata_locale
     assert not config_path.exists()
     page.close()
+
+
+@pytest.mark.parametrize(
+    ("timeout", "ttl"),
+    (
+        (15.0, 24.0),
+        (1.25, 10000.25),
+        (1.2345678901234567, 1.2345678901234567),
+        (0.00000123456789, 0.000000123456789),
+        (5e-324, 5e-324),
+        (120.0, 1.7976931348623157e308),
+    ),
+)
+def test_settings_numeric_controls_display_and_collect_configured_values(
+    qapp: QApplication, tmp_path: Path, timeout: float, ttl: float
+) -> None:
+    service = SettingsService(
+        AppSettings(
+            database_path=tmp_path / "metadata.sqlite3",
+            provider={"timeout_seconds": timeout},
+            cache={"ttl_hours": ttl},
+        ),
+        config_path=tmp_path / "config.toml",
+    )
+    page = SettingsPage(service)
+
+    assert _numeric_control_value(page.timeout_input) == timeout
+    assert _numeric_control_value(page.cache_ttl_input) == ttl
+    collected = page._collect_values()
+    assert collected["provider"]["timeout_seconds"] == timeout
+    assert collected["cache"]["ttl_hours"] == ttl
+    page.close()
+
+
+def test_unedited_numeric_controls_survive_unrelated_saves_and_reload(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.toml"
+    service = SettingsService(
+        AppSettings(
+            database_path=tmp_path / "metadata.sqlite3",
+            provider={"timeout_seconds": 1.25},
+            cache={"ttl_hours": 10000.25},
+        ),
+        config_path=config_path,
+    )
+    page = SettingsPage(service)
+
+    for template in ("[{workno}] {title}", "[{maker_name}] {title}"):
+        page.template_input.setText(template)
+        page.save_settings()
+        reloaded = load_settings(config_path)
+        assert reloaded.provider.timeout_seconds == 1.25
+        assert reloaded.cache.ttl_hours == 10000.25
+        assert service.settings.provider.timeout_seconds == 1.25
+        assert service.settings.cache.ttl_hours == 10000.25
+    page.close()
+
+
+def test_explicit_valid_numeric_text_edits_save_exact_values(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.toml"
+    service = SettingsService(
+        AppSettings(database_path=tmp_path / "metadata.sqlite3"), config_path=config_path
+    )
+    page = SettingsPage(service)
+    _set_numeric_control_text(page.timeout_input, "2.375")
+    _set_numeric_control_text(page.cache_ttl_input, "10000.375")
+
+    page.save_settings()
+
+    reloaded = load_settings(config_path)
+    assert reloaded.provider.timeout_seconds == 2.375
+    assert reloaded.cache.ttl_hours == 10000.375
+    assert _numeric_control_value(page.timeout_input) == 2.375
+    assert _numeric_control_value(page.cache_ttl_input) == 10000.375
+    page.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_text"),
+    (
+        ("timeout", "0"),
+        ("timeout", "120.1"),
+        ("timeout", "not a number"),
+        ("ttl", "0"),
+        ("ttl", "not a number"),
+    ),
+)
+def test_invalid_numeric_edit_is_rejected_without_saving_old_value(
+    qapp: QApplication, tmp_path: Path, field: str, invalid_text: str
+) -> None:
+    config_path = tmp_path / "config.toml"
+    service = SettingsService(
+        AppSettings(database_path=tmp_path / "metadata.sqlite3"), config_path=config_path
+    )
+    page = SettingsPage(service)
+    input_widget = page.timeout_input if field == "timeout" else page.cache_ttl_input
+    _set_numeric_control_text(input_widget, invalid_text)
+
+    page.save_settings()
+
+    assert not config_path.exists()
+    assert service.settings.provider.timeout_seconds == 15.0
+    assert page.settings_status_label.text().startswith("保存失败：")
+    page.close()
+
+
+def test_reset_restores_editable_numeric_defaults(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = SettingsService(
+        AppSettings(
+            database_path=tmp_path / "metadata.sqlite3",
+            provider={"timeout_seconds": 1.25},
+            cache={"ttl_hours": 10000.25},
+        ),
+        config_path=tmp_path / "config.toml",
+    )
+    page = SettingsPage(service)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    page.reset_defaults()
+
+    defaults = AppSettings()
+    assert _numeric_control_value(page.timeout_input) == defaults.provider.timeout_seconds
+    assert _numeric_control_value(page.cache_ttl_input) == defaults.cache.ttl_hours
+    assert not service.config_path.exists()
+    page.close()
+
+
+def test_failed_numeric_save_preserves_disk_and_service_model(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    service = SettingsService(
+        AppSettings(
+            database_path=tmp_path / "metadata.sqlite3",
+            provider={"timeout_seconds": 1.25},
+            cache={"ttl_hours": 10000.25},
+        ),
+        config_path=config_path,
+    )
+    service.save(service.settings)
+    previous_disk = config_path.read_text(encoding="utf-8")
+    previous_model = service.settings
+    page = SettingsPage(service)
+    _set_numeric_control_text(page.timeout_input, "2.375")
+
+    def fail_replace(*_args: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("dlsite_organizer.app.settings.os.replace", fail_replace)
+
+    page.save_settings()
+
+    assert config_path.read_text(encoding="utf-8") == previous_disk
+    assert service.settings == previous_model
+    assert page.settings_status_label.text().startswith("保存失败：")
+    page.close()
+
+
+def _numeric_control_value(widget: QDoubleSpinBox | QLineEdit) -> float:
+    if isinstance(widget, QDoubleSpinBox):
+        return widget.value()
+    return float(widget.text())
+
+
+def _set_numeric_control_text(widget: QDoubleSpinBox | QLineEdit, text: str) -> None:
+    if isinstance(widget, QDoubleSpinBox):
+        widget.lineEdit().setText(text)
+    else:
+        widget.setText(text)
