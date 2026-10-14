@@ -284,12 +284,12 @@ def _settings_to_toml(settings: AppSettings) -> str:
         "[provider]",
         f"section = {_toml_string(settings.provider.section)}",
         f"base_url = {_toml_string(settings.provider.base_url)}",
-        f"timeout_seconds = {settings.provider.timeout_seconds:g}",
+        f"timeout_seconds = {_toml_float(settings.provider.timeout_seconds)}",
         f"metadata_locale = {_toml_string(settings.provider.metadata_locale)}",
         "",
         "[cache]",
         f"enabled = {_toml_bool(settings.cache.enabled)}",
-        f"ttl_hours = {settings.cache.ttl_hours:g}",
+        f"ttl_hours = {_toml_float(settings.cache.ttl_hours)}",
         f"allow_stale_on_error = {_toml_bool(settings.cache.allow_stale_on_error)}",
         "",
     ]
@@ -302,3 +302,8 @@ def _toml_string(value: str) -> str:
 
 def _toml_bool(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _toml_float(value: float) -> str:
+    """Return Python's shortest decimal representation that round-trips as a float."""
+    return repr(value)

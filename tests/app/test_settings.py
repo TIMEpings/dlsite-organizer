@@ -1,4 +1,5 @@
 import ctypes
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -212,6 +213,66 @@ def test_settings_service_saves_atomically_and_round_trips_new_fields(tmp_path: 
     assert loaded.provider.metadata_locale == "zh_cn"
     assert loaded.cache.ttl_hours == 12
     assert not any(config_path.parent.glob(f".{config_path.name}.*.tmp"))
+
+
+@pytest.mark.parametrize(
+    ("timeout", "ttl"),
+    (
+        (15.0, 24.0),
+        (1.25, 10000.25),
+        (1.2345678901234567, 1.2345678901234567),
+        (5e-324, 5e-324),
+        (119.99999999999999, 1.7976931348623157e308),
+        (120.0, 1e-300),
+    ),
+)
+def test_numeric_toml_writer_preserves_finite_float_round_trips(
+    tmp_path: Path, timeout: float, ttl: float
+) -> None:
+    settings = AppSettings(
+        database_path=tmp_path / "custom.sqlite3",
+        provider=ProviderSettings(timeout_seconds=timeout),
+        cache=CacheSettings(ttl_hours=ttl),
+    )
+
+    content = settings_module._settings_to_toml(settings)
+    parsed = tomllib.loads(content)
+
+    assert parsed["provider"]["timeout_seconds"] == timeout
+    assert parsed["cache"]["ttl_hours"] == ttl
+    assert AppSettings.model_validate(parsed) == settings
+
+
+def test_settings_service_repeated_save_load_preserves_precision_and_unrelated_fields(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    service = SettingsService(
+        AppSettings(
+            database_path=tmp_path / "metadata.sqlite3",
+            provider=ProviderSettings(timeout_seconds=1.2345678901234567),
+            cache=CacheSettings(ttl_hours=10000.25),
+        ),
+        config_path=config_path,
+    )
+
+    for template in ("[{workno}] {title}", "[{maker_name}] {title}", "[{workno}] {title}"):
+        updated = service.settings.model_copy(update={"naming_template": template})
+        service.save(updated)
+        reloaded = load_settings(config_path)
+        assert reloaded.provider.timeout_seconds == 1.2345678901234567
+        assert reloaded.cache.ttl_hours == 10000.25
+        service = SettingsService(reloaded, config_path=config_path)
+
+
+def test_schema_numeric_nonfinite_acceptance_remains_explicit() -> None:
+    settings = AppSettings(cache=CacheSettings(ttl_hours=float("inf")))
+
+    parsed = tomllib.loads(settings_module._settings_to_toml(settings))
+
+    assert parsed["cache"]["ttl_hours"] == float("inf")
+    with pytest.raises(ValueError):
+        AppSettings(cache=CacheSettings(ttl_hours=float("nan")))
 
 
 def test_legacy_toml_uses_defaults_for_new_fields(
