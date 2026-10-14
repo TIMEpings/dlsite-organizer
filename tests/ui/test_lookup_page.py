@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 
 import pytest
-from PySide6.QtCore import QBuffer, QEventLoop, QIODevice, QPoint, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtCore import QBuffer, QEvent, QEventLoop, QIODevice, QPoint, QPointF, Qt, QTimer
+from PySide6.QtGui import QColor, QEnterEvent, QImage, QPainter
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QStyle, QStyleOptionButton
 from tests.services.test_lookup import FakeProvider
@@ -550,6 +550,11 @@ def test_formatted_name_is_focusable_copy_target_and_wraps(
     assert page.name_output.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByKeyboard
     assert page.name_output.focusPolicy() != Qt.FocusPolicy.NoFocus
     page.name_output.setFocus()
+    qapp.processEvents()
+    icon = page.name_output.copy_affordance
+    assert icon.isVisible()
+    assert icon.geometry().right() < page.name_output.width()
+    assert "padding: 4px 28px 4px 6px" in page.name_output.styleSheet()
     QTest.keyClick(page.name_output, Qt.Key.Key_Space)
     assert QApplication.clipboard().text() == formatted_name
     assert page.copy_feedback.text() == "已复制"
@@ -671,6 +676,98 @@ def test_pending_single_click_never_copies_a_replaced_result(qapp: QApplication)
     page.close()
 
 
+def test_formatted_name_copy_affordance_is_contextual_and_mouse_transparent(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    expected = "[RJ00000001] contextual copy"
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="标题"), formatted_name=expected)
+    )
+    page.show()
+    qapp.processEvents()
+
+    icon = page.name_output.copy_affordance
+    assert icon.isHidden()
+
+    QApplication.sendEvent(
+        page.name_output,
+        QEnterEvent(QPointF(24, 20), QPointF(24, 20), QPointF(0, 0)),
+    )
+    qapp.processEvents()
+    assert not icon.isHidden()
+    assert icon.text() == "⧉"
+    assert icon.focusPolicy() == Qt.FocusPolicy.NoFocus
+    assert icon.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    QApplication.sendEvent(page.name_output, QEvent(QEvent.Type.Leave))
+    qapp.processEvents()
+    assert icon.isHidden()
+
+    page.name_output.setFocus()
+    qapp.processEvents()
+    assert not icon.isHidden()
+    page.name_output.clearFocus()
+    qapp.processEvents()
+    assert icon.isHidden()
+
+    # The overlay remains part of the name region's original click target.
+    icon_center = icon.geometry().center()
+    QTest.mouseClick(page.name_output, Qt.MouseButton.LeftButton, pos=icon_center)
+    _wait_for_click_copy(qapp)
+    assert QApplication.clipboard().text() == expected
+    assert icon.text() == "✓"
+    assert page.status_label.text() == "查询完成 · 实时"
+    page.close()
+
+
+def test_formatted_name_copy_acknowledgement_expires_to_contextual_icon(
+    qapp: QApplication,
+) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page._show_result(
+        LookupResult(
+            work=Work(workno="RJ00000001", title="标题"),
+            formatted_name="[RJ00000001] acknowledged",
+        )
+    )
+    page.show()
+    qapp.processEvents()
+    page.name_output.setFocus()
+    page.copy_name()
+    assert page.name_output.copy_affordance.text() == "✓"
+
+    QTest.qWait(page._copy_feedback_timer.interval() + 100)
+    qapp.processEvents()
+    assert page.copy_feedback.text() == ""
+    assert page.name_output.copy_affordance.text() == "⧉"
+    page.name_output.clearFocus()
+    assert page.name_output.copy_affordance.isHidden()
+    page.close()
+
+
+def test_result_replacement_clears_copy_acknowledgement(qapp: QApplication) -> None:
+    page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000001", title="first"), formatted_name="first name")
+    )
+    page.show()
+    page.name_output.setFocus()
+    page.copy_name()
+    assert page.name_output.copy_affordance.text() == "✓"
+
+    page._show_result(
+        LookupResult(work=Work(workno="RJ00000002", title="second"), formatted_name="second name")
+    )
+    assert page.name_output.copy_affordance.text() == "⧉"
+    assert page.copy_feedback.text() == ""
+    QApplication.clipboard().setText("sentinel")
+    QTest.qWait(page._copy_feedback_timer.interval() + 100)
+    assert QApplication.clipboard().text() == "sentinel"
+    assert page.name_output.copy_affordance.text() == "⧉"
+    assert page.status_label.text() == "查询完成 · 实时"
+    page.close()
+
+
 @pytest.mark.parametrize("title", ["普通作品标题", "長い日本語タイトルと中文作品名称・" * 30])
 def test_identity_fact_columns_align_with_title_and_long_maker(
     qapp: QApplication, title: str
@@ -716,6 +813,19 @@ def test_identity_fact_columns_align_with_title_and_long_maker(
     assert page.maker_value.wordWrap()
     assert page.maker_value.height() > page.maker_value.fontMetrics().height()
     assert page.title_value.text() == title
+
+    title_bottom = page.title_value.mapTo(
+        page.identity_frame, page.title_value.rect().bottomLeft()
+    ).y()
+    workno_top = page.workno_value.mapTo(
+        page.identity_frame, page.workno_value.rect().topLeft()
+    ).y()
+    workno_bottom = page.workno_value.mapTo(
+        page.identity_frame, page.workno_value.rect().bottomLeft()
+    ).y()
+    maker_top = page.maker_value.mapTo(page.identity_frame, page.maker_value.rect().topLeft()).y()
+    assert 0 <= workno_top - title_bottom <= 16
+    assert 0 <= maker_top - workno_bottom <= 12
 
     scroll = page.findChild(QScrollArea)
     assert scroll is not None

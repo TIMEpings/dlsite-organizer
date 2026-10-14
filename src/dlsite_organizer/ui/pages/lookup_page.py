@@ -6,13 +6,23 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import cast
 
-from PySide6.QtCore import QPoint, QSize, Qt, QThread, QTimer, Slot
-from PySide6.QtGui import QKeyEvent, QMouseEvent, QPixmap, QResizeEvent, QShowEvent
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QThread, QTimer, Slot
+from PySide6.QtGui import (
+    QColor,
+    QEnterEvent,
+    QFocusEvent,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,7 +43,7 @@ from dlsite_organizer.services.translation_relations import (
     TranslationAnalysisStatus,
 )
 from dlsite_organizer.ui.theme import ButtonRole, set_button_role
-from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, Shape
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, Shape, Spacing
 from dlsite_organizer.ui.workers.lookup_worker import LookupWorker
 from dlsite_organizer.ui.widgets.constrained_content import (
     ConstrainedContent,
@@ -81,7 +91,7 @@ class LookupPage(QWidget):
         self._copy_feedback_timer = QTimer(self)
         self._copy_feedback_timer.setSingleShot(True)
         self._copy_feedback_timer.setInterval(1400)
-        self._copy_feedback_timer.timeout.connect(self.copy_feedback.clear)
+        self._copy_feedback_timer.timeout.connect(self._copy_feedback_expired)
 
     def _build_ui(self) -> None:
         page_layout = QVBoxLayout(self)
@@ -137,7 +147,7 @@ class LookupPage(QWidget):
         result_layout.addWidget(self.cover_label, 0, Qt.AlignmentFlag.AlignTop)
 
         identity_details = QVBoxLayout()
-        identity_details.setSpacing(5)
+        identity_details.setSpacing(Spacing.MD)
         self.title_value = _value_label()
         self.title_value.setObjectName("lookupTitle")
         title_font = self.title_value.font()
@@ -149,23 +159,28 @@ class LookupPage(QWidget):
         self.workno_value.setObjectName("lookupWorkno")
         self.maker_value = _value_label()
         self.maker_value.setObjectName("lookupMaker")
-        facts = QGridLayout()
+        facts = QVBoxLayout()
         facts.setContentsMargins(0, 0, 0, 0)
-        facts.setHorizontalSpacing(8)
-        facts.setVerticalSpacing(5)
-        for row, (caption, value) in enumerate(
-            (("作品编号", self.workno_value), ("社团", self.maker_value))
-        ):
+        facts.setSpacing(Spacing.SM)
+        fact_rows: list[tuple[QLabel, QLabel]] = []
+        for caption, value in (("作品编号", self.workno_value), ("社团", self.maker_value)):
             label = QLabel(caption)
             label.setObjectName("lookupFactCaption")
-            facts.addWidget(
+            fact_rows.append((label, value))
+        caption_width = max(label.sizeHint().width() for label, _ in fact_rows)
+        for label, value in fact_rows:
+            label.setFixedWidth(caption_width)
+            row_layout = QHBoxLayout()
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(Spacing.SM)
+            row_layout.addWidget(
                 label,
-                row,
                 0,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
             )
-            facts.addWidget(value, row, 1, Qt.AlignmentFlag.AlignTop)
-        facts.setColumnStretch(1, 1)
+            row_layout.addWidget(value, 1, Qt.AlignmentFlag.AlignTop)
+            facts.addLayout(row_layout)
+        facts.setAlignment(Qt.AlignmentFlag.AlignTop)
         identity_details.addLayout(facts)
         self.cover_status_label = QLabel("正在读取封面…")
         self.cover_status_label.setObjectName("lookupCoverStatus")
@@ -208,7 +223,7 @@ QLabel#lookupFormattedName {{
   background: transparent;
   border: 1px solid transparent;
   border-radius: {Shape.CONTROL_RADIUS}px;
-  padding: 4px 6px;
+  padding: 4px 28px 4px 6px;
 }}
 QLabel#lookupFormattedName:hover {{ background: {LIGHT_COLORS.surface_secondary}; }}
 QLabel#lookupFormattedName:focus {{ border-color: {LIGHT_COLORS.focus}; }}
@@ -377,6 +392,7 @@ QLabel#lookupFormattedName:focus:hover {{ background: {LIGHT_COLORS.surface_seco
         self.name_output.setText(result.formatted_name)
         self.copy_feedback.clear()
         self._copy_feedback_timer.stop()
+        self.name_output.set_copy_acknowledged(False)
         self._cover_pixmap = QPixmap()
         self._set_cover_placeholder()
         self.cover_status_label.setVisible(bool(work.cover_url and self._thread is not None))
@@ -437,7 +453,13 @@ QLabel#lookupFormattedName:focus:hover {{ background: {LIGHT_COLORS.surface_seco
         clipboard = QApplication.clipboard()
         clipboard.setText(self._formatted_name)
         self.copy_feedback.setText("已复制")
+        self.name_output.set_copy_acknowledged(True)
         self._copy_feedback_timer.start()
+
+    @Slot()
+    def _copy_feedback_expired(self) -> None:
+        self.copy_feedback.clear()
+        self.name_output.set_copy_acknowledged(False)
 
     def _name_copy_requested(self, captured_name: str) -> None:
         """Copy only if the result clicked is still the currently displayed result."""
@@ -519,6 +541,7 @@ QLabel#lookupFormattedName:focus:hover {{ background: {LIGHT_COLORS.surface_seco
     def _clear_result(self) -> None:
         self._formatted_name = ""
         self._copy_feedback_timer.stop()
+        self.name_output.set_copy_acknowledged(False)
         self.name_output.clear()
         self.copy_feedback.clear()
         self.identity_frame.setVisible(False)
@@ -609,6 +632,42 @@ QLabel#lookupFormattedName:focus:hover {{ background: {LIGHT_COLORS.surface_seco
         self.status_label.style().polish(self.status_label)
 
 
+class _CopyAffordance(QLabel):
+    """Small noninteractive vector copy/check glyph inside the name region."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__("⧉", parent)
+        self._acknowledged = False
+        self.setObjectName("lookupCopyAffordance")
+        self.setFixedSize(22, 22)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_acknowledged(self, acknowledged: bool) -> None:
+        self._acknowledged = acknowledged
+        self.setText("✓" if acknowledged else "⧉")
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        color = QColor(LIGHT_COLORS.success if self._acknowledged else LIGHT_COLORS.text_muted)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(color)
+        pen.setWidthF(1.5 if not self._acknowledged else 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if self._acknowledged:
+            painter.drawLine(5, 11, 9, 15)
+            painter.drawLine(9, 15, 17, 7)
+        else:
+            painter.drawRoundedRect(QRectF(4.5, 3.5, 9, 12), 1.2, 1.2)
+            painter.drawRoundedRect(QRectF(8.5, 7.5, 9, 12), 1.2, 1.2)
+        painter.end()
+
+
 class _CopyableNameLabel(QLabel):
     """Selectable formatted name with delayed single-click copy activation."""
 
@@ -619,6 +678,7 @@ class _CopyableNameLabel(QLabel):
     ) -> None:
         super().__init__(parent)
         self._copy_requested = copy_requested
+        self._copy_acknowledged = False
         self._press_position: QPoint | None = None
         self._press_name = ""
         self._dragged = False
@@ -628,6 +688,42 @@ class _CopyableNameLabel(QLabel):
         self._single_click_timer.setSingleShot(True)
         self._single_click_timer.setInterval(QApplication.doubleClickInterval())
         self._single_click_timer.timeout.connect(self._copy_captured_name)
+        self.setMouseTracking(True)
+        self.copy_affordance = _CopyAffordance(self)
+        self.copy_affordance.hide()
+
+    def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802
+        super().enterEvent(event)
+        self._update_copy_affordance()
+
+    def leaveEvent(self, event: QEvent) -> None:  # noqa: N802
+        super().leaveEvent(event)
+        self._update_copy_affordance()
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802
+        super().focusInEvent(event)
+        self._update_copy_affordance()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        self._update_copy_affordance()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.copy_affordance.move(
+            self.width() - self.copy_affordance.width() - 6,
+            (self.height() - self.copy_affordance.height()) // 2,
+        )
+
+    def set_copy_acknowledged(self, acknowledged: bool) -> None:
+        self._copy_acknowledged = acknowledged
+        self.copy_affordance.set_acknowledged(acknowledged)
+        self._update_copy_affordance()
+
+    def _update_copy_affordance(self) -> None:
+        self.copy_affordance.setVisible(
+            self.underMouse() or self.hasFocus() or self._copy_acknowledged
+        )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
