@@ -40,6 +40,7 @@ from dlsite_organizer.services.quick_rename import (
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
 from dlsite_organizer.ui.theme.icons import lightweight_action_icon
+from dlsite_organizer.ui.theme.palette import use_custom_focus_border
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 from dlsite_organizer.ui.widgets.drop_zone import UnifiedDropZone
 from dlsite_organizer.ui.widgets.title_bar import TitleBar
@@ -161,6 +162,8 @@ class LightweightWindow(QMainWindow):
     def _action_button(self, icon: str, name: str) -> QPushButton:
         button = QPushButton()
         button.setObjectName("lightweightAction")
+        # _LIGHTWEIGHT_STYLES supplies this action's explicit :focus border.
+        use_custom_focus_border(button)
         button.setIcon(lightweight_action_icon(icon))
         button.setIconSize(QSize(18, 18))
         button.setFixedSize(34, 34)

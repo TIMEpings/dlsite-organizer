@@ -65,8 +65,13 @@ def _draw_icon(name: str, color: str) -> QPixmap:
         painter.drawEllipse(QRectF(7.1, 7.1, 3.8, 3.8))
     else:
         painter.drawEllipse(QRectF(2.2, 2.2, 13.6, 13.6))
-        painter.drawEllipse(QRectF(8.15, 5, 1.7, 1.7))
-        painter.drawLine(QPointF(9, 8), QPointF(9, 13))
+        # A filled dot avoids the swollen ring produced by a thick outline.
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(QRectF(8.2, 5, 1.6, 1.6))
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawLine(QPointF(9, 8.2), QPointF(9, 12.5))
 
     painter.end()
     return pixmap

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QThread, QUrl, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QThread, QUrl, Slot
+from PySide6.QtGui import QDesktopServices, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -27,6 +28,8 @@ from dlsite_organizer.services.update_checker import (
     UpdateCheckStatus,
 )
 from dlsite_organizer.ui.theme import ButtonRole, set_button_role
+from dlsite_organizer.ui.theme.palette import use_custom_focus_border
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 from dlsite_organizer.ui.widgets.constrained_content import (
     ConstrainedContent,
     ContentAlignment,
@@ -38,6 +41,127 @@ from dlsite_organizer.ui.workers.update_check_worker import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _ActionFlow(QLayout):
+    """Compact action row that wraps using each control's natural size."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._items: list[QLayoutItem] = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(8)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:
+        return self._items[index] if 0 <= index < self.count() else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:
+        return self._items.pop(index) if 0 <= index < self.count() else None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._arrange(QRect(0, 0, width, 0), False)
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            if not item.isEmpty():
+                size = size.expandedTo(item.minimumSize())
+        return size
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._arrange(rect, True)
+
+    def _arrange(self, rect: QRect, apply: bool) -> int:
+        rows: list[list[tuple[QLayoutItem, QSize]]] = [[]]
+        row_width = 0
+        for item in self._items:
+            if item.isEmpty():
+                continue
+            size = self._natural_size(item)
+            next_width = size.width() if not rows[-1] else row_width + self.spacing() + size.width()
+            if rows[-1] and next_width > rect.width():
+                rows.append([])
+                row_width = 0
+            if rows[-1]:
+                row_width += self.spacing()
+            rows[-1].append((item, size))
+            row_width += size.width()
+
+        y = rect.y()
+        for row in rows:
+            arranged = [(item, self._fit_width(item, size, rect.width())) for item, size in row]
+            row_height = max((size.height() for _, size in arranged), default=0)
+            x = rect.x()
+            for item, size in arranged:
+                if apply:
+                    item.setGeometry(QRect(QPoint(x, y + (row_height - size.height()) // 2), size))
+                x += size.width() + self.spacing()
+            y += row_height + self.spacing()
+        return max(0, y - rect.y() - (self.spacing() if rows else 0))
+
+    @staticmethod
+    def _natural_size(item: QLayoutItem) -> QSize:
+        size = item.sizeHint().expandedTo(item.minimumSize()).boundedTo(item.maximumSize())
+        widget = item.widget()
+        if isinstance(widget, QLabel) and widget.wordWrap():
+            margins = widget.contentsMargins()
+            text_width = widget.fontMetrics().horizontalAdvance(widget.text())
+            text_width += margins.left() + margins.right() + 2 * widget.margin()
+            size.setWidth(max(size.width(), text_width))
+            if item.hasHeightForWidth():
+                size.setHeight(max(item.minimumSize().height(), item.heightForWidth(size.width())))
+        return size
+
+    @staticmethod
+    def _fit_width(item: QLayoutItem, size: QSize, available_width: int) -> QSize:
+        widget = item.widget()
+        if (
+            not isinstance(widget, QLabel)
+            or not widget.wordWrap()
+            or size.width() <= available_width
+        ):
+            return size
+        width = max(1, available_width)
+        height = item.heightForWidth(width) if item.hasHeightForWidth() else size.height()
+        return QSize(width, max(height, item.minimumSize().height()))
+
+
+class _UpdateActionButton(QPushButton):
+    """Record whether an update check was activated by mouse or keyboard."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self._activation_source = "other"
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        self._activation_source = "mouse"
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._activation_source = "keyboard"
+        super().keyPressEvent(event)
+
+    def consume_activation_source(self) -> str:
+        source = self._activation_source
+        self._activation_source = "other"
+        return source
 
 
 class AboutPage(QWidget):
@@ -55,6 +179,7 @@ class AboutPage(QWidget):
         )
         self._update_thread: QThread | None = None
         self._update_worker: UpdateCheckWorker | None = None
+        self._restore_update_button_focus = False
         self._last_update_result: UpdateCheckResult | None = None
         self._release_url: str | None = None
         self._build_ui()
@@ -75,7 +200,7 @@ class AboutPage(QWidget):
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
         content_layout = content.content_layout
-        content_layout.setSpacing(12)
+        content_layout.setSpacing(24)
 
         header = QHBoxLayout()
         header.setSpacing(16)
@@ -97,17 +222,23 @@ class AboutPage(QWidget):
             raise RuntimeError("About identity header must include its version label")
         self.version_value: QLabel = version_value
         self.version_label = self.version_value
-        header.addWidget(self.about_header, 1, Qt.AlignmentFlag.AlignVCenter)
-        content_layout.addLayout(header)
-
-        identity = QGroupBox("产品信息")
-        identity.setObjectName("aboutProductInfo")
-        self.identity_box = identity
-        identity_layout = QFormLayout(identity)
-        identity_layout.setHorizontalSpacing(20)
+        identity_text = QVBoxLayout()
+        identity_text.setSpacing(8)
+        identity_text.addWidget(self.about_header)
         self.description_value = QLabel("DLsite 作品元数据查询与文件夹整理工具")
         self.description_value.setWordWrap(True)
         self.description_value.setObjectName("aboutDescriptionValue")
+        identity_text.addWidget(self.description_value)
+        header.addLayout(identity_text, 1)
+        content_layout.addLayout(header)
+
+        identity = QWidget()
+        identity.setObjectName("aboutProductInfo")
+        self.identity_box = identity
+        identity_layout = QFormLayout(identity)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
+        identity_layout.setHorizontalSpacing(24)
+        identity_layout.setVerticalSpacing(8)
         self.developer_value = QLabel("TIMEpings")
         self.developer_value.setObjectName("aboutDeveloperValue")
         self.developer_label = self.developer_value
@@ -116,23 +247,33 @@ class AboutPage(QWidget):
         self.copyright_label = self.copyright_value
         self.license_value = QLabel("MIT")
         self.license_value.setObjectName("aboutLicenseValue")
-        identity_layout.addRow("简介", self.description_value)
         identity_layout.addRow("开发与维护", self.developer_value)
         identity_layout.addRow("版权", self.copyright_value)
         identity_layout.addRow("License", self.license_value)
         content_layout.addWidget(identity)
 
-        updates = QGroupBox("版本更新")
+        updates = QWidget()
         updates.setObjectName("aboutUpdateSection")
+        updates.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.update_section = updates
-        updates_layout = QHBoxLayout(updates)
-        updates_layout.setSpacing(8)
+        updates_section_layout = QVBoxLayout(updates)
+        updates_section_layout.setContentsMargins(0, 0, 0, 0)
+        updates_section_layout.setSpacing(8)
+        updates_heading = QLabel("版本更新")
+        updates_heading.setObjectName("sectionLabel")
+        updates_section_layout.addWidget(updates_heading)
+        updates_layout = _ActionFlow()
+        updates_layout.setSpacing(12)
+        updates_section_layout.addLayout(updates_layout)
         current_version_row = QHBoxLayout()
         current_version_row.addWidget(QLabel("当前版本"))
         self.update_current_version_value = QLabel(f"v{__version__}")
         self.update_current_version_value.setObjectName("aboutCurrentVersionValue")
         current_version_row.addWidget(self.update_current_version_value)
-        updates_layout.addLayout(current_version_row)
+        version_row = QWidget()
+        version_row.setLayout(current_version_row)
+        current_version_row.setContentsMargins(0, 0, 0, 0)
+        updates_layout.addWidget(version_row)
 
         self.release_page_button = QPushButton("查看发布页面")
         self.release_page_button.setObjectName("releasePageButton")
@@ -141,14 +282,35 @@ class AboutPage(QWidget):
         self.update_status_label = QLabel("尚未检查更新")
         self.update_status_label.setObjectName("statusLabel")
         self.update_status_label.setWordWrap(True)
-        updates_layout.addWidget(self.update_status_label, 1)
+        self.update_status_label.setMinimumHeight(32)
+        updates_layout.addWidget(self.update_status_label)
 
-        self.check_update_button = QPushButton("检查更新")
+        self.check_update_button = _UpdateActionButton("检查更新")
         self.check_update_button.setObjectName("checkUpdateButton")
-        set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+        set_button_role(self.check_update_button, ButtonRole.SECONDARY)
         set_button_role(self.release_page_button, ButtonRole.SECONDARY)
         updates_layout.addWidget(self.release_page_button)
         updates_layout.addWidget(self.check_update_button)
+        for action in (self.check_update_button, self.release_page_button):
+            use_custom_focus_border(action)
+            action.setStyleSheet(
+                "QPushButton { min-height: 20px; padding: 4px 12px; }"
+                'QPushButton[visualRole="secondary"]:hover:enabled {'
+                f" background: {LIGHT_COLORS.sidebar_hover};"
+                f" border: 1px solid {LIGHT_COLORS.border_strong};"
+                " }"
+                'QPushButton[visualRole="secondary"]:pressed:enabled {'
+                f" background: {LIGHT_COLORS.selection};"
+                f" border: 1px solid {LIGHT_COLORS.focus};"
+                " }"
+                'QPushButton[visualRole="secondary"]:disabled {'
+                f" color: {LIGHT_COLORS.text_muted};"
+                f" background: {LIGHT_COLORS.surface_secondary};"
+                f" border: 1px solid {LIGHT_COLORS.border};"
+                " }"
+                f"QPushButton:focus {{ border: 1px solid {LIGHT_COLORS.focus}; }}"
+            )
+            action.setFixedHeight(32)
         content_layout.addWidget(updates)
 
         self.disclaimer_value = QLabel(
@@ -165,7 +327,7 @@ class AboutPage(QWidget):
         privacy_section = QWidget()
         privacy_layout = QVBoxLayout(privacy_section)
         privacy_layout.setContentsMargins(0, 0, 0, 0)
-        privacy_layout.setSpacing(4)
+        privacy_layout.setSpacing(8)
         privacy_heading = QLabel("隐私与声明")
         privacy_heading.setObjectName("sectionLabel")
         privacy_layout.addWidget(privacy_heading)
@@ -173,32 +335,54 @@ class AboutPage(QWidget):
         privacy_layout.addWidget(self.privacy_value)
         content_layout.addWidget(privacy_section)
 
-        notices = QGroupBox("许可证与声明")
+        notices = QWidget()
         notices.setObjectName("aboutLicenseSection")
         self.notices_box = notices
         notices_layout = QVBoxLayout(notices)
-        notices_layout.addWidget(QLabel("本应用使用 MIT 许可证；第三方组件继续适用各自许可证。"))
-        buttons = QHBoxLayout()
-        self.license_button = QPushButton("查看 LICENSE")
+        notices_layout.setContentsMargins(0, 0, 0, 0)
+        notices_layout.setSpacing(8)
+        notices_heading = QLabel("许可证与声明")
+        notices_heading.setObjectName("sectionLabel")
+        notices_layout.addWidget(notices_heading)
+        license_summary = QLabel("本应用使用 MIT 许可证；第三方组件继续适用各自许可证。")
+        license_summary.setWordWrap(True)
+        notices_layout.addWidget(license_summary)
+        buttons = _ActionFlow()
+        buttons.setSpacing(4)
+        self.license_button = QPushButton("LICENSE")
         self.license_button.setObjectName("licenseButton")
         set_button_role(self.license_button, ButtonRole.QUIET)
-        self.third_party_notices_button = QPushButton("查看 THIRD_PARTY_NOTICES")
+        self.third_party_notices_button = QPushButton("第三方声明")
         self.third_party_notices_button.setObjectName("thirdPartyNoticesButton")
         set_button_role(self.third_party_notices_button, ButtonRole.QUIET)
-        self.third_party_licenses_button = QPushButton("查看第三方许可证目录")
+        self.third_party_licenses_button = QPushButton("第三方许可证目录")
         self.third_party_licenses_button.setObjectName("thirdPartyLicensesButton")
         set_button_role(self.third_party_licenses_button, ButtonRole.QUIET)
         buttons.addWidget(self.license_button)
         buttons.addWidget(self.third_party_notices_button)
         buttons.addWidget(self.third_party_licenses_button)
-        buttons.addStretch(1)
+        for link in (
+            self.license_button,
+            self.third_party_notices_button,
+            self.third_party_licenses_button,
+        ):
+            use_custom_focus_border(link)
+            link.setCursor(Qt.CursorShape.PointingHandCursor)
+            link.setAccessibleName(link.text())
+            link.setStyleSheet(
+                "QPushButton { min-height: 20px; padding: 3px 5px;"
+                f" color: {LIGHT_COLORS.accent}; background: transparent;"
+                " border: 1px solid transparent; border-radius: 3px; }"
+                "QPushButton:hover { text-decoration: underline; }"
+                f"QPushButton:focus {{ border-color: {LIGHT_COLORS.focus}; }}"
+                f"QPushButton:disabled {{ color: {LIGHT_COLORS.text_muted}; }}"
+            )
+            link.setFixedHeight(28)
         notices_layout.addLayout(buttons)
         content_layout.addWidget(notices)
         content_layout.addStretch(1)
 
-        self.license_button.clicked.connect(
-            lambda: self._open_resource("LICENSE", "LICENSE")
-        )
+        self.license_button.clicked.connect(lambda: self._open_resource("LICENSE", "LICENSE"))
         self.third_party_notices_button.clicked.connect(
             lambda: self._open_resource("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES")
         )
@@ -214,11 +398,20 @@ class AboutPage(QWidget):
         if self._update_thread is not None or self._update_worker is not None:
             return
 
+        activation_source = self.check_update_button.consume_activation_source()
+        self._restore_update_button_focus = (
+            activation_source == "keyboard" and self.check_update_button.hasFocus()
+        )
+        if self.check_update_button.hasFocus():
+            # Disabling a focused button makes Qt choose the next tab stop. Keep
+            # focus with the update section while the action is unavailable.
+            self.update_section.setFocus(Qt.FocusReason.MouseFocusReason)
+
         self._last_update_result = None
         self._release_url = None
         self.release_page_button.setEnabled(False)
         self.release_page_button.hide()
-        set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+        set_button_role(self.check_update_button, ButtonRole.SECONDARY)
         set_button_role(self.release_page_button, ButtonRole.SECONDARY)
         self.check_update_button.setEnabled(False)
         self._set_update_status("正在检查…", "loading")
@@ -248,9 +441,10 @@ class AboutPage(QWidget):
             self._update_thread = None
             self._update_worker = None
             self.check_update_button.setText("重新检查")
-            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+            set_button_role(self.check_update_button, ButtonRole.SECONDARY)
             self.check_update_button.setEnabled(True)
             self._set_update_status("检查失败，请稍后重试", "error")
+            self._restore_update_focus_if_needed()
 
     @Slot(object)
     def _handle_update_result(self, value: object) -> None:
@@ -266,7 +460,7 @@ class AboutPage(QWidget):
             self._release_url = None
             self.release_page_button.setEnabled(False)
             self.release_page_button.hide()
-            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+            set_button_role(self.check_update_button, ButtonRole.SECONDARY)
             set_button_role(self.release_page_button, ButtonRole.SECONDARY)
             self._set_update_status("检查失败，请稍后重试", "error")
 
@@ -279,7 +473,7 @@ class AboutPage(QWidget):
         self.release_page_button.hide()
 
         if result.status is UpdateCheckStatus.UP_TO_DATE:
-            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+            set_button_role(self.check_update_button, ButtonRole.SECONDARY)
             set_button_role(self.release_page_button, ButtonRole.SECONDARY)
             self._set_update_status("已是最新版本", "success")
         elif (
@@ -295,7 +489,7 @@ class AboutPage(QWidget):
             self.release_page_button.setEnabled(True)
             self.release_page_button.show()
         else:
-            set_button_role(self.check_update_button, ButtonRole.PRIMARY)
+            set_button_role(self.check_update_button, ButtonRole.SECONDARY)
             set_button_role(self.release_page_button, ButtonRole.SECONDARY)
             self._set_update_status("检查失败，请稍后重试", "error")
 
@@ -306,6 +500,12 @@ class AboutPage(QWidget):
         self._update_worker = None
         self.check_update_button.setText("重新检查")
         self.check_update_button.setEnabled(True)
+        self._restore_update_focus_if_needed()
+
+    def _restore_update_focus_if_needed(self) -> None:
+        if self._restore_update_button_focus:
+            self.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
+        self._restore_update_button_focus = False
 
     @Slot()
     def _open_release_page(self) -> None:

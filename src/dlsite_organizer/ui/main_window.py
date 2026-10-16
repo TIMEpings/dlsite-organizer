@@ -41,6 +41,7 @@ from dlsite_organizer.ui.pages.rename_history_page import RenameHistoryPage
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
 from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
 from dlsite_organizer.ui.theme.icons import navigation_icon
+from dlsite_organizer.ui.theme.palette import use_custom_focus_border
 from dlsite_organizer.ui.theme.tokens import Geometry
 from dlsite_organizer.ui.widgets.navigation import NavigationItemDelegate
 from dlsite_organizer.ui.widgets.title_bar import TitleBar
@@ -211,6 +212,33 @@ class MainWindow(QMainWindow):
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(central)
         self.setStyleSheet(light_stylesheet())
+        # These controls retain the shell's focus border (or an explicit local
+        # equivalent). Keep this opt-in list explicit: notably, Organizer's
+        # path-copy actions override that border and need native focus painting.
+        for button in (
+            self.settings_button,
+            self.about_button,
+            self.lightweight_button,
+            self.settings_page.save_button,
+            self.settings_page.remove_explorer_button,
+            self.lookup_page.query_button,
+            self.lookup_page.refresh_button,
+            self.rename_history_page.newer_button,
+            self.rename_history_page.older_button,
+            self.rename_history_page.refresh_button,
+            self.rename_history_page.observe_button,
+            self.rename_history_page.copy_root_path_button,
+            self.rename_history_page.copy_source_path_button,
+            self.rename_history_page.copy_target_path_button,
+            self.rename_history_page.copy_transaction_id_button,
+            self.organizer_page.browse_button,
+            self.organizer_page.scan_button,
+            self.organizer_page.cancel_button,
+            self.organizer_page.bulk_menu_button,
+            self.organizer_page.retry_refresh_button,
+            self.organizer_page.execute_button,
+        ):
+            use_custom_focus_border(button)
         # Polish child controls before measuring the legacy page's minimum.
         # Create/recalculate the HWND before setting the requested client size,
         # so Qt does not add the old native title/frame margins on first show.

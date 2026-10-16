@@ -2,10 +2,39 @@
 
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QFont, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette
+from PySide6.QtWidgets import QApplication, QProxyStyle, QPushButton, QStyle, QStyleOption
 
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
+
+
+def use_custom_focus_border(button: QPushButton) -> None:
+    """Opt in only where the owning UI supplies a verified visible QSS border.
+
+    A visual role or a sizing stylesheet alone is not this guarantee. Keep this
+    call paired with the owner's focus rules and rendered characterization.
+    The proxy reads the property at paint time; no QSS repolish is needed.
+    """
+    button.setProperty("customFocusBorder", True)
+
+
+class _SingleButtonFocusStyle(QProxyStyle):
+    """Omit native button focus only for explicitly owned custom focus borders."""
+
+    def drawPrimitive(
+        self,
+        element: QStyle.PrimitiveElement,
+        option: QStyleOption,
+        painter: QPainter,
+        widget=None,
+    ) -> None:
+        if (
+            element == QStyle.PrimitiveElement.PE_FrameFocusRect
+            and isinstance(widget, QPushButton)
+            and widget.property("customFocusBorder") is True
+        ):
+            return
+        super().drawPrimitive(element, option, painter, widget)
 
 
 def create_light_palette() -> QPalette:
@@ -48,7 +77,9 @@ def create_light_palette() -> QPalette:
 
 
 def apply_light_theme(application: QApplication) -> None:
-    """Set shared widget defaults while leaving control styling to Qt and QSS roles."""
+    """Set shared defaults, preserving native focus unless explicitly opted out."""
+    if not isinstance(application.style(), _SingleButtonFocusStyle):
+        application.setStyle(_SingleButtonFocusStyle(application.style()))
     application.setPalette(create_light_palette())
     font = QFont("Segoe UI")
     font.setPointSizeF(10)

@@ -113,7 +113,7 @@ def test_navigation_items_keep_labels_icons_and_a_distinct_focus_route(
         assert window.settings_page.save_button.property("visualRole") == "primary"
         assert window.settings_page.reset_button.property("visualRole") == "quiet"
         assert window.settings_page.remove_explorer_button.property("visualRole") == "danger"
-        assert window.about_page.check_update_button.property("visualRole") == "primary"
+        assert window.about_page.check_update_button.property("visualRole") == "secondary"
         about_names = [
             label.text()
             for label in window.about_page.findChildren(QLabel)
@@ -273,6 +273,293 @@ def test_theme_styles_scrollbars_group_boxes_and_button_roles(qapp: QApplication
     assert 'QPushButton[visualRole="danger"]' in stylesheet
     assert "QGroupBox::title" in stylesheet
     assert "outline: 0" not in stylesheet.lower()
+
+
+def test_shared_buttons_render_one_visible_keyboard_focus_border(qapp: QApplication) -> None:
+    from PySide6.QtGui import QColor
+    from PySide6.QtTest import QTest
+
+    from dlsite_organizer.ui.theme.palette import apply_light_theme
+    from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
+
+    window = _window()
+    shared_style = qapp.style()
+    apply_light_theme(qapp)
+    assert qapp.style() is shared_style
+    window.resize(1160, 800)
+    window.show()
+    qapp.processEvents()
+    window.show_about_page()
+    page = window.about_page
+
+    def assert_single_focus_change(button, enter_focus) -> None:
+        before = button.grab().toImage()
+        enter_focus()
+        qapp.processEvents()
+        assert button.hasFocus()
+        after = button.grab().toImage()
+        focus_color = QColor(LIGHT_COLORS.focus)
+        assert any(
+            after.pixelColor(x, y) == focus_color
+            for y in range(after.height())
+            for x in range(after.width())
+        ), button.objectName()
+        inner_changes = [
+            (x, y)
+            for y in range(3, after.height() - 3)
+            for x in range(3, after.width() - 3)
+            if before.pixelColor(x, y) != after.pixelColor(x, y)
+        ]
+        assert not inner_changes, (button.objectName(), inner_changes[:8])
+
+    try:
+        check = page.check_update_button
+        license_button = page.license_button
+        check.setFocus(Qt.FocusReason.OtherFocusReason)
+        qapp.processEvents()
+        assert_single_focus_change(
+            license_button,
+            lambda: QTest.keyClick(check, Qt.Key.Key_Tab),
+        )
+
+        assert_single_focus_change(
+            check,
+            lambda: QTest.keyClick(license_button, Qt.Key.Key_Backtab),
+        )
+        check.setEnabled(False)
+        qapp.processEvents()
+        assert not check.hasFocus()
+        check.setEnabled(True)
+        from dlsite_organizer.services.update_checker import UpdateCheckResult, UpdateCheckStatus
+
+        page._render_update_result(
+            UpdateCheckResult(
+                UpdateCheckStatus.UPDATE_AVAILABLE,
+                "1.3.1",
+                "9.9.9",
+                "https://github.com/TIMEpings/dlsite-organizer/releases/tag/v9.9.9",
+            )
+        )
+        qapp.processEvents()
+        release_button = page.release_page_button
+
+        def tab_to_release() -> None:
+            release_button.setFocus(Qt.FocusReason.OtherFocusReason)
+            QTest.keyClick(release_button, Qt.Key.Key_Tab)
+            next_widget = qapp.focusWidget()
+            assert next_widget is not None
+            QTest.keyClick(next_widget, Qt.Key.Key_Backtab)
+
+        assert_single_focus_change(release_button, tab_to_release)
+
+        window.show_settings_page()
+        save = window.settings_page.save_button
+
+        def tab_to_save() -> None:
+            save.setFocus(Qt.FocusReason.OtherFocusReason)
+            QTest.keyClick(save, Qt.Key.Key_Tab)
+            next_widget = qapp.focusWidget()
+            assert next_widget is not None
+            QTest.keyClick(next_widget, Qt.Key.Key_Backtab)
+
+        assert_single_focus_change(save, tab_to_save)
+
+        sidebar = window.about_button
+
+        def tab_to_sidebar() -> None:
+            sidebar.setFocus(Qt.FocusReason.OtherFocusReason)
+            QTest.keyClick(sidebar, Qt.Key.Key_Tab)
+            next_widget = qapp.focusWidget()
+            assert next_widget is not None
+            QTest.keyClick(next_widget, Qt.Key.Key_Backtab)
+
+        assert_single_focus_change(sidebar, tab_to_sidebar)
+
+        window.navigate_to(MainPage.HISTORY)
+        history = window.rename_history_page
+        # Synthetic presentation only: expose deterministic empty details without
+        # opening a journal or observing the filesystem.
+        history.empty_state.hide()
+        history.history_detail.show()
+        history.operation_detail_section.show()
+        history.technical_section.show()
+        for button in (
+            history.observe_button,
+            history.copy_root_path_button,
+            history.copy_source_path_button,
+            history.copy_target_path_button,
+            history.copy_transaction_id_button,
+        ):
+            button.setEnabled(True)
+            history.detail_scroll.ensureWidgetVisible(button)
+            button.setFocus(Qt.FocusReason.OtherFocusReason)
+            QTest.keyClick(button, Qt.Key.Key_Tab)
+            next_widget = qapp.focusWidget()
+            assert next_widget is not None and next_widget is not button
+            qapp.processEvents()
+            assert_single_focus_change(
+                button,
+                lambda next_widget=next_widget: QTest.keyClick(next_widget, Qt.Key.Key_Backtab),
+            )
+            # Verify keyboard activation independently of observation/copy slots.
+            from PySide6.QtTest import QSignalSpy
+
+            button.clicked.disconnect()
+            clicked = QSignalSpy(button.clicked)
+            QTest.keyClick(button, Qt.Key.Key_Space)
+            assert clicked.count() == 1
+
+        window.navigate_to(MainPage.ORGANIZER)
+        organizer = window.organizer_page
+        organizer.detail_panel.show()
+        organizer.detail_content.show()
+        for display in (organizer.detail_source_path, organizer.detail_target_path):
+            display.set_path("C:/synthetic/focus-test")
+            button = display.copy_button
+            assert button is not None
+            assert button.property("customFocusBorder") is None
+            display.path_input.setFocus(Qt.FocusReason.OtherFocusReason)
+            qapp.processEvents()
+            before = button.grab().toImage()
+            QTest.keyClick(display.path_input, Qt.Key.Key_Tab)
+            qapp.processEvents()
+            assert button.hasFocus()
+            after = button.grab().toImage()
+            assert before != after, "Organizer copy must retain native keyboard focus"
+            assert not any(
+                after.pixelColor(x, y) == QColor(LIGHT_COLORS.focus)
+                for y in range(after.height())
+                for x in range(after.width())
+            ), "Native copy focus must not acquire an extra blue border"
+            button.clicked.disconnect()
+            clicked = QSignalSpy(button.clicked)
+            QTest.keyClick(button, Qt.Key.Key_Space)
+            assert clicked.count() == 1
+
+        from typing import cast
+
+        from dlsite_organizer.app.settings import AppSettings, SettingsService
+        from dlsite_organizer.services.quick_rename import QuickRenameService
+        from dlsite_organizer.services.undo_service import UndoService
+        from dlsite_organizer.ui.lightweight_window import LightweightWindow
+
+        class EmptyUndoService:
+            def unresolved_transaction(self):
+                return None
+
+            def latest_transaction(self):
+                return None
+
+        lightweight = LightweightWindow(
+            cast(QuickRenameService, object()),
+            cast(UndoService, EmptyUndoService()),
+            SettingsService(AppSettings()),
+        )
+        lightweight.show()
+        qapp.processEvents()
+        icon_button = lightweight.settings_button
+
+        def tab_to_icon_button() -> None:
+            icon_button.setFocus(Qt.FocusReason.OtherFocusReason)
+            QTest.keyClick(icon_button, Qt.Key.Key_Tab)
+            next_widget = qapp.focusWidget()
+            assert next_widget is not None
+            QTest.keyClick(next_widget, Qt.Key.Key_Backtab)
+
+        assert_single_focus_change(icon_button, tab_to_icon_button)
+        lightweight.close()
+    finally:
+        window.close()
+
+
+def test_every_shell_opt_in_renders_a_single_custom_focus_border(qapp: QApplication) -> None:
+    from PySide6.QtGui import QColor
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QPushButton, QWidget
+
+    from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
+
+    window = _window()
+    window.show()
+    try:
+        for route, page in window._pages_by_identity.items():
+            window.navigate_to(route)
+            for button in page.findChildren(QPushButton):
+                if button.property("customFocusBorder") is not True:
+                    continue
+                # Reveal hidden/disabled presentation states without calling
+                # services, file operations, workers, or action handlers.
+                parent: QWidget | None = button
+                while parent is not None and parent is not page:
+                    parent.show()
+                    parent.setEnabled(True)
+                    parent = parent.parentWidget()
+                button.setEnabled(True)
+                button.setFocus(Qt.FocusReason.OtherFocusReason)
+                qapp.processEvents()
+                QTest.keyClick(button, Qt.Key.Key_Backtab)
+                other = qapp.focusWidget()
+                assert other is not None and other is not button
+                qapp.processEvents()
+                normal = button.grab().toImage()
+                QTest.keyClick(other, Qt.Key.Key_Tab)
+                qapp.processEvents()
+                assert button.hasFocus(), (route, button.text())
+                focused = button.grab().toImage()
+                assert any(
+                    focused.pixelColor(x, y) == QColor(LIGHT_COLORS.focus)
+                    for y in range(focused.height())
+                    for x in range(focused.width())
+                ), (route, button.text())
+                assert all(
+                    normal.pixelColor(x, y) == focused.pixelColor(x, y)
+                    for y in range(3, focused.height() - 3)
+                    for x in range(3, focused.width() - 3)
+                ), (route, button.text(), "duplicate inner focus frame")
+    finally:
+        window.close()
+
+
+def test_native_focus_is_default_and_opt_in_is_read_at_paint_time(qapp: QApplication) -> None:
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from PySide6.QtWidgets import QPushButton, QStyle, QStyleOptionFocusRect
+
+    from dlsite_organizer.ui.theme.palette import apply_light_theme, use_custom_focus_border
+
+    apply_light_theme(qapp)
+    style = qapp.style()
+    for _ in range(3):
+        apply_light_theme(qapp)
+        assert qapp.style() is style
+    button = QPushButton("Unmarked native action")
+    button.ensurePolished()
+    option = QStyleOptionFocusRect()
+    option.initFrom(button)
+    option.rect = button.rect().adjusted(3, 3, -3, -3)
+    option.state |= QStyle.StateFlag.State_HasFocus | QStyle.StateFlag.State_KeyboardFocusChange
+
+    def paint():
+        image = QImage(button.size(), QImage.Format.Format_ARGB32)
+        image.fill(QColor("white"))
+        painter = QPainter(image)
+        style.drawPrimitive(QStyle.PrimitiveElement.PE_FrameFocusRect, option, painter, button)
+        painter.end()
+        return image
+
+    try:
+        native = paint()
+        use_custom_focus_border(button)
+        suppressed = paint()
+        assert native != suppressed
+        assert all(
+            suppressed.pixelColor(x, y) == QColor("white")
+            for y in range(suppressed.height())
+            for x in range(suppressed.width())
+        )
+        button.setProperty("customFocusBorder", False)
+        assert paint() == native  # No stylesheet cache/repolish dependency.
+    finally:
+        button.close()
 
 
 def test_shared_stylesheet_applies_without_qt_style_warnings(qapp: QApplication) -> None:
