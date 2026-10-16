@@ -3,8 +3,8 @@
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
+from PySide6.QtGui import QImage, QPainterPath
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QStyleOptionSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
 
 from dlsite_organizer.app.settings import (
@@ -24,6 +26,8 @@ from dlsite_organizer.app.settings import (
     load_settings,
 )
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
+from dlsite_organizer.ui.theme import light_stylesheet
+from dlsite_organizer.ui.theme.tokens import Shape
 
 
 @pytest.fixture
@@ -232,3 +236,64 @@ def test_tag_limit_save_and_reset_keep_the_original_contract(
     page.save_settings()
     assert load_settings(config_path).max_tags == AppSettings().max_tags
     page.close()
+
+
+@pytest.mark.parametrize(
+    "upper,pressed", [(True, False), (False, False), (True, True), (False, True)]
+)
+@pytest.mark.parametrize("value,enabled", [(42, True), (0, True), (100, True), (0, False)])
+def test_stepper_feedback_preserves_the_rendered_outer_border(
+    qapp: QApplication, tmp_path: Path, upper: bool, pressed: bool, value: int, enabled: bool
+) -> None:
+    host = QWidget()
+    host.setStyleSheet(light_stylesheet())
+    layout = QVBoxLayout(host)
+    page = _page(tmp_path)
+    layout.addWidget(page)
+    host.resize(960, 640)
+    host.show()
+    host.activateWindow()
+    spin = page.max_tags_input
+    scroll = page.findChild(QScrollArea)
+    assert scroll is not None
+    scroll.ensureWidgetVisible(spin)
+    spin.setValue(value)
+    spin.setEnabled(enabled)
+    spin.setFocus(Qt.FocusReason.TabFocusReason)
+    QTest.mouseMove(host, QPoint(1, 1))
+    QTest.qWait(30)
+    before = spin.grab().toImage()
+    option = QStyleOptionSpinBox()
+    spin.initStyleOption(option)
+    control = QStyle.SubControl.SC_SpinBoxUp if upper else QStyle.SubControl.SC_SpinBoxDown
+    target = spin.style().subControlRect(QStyle.ComplexControl.CC_SpinBox, option, control, spin)
+    try:
+        QTest.mouseMove(spin, target.center())
+        QTest.qWait(30)
+        if pressed:
+            QTest.mousePress(spin, Qt.MouseButton.LeftButton, pos=target.center())
+        after = spin.grab().toImage()
+        # Compare only the exterior frame, not text, chevrons, or feedback pixels.
+        interior = QPainterPath()
+        interior.addRoundedRect(
+            QRectF(spin.rect()).adjusted(2, 2, -2, -2),
+            Shape.CONTROL_RADIUS - 2,
+            Shape.CONTROL_RADIUS - 2,
+        )
+        dpr = before.devicePixelRatio()
+        for x in range(before.width()):
+            for y in range(before.height()):
+                if not interior.contains(QPointF((x + 0.5) / dpr, (y + 0.5) / dpr)):
+                    assert before.pixel(x, y) == after.pixel(x, y), (x, y, upper, pressed)
+        assert target.width() >= 22
+        assert target.height() >= 14
+        # Qt includes the unpainted subcontrol margin in its mouse hit rectangle.
+        assert spin.rect().contains(target)
+        if not pressed:
+            assert spin.value() == value
+        if value == 0:
+            assert spin.specialValueText() == "不限"
+    finally:
+        if pressed:
+            QTest.mouseRelease(spin, Qt.MouseButton.LeftButton, pos=target.center())
+        host.close()

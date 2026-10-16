@@ -9,8 +9,16 @@ from typing import Any
 
 from pydantic import ValidationError
 from PySide6.QtCore import Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QPainter,
+    QPainterPath,
+    QPaintEvent,
+    QPen,
+)
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -23,6 +31,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
+    QStyleOptionSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -47,11 +57,92 @@ from dlsite_organizer.services.naming import (
     NamingTemplateError,
 )
 from dlsite_organizer.ui.theme import ButtonRole, set_button_role
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 from dlsite_organizer.ui.widgets.constrained_content import (
     ConstrainedContent,
     ContentAlignment,
 )
 from dlsite_organizer.ui.widgets.page_header import PageHeader
+
+
+class _SettingsComboBox(QComboBox):
+    """Keep Qt's popup and input behavior while painting its field indicator."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        area = self.rect().adjusted(self.width() - 28, 1, -1, -1)
+        if self.underMouse() and self.isEnabled():
+            painter = QPainter(self)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(LIGHT_COLORS.surface_secondary))
+            painter.drawRoundedRect(area, 5, 5)
+            painter.end()
+        color = (
+            LIGHT_COLORS.text_muted
+            if not self.isEnabled()
+            else LIGHT_COLORS.accent
+            if self.hasFocus()
+            else LIGHT_COLORS.text_secondary
+        )
+        _draw_chevron(QPainter(self), area.center().x(), area.center().y(), color)
+
+
+class _SettingsSpinBox(QSpinBox):
+    """Retain native spinbox stepping with lightweight, bound-aware indicators."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        option = QStyleOptionSpinBox()
+        self.initStyleOption(option)
+        step_enabled = self.stepEnabled()
+        for control, up, enabled_flag in (
+            (QStyle.SubControl.SC_SpinBoxUp, True, QAbstractSpinBox.StepEnabledFlag.StepUpEnabled),
+            (
+                QStyle.SubControl.SC_SpinBoxDown,
+                False,
+                QAbstractSpinBox.StepEnabledFlag.StepDownEnabled,
+            ),
+        ):
+            area = self.style().subControlRect(
+                QStyle.ComplexControl.CC_SpinBox, option, control, self
+            )
+            color = (
+                LIGHT_COLORS.text_muted
+                if not self.isEnabled() or not step_enabled & enabled_flag
+                else LIGHT_COLORS.accent
+                if self.hasFocus()
+                else LIGHT_COLORS.text_secondary
+            )
+            _paint_chevron(painter, area.center().x(), area.center().y(), color, up=up)
+        painter.end()
+
+
+def _draw_chevron(painter: QPainter, x: int, y: int, color: str) -> None:
+    _paint_chevron(painter, x, y, color)
+    painter.end()
+
+
+def _paint_chevron(painter: QPainter, x: int, y: int, color: str, *, up: bool = False) -> None:
+    direction = -1 if up else 1
+    path = QPainterPath()
+    path.moveTo(x - 3.5, y - direction * 1.5)
+    path.lineTo(x, y + direction * 2)
+    path.lineTo(x + 3.5, y - direction * 1.5)
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(
+        QPen(
+            QColor(color),
+            1.5,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+    )
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawPath(path)
+    painter.restore()
 
 
 class SettingsPage(QWidget):
@@ -86,6 +177,50 @@ class SettingsPage(QWidget):
         self.refresh_explorer_registration()
 
     def _build_ui(self) -> None:
+        self.setStyleSheet(
+            """
+            QLineEdit, QComboBox, QSpinBox {
+                min-height: 26px;
+                padding: 4px 8px;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 26px;
+                border: 0;
+                background: transparent;
+            }
+            QComboBox::drop-down:hover {
+                background: #EEF2F7;
+                border-radius: 4px;
+            }
+            QComboBox::down-arrow, QSpinBox::up-arrow, QSpinBox::down-arrow {
+                image: none;
+                width: 0;
+                height: 0;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                subcontrol-origin: padding;
+                width: 26px;
+                margin: 2px;
+                border: 0;
+                background: transparent;
+            }
+            QSpinBox::up-button { subcontrol-position: top right; }
+            QSpinBox::down-button { subcontrol-position: bottom right; }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #EEF2F7;
+                border-radius: 4px;
+            }
+            QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {
+                background: #E6EDFF;
+            }
+            QSpinBox::up-button:disabled, QSpinBox::down-button:disabled,
+            QSpinBox::up-button:off, QSpinBox::down-button:off {
+                background: transparent;
+            }
+            """
+        )
         page_layout = QVBoxLayout(self)
         page_layout.setContentsMargins(24, 24, 24, 24)
         page_layout.setSpacing(12)
@@ -103,8 +238,8 @@ class SettingsPage(QWidget):
         )
         scroll.setAlignment(content.alignment.value | Qt.AlignmentFlag.AlignTop)
         content_layout = content.content_layout
-        content_layout.setContentsMargins(0, 4, 8, 4)
-        content_layout.setSpacing(12)
+        content_layout.setContentsMargins(0, 4, 0, 4)
+        content_layout.setSpacing(10)
 
         self.quick_access_box = QGroupBox("快捷功能")
         self.quick_access_box.setObjectName("quickAccessBox")
@@ -112,7 +247,7 @@ class SettingsPage(QWidget):
 
         self.runtime_box = QGroupBox("启动与模式")
         runtime_form = QFormLayout(self.runtime_box)
-        self.startup_mode_input = QComboBox()
+        self.startup_mode_input = _SettingsComboBox()
         self.startup_mode_input.setObjectName("startupModeInput")
         self.startup_mode_input.addItem("完整模式", StartupMode.FULL.value)
         self.startup_mode_input.addItem("轻量模式", StartupMode.LIGHTWEIGHT.value)
@@ -235,7 +370,7 @@ class SettingsPage(QWidget):
         self.tag_separator_input = QLineEdit()
         self.tag_separator_input.setObjectName("tagSeparatorInput")
         format_form.addRow("标签分隔符", self.tag_separator_input)
-        self.max_tags_input = QSpinBox()
+        self.max_tags_input = _SettingsSpinBox()
         self.max_tags_input.setObjectName("maxTagsInput")
         self.max_tags_input.setRange(0, 100)
         self.max_tags_input.setSpecialValueText("不限")
@@ -246,7 +381,7 @@ class SettingsPage(QWidget):
         metadata_box = QGroupBox("元数据")
         metadata_form = QFormLayout(metadata_box)
         metadata_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        self.metadata_locale_input = QComboBox()
+        self.metadata_locale_input = _SettingsComboBox()
         self.metadata_locale_input.setObjectName("metadataLocaleInput")
         for label, code in self._LOCALES:
             self.metadata_locale_input.addItem(f"{label} ({code})", code)
