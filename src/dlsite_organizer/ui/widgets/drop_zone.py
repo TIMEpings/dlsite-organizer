@@ -200,9 +200,11 @@ class RecentOperationList(QListWidget):
 
 
 class UnifiedDropZone(DirectoryDropZone):
-    """Lightweight-only drop surface with recent operations inside its border."""
+    """Lightweight-only borderless drop surface with recent operations."""
 
     MINIMUM_HEIGHT = 154
+    IDLE_SURFACE = QColor("#F4F6FA")
+    DRAG_SURFACE = QColor("#E8F0FF")
 
     def __init__(self, title: str, description: str, parent=None) -> None:
         super().__init__(title, description, parent)
@@ -217,6 +219,11 @@ class UnifiedDropZone(DirectoryDropZone):
         detail = detail_item.widget() if detail_item is not None else None
         if not isinstance(heading, QLabel) or not isinstance(detail, QLabel):
             raise TypeError("DirectoryDropZone labels are required by UnifiedDropZone")
+
+        self._instruction_heading = heading
+        self._instruction_detail = detail
+        self._idle_title = title
+        self._idle_description = description
 
         drop_layout.removeWidget(heading)
         drop_layout.removeWidget(detail)
@@ -259,6 +266,48 @@ class UnifiedDropZone(DirectoryDropZone):
         self.recent_area.setMinimumHeight(50)
         drop_layout.addWidget(self.recent_area)
         self.operation_list.add_full_text("暂无最近操作")
+        self.configure_drop_descendants()
+
+    def configure_drop_descendants(self) -> None:
+        """Keep Qt's closest accepting ancestor as the sole drop owner.
+
+        In particular QAbstractItemView's viewport must not own DnD. Disabling
+        acceptance leaves normal list selection, scrolling and button clicks intact.
+        Qt maps native drag coordinates to this surface; no copied events are needed.
+        """
+        for child in self.findChildren(QWidget):
+            child.setAcceptDrops(False)
+
+    def set_drop_enabled(self, enabled: bool) -> None:
+        """Block mutation entry without disabling readable status or navigation."""
+        self.setAcceptDrops(enabled)
+        self._set_highlight(False)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if not self.acceptDrops():
+            self._set_highlight(False)
+            event.ignore()
+            return
+        super().dragEnterEvent(event)
+        if not event.isAccepted():
+            self._set_rejected_instruction()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if not self.acceptDrops():
+            self._set_highlight(False)
+            event.ignore()
+            return
+        super().dragMoveEvent(event)
+        self._set_highlight(event.isAccepted())
+        if not event.isAccepted():
+            self._set_rejected_instruction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if not self.acceptDrops():
+            self._set_highlight(False)
+            event.ignore()
+            return
+        super().dropEvent(event)
 
     def sizeHint(self) -> QSize:
         size = super().sizeHint()
@@ -285,17 +334,15 @@ class UnifiedDropZone(DirectoryDropZone):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        palette = self.palette()
         surface_rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
         surface_path = QPainterPath()
         surface_path.addRoundedRect(surface_rect, 10.0, 10.0)
         painter.save()
         painter.setClipPath(surface_path)
-        painter.fillPath(surface_path, palette.color(QPalette.ColorRole.Base))
-        if self.property("dragActive") is True:
-            highlight = palette.color(QPalette.ColorRole.Highlight)
-            highlight.setAlpha(24)
-            painter.fillPath(surface_path, highlight)
+        surface_color = (
+            self.DRAG_SURFACE if self.property("dragActive") is True else self.IDLE_SURFACE
+        )
+        painter.fillPath(surface_path, surface_color)
 
         watermark_rect = self._watermark_rect()
         if self.branding_pixmap is not None and not watermark_rect.isNull():
@@ -309,19 +356,22 @@ class UnifiedDropZone(DirectoryDropZone):
             painter.restore()
         painter.restore()
 
-        border_role = (
-            QPalette.ColorRole.Highlight
-            if self.property("dragActive") is True
-            else QPalette.ColorRole.Mid
+    def _set_highlight(self, active: bool) -> None:
+        super()._set_highlight(active)
+        # The base constructor initializes highlighting before these labels exist.
+        if not hasattr(self, "_instruction_heading"):
+            return
+        self._instruction_heading.setText(
+            "松开以开始重命名" if active else self._idle_title
         )
-        border_color = palette.color(border_role)
-        if self.property("dragActive") is not True:
-            border_color.setAlpha(190)
-        pen = QPen(border_color, 2.0, Qt.PenStyle.DashLine)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(surface_path)
+        self._instruction_detail.setText(
+            "松开后立即按当前设置重命名" if active else self._idle_description
+        )
+
+    def _set_rejected_instruction(self) -> None:
+        self._set_highlight(False)
+        self._instruction_heading.setText("请拖入本地作品文件夹")
+
 
 
 def local_directory_paths(mime: QMimeData) -> tuple[Path, ...]:

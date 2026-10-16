@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QThread, Signal, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dlsite_organizer.app.branding import load_application_icon
 from dlsite_organizer.app.quick_action_controller import (
     QuickActionAdmissionResult,
     QuickActionAdmissionStatus,
@@ -38,8 +39,11 @@ from dlsite_organizer.services.quick_rename import (
 )
 from dlsite_organizer.services.undo_service import UndoService
 from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
+from dlsite_organizer.ui.theme.icons import lightweight_action_icon
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 from dlsite_organizer.ui.widgets.drop_zone import UnifiedDropZone
+from dlsite_organizer.ui.widgets.title_bar import TitleBar
+from dlsite_organizer.ui.windows.native_chrome import WindowsChrome
 from dlsite_organizer.ui.workers.quick_rename_worker import QuickRenameWorker
 from dlsite_organizer.ui.workers.rename_worker import RenameActionWorker
 
@@ -62,6 +66,7 @@ class LightweightWindow(QMainWindow):
         quick_action_controller: QuickActionController | None = None,
     ) -> None:
         super().__init__(parent)
+        self._native_chrome: WindowsChrome | None = None
         application = QApplication.instance()
         if isinstance(application, QApplication):
             apply_light_theme(application)
@@ -77,7 +82,13 @@ class LightweightWindow(QMainWindow):
         self._last_result: QuickRenameResult | None = None
         self._last_undo_result: UndoResult | None = None
         self.setWindowTitle("DLsite Organizer — 轻量模式")
+        self.setWindowIcon(load_application_icon())
         self._build_ui()
+        # Match Full Mode's initialization order: remove native frame margins
+        # before Qt records the requested normal/restore client geometry.
+        self.ensurePolished()
+        if self._native_chrome is not None:
+            self._native_chrome.attach()
         # Derive the compact default from the post-header layout rather than
         # preserving a screenshot-sized fixed height.  The explicit minimum
         # keeps the operation list and action row usable on resize.
@@ -100,9 +111,23 @@ class LightweightWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(22, 14, 22, 14)
+        central.setObjectName("applicationSurface")
+        frame = QVBoxLayout(central)
+        frame.setContentsMargins(0, 0, 0, 0)
+        frame.setSpacing(0)
+        self.title_bar = TitleBar(central)
+        self.title_bar.title_label.setText(self.windowTitle())
+        self.title_bar.minimize_requested.connect(self.showMinimized)
+        self.title_bar.maximize_requested.connect(self._toggle_maximized)
+        self.title_bar.close_requested.connect(self.close)
+        self._native_chrome = WindowsChrome.create(self)
+        self.title_bar.setVisible(self._native_chrome is not None)
+        frame.addWidget(self.title_bar)
+        self.drop_body = QWidget(central)
+        layout = QVBoxLayout(self.drop_body)
+        layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
+        frame.addWidget(self.drop_body, 1)
 
         self.drop_zone = UnifiedDropZone(
             "将 DLsite 作品文件夹拖到这里",
@@ -113,23 +138,36 @@ class LightweightWindow(QMainWindow):
         self.status_label = QLabel("等待拖入作品文件夹。")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        surface_layout = cast(QVBoxLayout, self.drop_zone.layout())
+        surface_layout.addWidget(self.status_label)
 
         # Keep the historical attribute for callers/tests while the unified
         # surface owns the one authoritative recent-operation list.
         self.operation_list = self.drop_zone.operation_list
 
         actions = QHBoxLayout()
-        self.undo_button = QPushButton("撤销最近一次")
-        self.settings_button = QPushButton("设置")
-        self.full_mode_button = QPushButton("完整模式")
+        self.undo_button = self._action_button("undo", "撤销最近一次")
+        self.settings_button = self._action_button("settings", "设置")
+        self.full_mode_button = self._action_button("full", "切换到完整模式")
         actions.addWidget(self.undo_button)
         actions.addStretch(1)
         actions.addWidget(self.settings_button)
         actions.addWidget(self.full_mode_button)
-        layout.addLayout(actions)
+        surface_layout.addLayout(actions)
+        self.drop_zone.configure_drop_descendants()
         self.setCentralWidget(central)
         self.setStyleSheet(light_stylesheet() + _LIGHTWEIGHT_STYLES)
+
+    def _action_button(self, icon: str, name: str) -> QPushButton:
+        button = QPushButton()
+        button.setObjectName("lightweightAction")
+        button.setIcon(lightweight_action_icon(icon))
+        button.setIconSize(QSize(18, 18))
+        button.setFixedSize(34, 34)
+        button.setToolTip(name)
+        button.setAccessibleName(name)
+        button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        return button
 
     def start_quick_rename(
         self,
@@ -375,6 +413,28 @@ class LightweightWindow(QMainWindow):
         """Re-read mutation state whenever a hidden lightweight window is activated."""
         super().showEvent(event)
         self.refresh_mutation_state()
+        if self._native_chrome is not None:
+            self._native_chrome.attach()
+
+    @Slot()
+    def _toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "title_bar"):
+            self.title_bar.set_maximized(self.isMaximized())
+
+    def nativeEvent(self, event_type, message) -> tuple[bool, int]:
+        chrome = self._native_chrome
+        if chrome is not None and event_type == b"windows_generic_MSG":
+            handled, result = chrome.handle(int(message))
+            if handled:
+                return handled, result
+        return False, 0
 
     @Slot()
     def _request_full_mode(self) -> None:
@@ -383,7 +443,7 @@ class LightweightWindow(QMainWindow):
         self.full_mode_requested.emit()
 
     def _set_busy(self, busy: bool) -> None:
-        self.drop_zone.setEnabled(not busy)
+        self.drop_zone.set_drop_enabled(not busy)
         self.undo_button.setEnabled(False if busy else self.undo_button.isEnabled())
         self.settings_button.setEnabled(not busy)
         self.full_mode_button.setEnabled(not busy)
@@ -392,7 +452,7 @@ class LightweightWindow(QMainWindow):
         try:
             unresolved = self._undo_service.unresolved_transaction()
             if unresolved is not None:
-                self.drop_zone.setEnabled(False)
+                self.drop_zone.set_drop_enabled(False)
                 self.undo_button.setEnabled(False)
                 if self._thread is None:
                     self.status_label.setProperty("state", "error")
@@ -401,25 +461,25 @@ class LightweightWindow(QMainWindow):
                 return
             transaction = self._undo_service.latest_transaction()
         except Exception:
-            self.drop_zone.setEnabled(False)
+            self.drop_zone.set_drop_enabled(False)
             self.undo_button.setEnabled(False)
             self.status_label.setProperty("state", "error")
             self.status_label.setText("事务日志不可用，已禁用轻量模式重命名。")
             self._refresh_status_style()
             return
         if self._thread is not None:
-            self.drop_zone.setEnabled(False)
+            self.drop_zone.set_drop_enabled(False)
             self.undo_button.setEnabled(False)
             return
         if transaction is None:
-            self.drop_zone.setEnabled(True)
+            self.drop_zone.set_drop_enabled(True)
             self.undo_button.setEnabled(False)
             return
         pending = sum(
             operation.status.name == "SUCCESS" and operation.undo_status.name != "SUCCESS"
             for operation in transaction.operations
         )
-        self.drop_zone.setEnabled(True)
+        self.drop_zone.set_drop_enabled(True)
         self.undo_button.setEnabled(pending > 0)
 
     def is_busy(self) -> bool:
@@ -449,6 +509,13 @@ class LightweightWindow(QMainWindow):
 
 _LIGHTWEIGHT_STYLES = f"""
 #unifiedDropZone {{ background: transparent; border: 0; }}
+QPushButton#lightweightAction {{
+  background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 0;
+}}
+QPushButton#lightweightAction:hover {{ background: {LIGHT_COLORS.selection}; }}
+QPushButton#lightweightAction:pressed {{ background: {LIGHT_COLORS.border}; }}
+QPushButton#lightweightAction:focus {{ border: 1px solid {LIGHT_COLORS.focus}; }}
+QPushButton#lightweightAction:disabled {{ background: transparent; }}
 #dropMainArea, #recentOperationArea {{ background: transparent; }}
 #recentOperationLabel {{
   color: {LIGHT_COLORS.text_secondary};

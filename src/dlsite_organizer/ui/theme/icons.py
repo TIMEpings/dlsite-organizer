@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
 from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS
 
@@ -103,3 +103,40 @@ def execution_check_icon(action: str) -> QIcon:
             painter.drawLine(QPointF(1, 15), QPointF(3, 17))
     painter.end()
     return QIcon(pixmap)
+
+
+@lru_cache(maxsize=3)
+def lightweight_action_icon(name: str) -> QIcon:
+    """Compact actions with explicit neutral and disabled variants."""
+    if name not in ("undo", "settings", "full"):
+        raise ValueError(f"Unknown lightweight action: {name}")
+    icon = QIcon()
+    for mode, color in ((QIcon.Mode.Normal, LIGHT_COLORS.text_secondary),
+                        (QIcon.Mode.Disabled, LIGHT_COLORS.text_muted)):
+        if name == "settings":
+            pixmap = _draw_icon(name, color)
+        else:
+            pixmap = QPixmap(36, 36)
+            pixmap.setDevicePixelRatio(2)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor(color), 1.55, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            if name == "undo":
+                # One continuous returning shaft meets a conventional left arrow.
+                # Keep every stroke inside the 18 logical pixel artwork bounds.
+                path = QPainterPath(QPointF(13, 14))
+                path.cubicTo(17, 7, 11, 4, 3, 7)
+                painter.drawPath(path)
+                painter.drawLine(QPointF(6.5, 3.5), QPointF(3, 7))
+                painter.drawLine(QPointF(3, 7), QPointF(6.5, 10.5))
+            else:
+                painter.drawRoundedRect(QRectF(2, 3, 14, 12), 1, 1)
+                painter.drawLine(QPointF(2, 6), QPointF(16, 6))
+                painter.drawLine(QPointF(8, 12), QPointF(13, 8))
+                painter.drawLine(QPointF(13, 8), QPointF(10, 8))
+                painter.drawLine(QPointF(13, 8), QPointF(13, 11))
+            painter.end()
+        icon.addPixmap(pixmap, mode)
+    return icon

@@ -19,7 +19,10 @@ from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication
 
 if TYPE_CHECKING:
+    from dlsite_organizer.ui.lightweight_window import LightweightWindow
     from dlsite_organizer.ui.main_window import MainWindow
+
+    ChromeWindow = MainWindow | LightweightWindow
 
 
 class Hit(IntEnum):
@@ -137,12 +140,12 @@ class WindowsChrome:
     """Per-window native-event adapter; loaded only for Qt's Windows platform."""
 
     @classmethod
-    def create(cls, window: MainWindow) -> WindowsChrome | None:
+    def create(cls, window: ChromeWindow) -> WindowsChrome | None:
         if sys.platform != "win32" or QApplication.platformName() != "windows":
             return None
         return cls(window)
 
-    def __init__(self, window: MainWindow) -> None:
+    def __init__(self, window: ChromeWindow) -> None:
         self.window = window
         self._pressed = False
         self._attached = False
