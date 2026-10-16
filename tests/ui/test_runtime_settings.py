@@ -42,11 +42,62 @@ def wait_idle(page: OrganizerPage) -> None:
     assert not page.is_busy(), "scan did not complete"
 
 
+class _ScanCleanupState:
+    """Record whether bounded GUI pumping observed the organizer page idle."""
+
+    def __init__(self) -> None:
+        self.idle_observed = False
+
+
+def _drain_scan(provider: RecordingProvider, page: OrganizerPage, state: _ScanCleanupState) -> None:
+    provider.release.set()
+    wait_idle(page)
+    if page.is_busy():
+        raise RuntimeError("scan cleanup returned without observing an idle page")
+    state.idle_observed = True
+
+
+def _close_window_if_idle(
+    window: MainWindow, page: OrganizerPage, state: _ScanCleanupState
+) -> None:
+    if not state.idle_observed or page.is_busy():
+        raise RuntimeError("window close skipped because scan cleanup did not establish idle")
+    if not window.close():
+        raise RuntimeError("MainWindow rejected close after scan cleanup")
+
+
+def _register_database_cleanup(request: pytest.FixtureRequest, database: Database) -> None:
+    request.addfinalizer(database.dispose)
+
+
+def _register_window_cleanup(
+    request: pytest.FixtureRequest,
+    window: MainWindow,
+    page: OrganizerPage,
+    state: _ScanCleanupState,
+) -> None:
+    request.addfinalizer(lambda: _close_window_if_idle(window, page, state))
+
+
+def _register_scan_cleanup(
+    request: pytest.FixtureRequest,
+    provider: RecordingProvider,
+    page: OrganizerPage,
+    state: _ScanCleanupState,
+) -> None:
+    request.addfinalizer(lambda: _drain_scan(provider, page, state))
+
+
 @pytest.mark.parametrize("mode", ["replace-empty", "replace-existing", "append"])
 @pytest.mark.parametrize("cancel", [False, True], ids=["finish", "cancel"])
 @pytest.mark.parametrize("changed", ["template", "locale"])
 def test_settings_save_invalidates_inflight_result_and_next_scan_is_current(
-    qapp: QApplication, tmp_path: Path, mode: str, cancel: bool, changed: str
+    qapp: QApplication,
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    mode: str,
+    cancel: bool,
+    changed: str,
 ) -> None:
     root = tmp_path / "library"
     root.mkdir()
@@ -58,6 +109,7 @@ def test_settings_save_invalidates_inflight_result_and_next_scan_is_current(
     lookup, persistence = runtime(settings, provider, tmp_path)
     organizer = OrganizerService(lookup)
     database = Database(tmp_path / "journal.sqlite3")
+    _register_database_cleanup(request, database)
     database.initialize()
     window = MainWindow(
         lookup,
@@ -67,6 +119,9 @@ def test_settings_save_invalidates_inflight_result_and_next_scan_is_current(
         rename_executor=RenameExecutor(TransactionJournal(database)),
     )
     page = window.organizer_page
+    cleanup_state = _ScanCleanupState()
+    _register_window_cleanup(request, window, page, cleanup_state)
+    _register_scan_cleanup(request, provider, page, cleanup_state)
     page.set_root_path(root)
     if mode != "replace-empty":
         page.set_preview(organizer.preview_paths(root, (first,)))
@@ -75,60 +130,54 @@ def test_settings_save_invalidates_inflight_result_and_next_scan_is_current(
     provider.calls.clear()
     provider.pause.set()
     delivered: list[OrganizerWorkerResult] = []
-    try:
-        if mode == "append":
-            page._handle_drop_paths((second,))
+    if mode == "append":
+        page._handle_drop_paths((second,))
+    else:
+        page.start_scan()
+    assert provider.entered.wait(5)
+    assert page._worker is not None
+    page._worker.result_ready.connect(delivered.append)
+    generation = lookup.settings_generation
+    for index in (1, 2):
+        if changed == "template":
+            saved = settings.model_copy(update={"naming_template": f"NEW{index}-{{workno}}"})
         else:
-            page.start_scan()
-        assert provider.entered.wait(5)
-        assert page._worker is not None
-        page._worker.result_ready.connect(delivered.append)
-        generation = lookup.settings_generation
-        for index in (1, 2):
-            if changed == "template":
-                saved = settings.model_copy(update={"naming_template": f"NEW{index}-{{workno}}"})
-            else:
-                saved = settings.model_copy(
-                    update={
-                        "provider": ProviderSettings(
-                            metadata_locale="en_us" if index == 1 else "zh_cn"
-                        )
-                    }
-                )
-            persistence.save(saved)
-            assert page.preview_stale
-            assert not page.execute_button.isEnabled()
-        assert lookup.settings_generation == generation + 2
-        if cancel:
-            page.cancel_scan()
-        provider.release.set()
-        wait_idle(page)
-        assert delivered and delivered[0].preview.settings_generation == generation
-        assert all(
-            plan.proposed_name.startswith("OLD-")
-            for plan in delivered[0].preview.plans
-            if plan.proposed_name is not None
-        )
-        assert {call[1] for call in provider.calls} == {"ja_jp"}
-        assert page.preview is previous
+            saved = settings.model_copy(
+                update={
+                    "provider": ProviderSettings(
+                        metadata_locale="en_us" if index == 1 else "zh_cn"
+                    )
+                }
+            )
+        persistence.save(saved)
         assert page.preview_stale
         assert not page.execute_button.isEnabled()
-        assert not page.selected_ready_plans()
-        page.start_scan()
-        wait_idle(page)
-        assert page.preview is not None and page.preview.settings_generation == generation + 2
-        assert not page.preview_stale and page.execute_button.isEnabled()
-        expected = (
-            ("NEW2-RJ000001", "NEW2-RJ000002")
-            if changed == "template"
-            else ("OLD-RJ000001-zh_cn", "OLD-RJ000002-zh_cn")
-        )
-        assert tuple(plan.proposed_name for plan in page.preview.plans) == expected
-    finally:
-        provider.release.set()
-        wait_idle(page)
-        window.close()
-        database.dispose()
+    assert lookup.settings_generation == generation + 2
+    if cancel:
+        page.cancel_scan()
+    provider.release.set()
+    wait_idle(page)
+    assert delivered and delivered[0].preview.settings_generation == generation
+    assert all(
+        plan.proposed_name.startswith("OLD-")
+        for plan in delivered[0].preview.plans
+        if plan.proposed_name is not None
+    )
+    assert {call[1] for call in provider.calls} == {"ja_jp"}
+    assert page.preview is previous
+    assert page.preview_stale
+    assert not page.execute_button.isEnabled()
+    assert not page.selected_ready_plans()
+    page.start_scan()
+    wait_idle(page)
+    assert page.preview is not None and page.preview.settings_generation == generation + 2
+    assert not page.preview_stale and page.execute_button.isEnabled()
+    expected = (
+        ("NEW2-RJ000001", "NEW2-RJ000002")
+        if changed == "template"
+        else ("OLD-RJ000001-zh_cn", "OLD-RJ000002-zh_cn")
+    )
+    assert tuple(plan.proposed_name for plan in page.preview.plans) == expected
 
 
 @pytest.mark.parametrize("change", ["request", "replacement", "invalidation"])
