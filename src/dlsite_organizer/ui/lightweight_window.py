@@ -385,8 +385,24 @@ class LightweightWindow(QMainWindow):
             # viewport and make Qt show an unnecessary vertical scrollbar.
             self.operation_list.clear()
             self.operation_list.add_full_text(f"撤销  ✓ 已恢复 {result.success_count} 个目录")
+        elif result.status.name == "UNDO_PARTIAL":
+            summary = (
+                f"撤销部分完成（累计）：已恢复 {result.success_count} 个目录；"
+                f"失败 {result.failed_count} 个；仍有 {result.pending_count} 个目录尚未撤销"
+                "（含失败项）。"
+            )
+            self.status_label.setProperty("state", "error")
+            detail = f" {result.error}" if result.error else ""
+            self.status_label.setText(summary + detail)
+            self.operation_list.clear()
+            self.operation_list.add_full_text(summary)
         elif result.status.name == "RECOVERY_REQUIRED":
-            self._show_error("需要恢复：撤销状态需要恢复，请先处理该事务。")
+            self._show_error(
+                "需要恢复：撤销状态需要恢复，请先处理该事务。"
+                + (f" {result.error}" if result.error else "")
+            )
+            self.operation_list.clear()
+            self.operation_list.add_full_text("撤销需要恢复：请先处理该事务。")
         else:
             self._show_error(result.error or "撤销未执行。")
         self._refresh_status_style()

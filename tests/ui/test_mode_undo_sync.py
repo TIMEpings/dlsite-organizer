@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from tests.services.test_lookup import FakeProvider
 from tests.services.test_undo_service import FailOnceFilesystem
 
@@ -424,7 +425,7 @@ def test_full_mode_rename_then_lightweight_undo_is_immediately_available(
 
 @pytest.mark.parametrize("stage", ["forward", "undo_intent", "undo_recovery"])
 def test_recovery_required_state_is_refreshed_in_both_modes(
-    qapp: QApplication, tmp_path: Path, stage: str,
+    qapp: QApplication, tmp_path: Path, stage: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database, journal, signals, full, lightweight = _windows(tmp_path)
     source = tmp_path / "RJ01609020 old"
@@ -456,8 +457,67 @@ def test_recovery_required_state_is_refreshed_in_both_modes(
 
         assert not organizer.execute_button.isEnabled()
         assert not organizer.undo_button.isEnabled()
-        assert not lightweight.drop_zone.isEnabled()
+        # The unified surface contains status and navigation; only DnD is blocked.
+        zone = lightweight.drop_zone
+        assert zone.isEnabled()
+        assert lightweight.status_label.isEnabled()
+        assert not zone.acceptDrops()
+        assert all(not child.acceptDrops() for child in zone.findChildren(QWidget))
         assert not lightweight.undo_button.isEnabled()
+
+        dropped = []
+        workers = []
+        zone.paths_dropped.connect(dropped.append)
+
+        def unexpected_worker(*args):
+            workers.append(args)
+            raise AssertionError("rejected drop constructed a Quick Rename worker")
+
+        monkeypatch.setattr(
+            "dlsite_organizer.ui.lightweight_window.QuickRenameWorker", unexpected_worker
+        )
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(source))])  # Existing valid directory.
+        # Exercise both the owner and the recent list's forwarding handlers.
+        for receiver in (zone, zone.operation_list):
+            enter = QDragEnterEvent(
+                QPoint(10, 10), Qt.DropAction.CopyAction, mime,
+                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+            )
+            move = QDragMoveEvent(
+                QPoint(10, 10), Qt.DropAction.CopyAction, mime,
+                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+            )
+            drop = QDropEvent(
+                QPointF(10, 10), Qt.DropAction.CopyAction, mime,
+                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+            )
+            for event in (enter, move, drop):
+                event.acceptProposedAction()
+            zone._set_highlight(True)
+            receiver.dragEnterEvent(enter)
+            assert zone.property("dragActive") is False
+            zone._set_highlight(True)
+            receiver.dragMoveEvent(move)
+            assert zone.property("dragActive") is False
+            zone._set_highlight(True)
+            receiver.dropEvent(drop)
+            assert zone.property("dragActive") is False
+            for event in (enter, move, drop):
+                assert not event.isAccepted()
+        assert dropped == []
+        assert workers == []
+        assert lightweight._thread is None
+        assert lightweight._last_result is None
+        assert not lightweight.undo_button.isEnabled()
+        navigation = []
+        lightweight.settings_requested.connect(lambda: navigation.append("settings"))
+        lightweight.full_mode_requested.connect(lambda: navigation.append("full"))
+        assert lightweight.settings_button.isEnabled()
+        assert lightweight.full_mode_button.isEnabled()
+        lightweight.settings_button.click()
+        lightweight.full_mode_button.click()
+        assert navigation == ["settings", "full"]
         if stage != "forward":
             assert journal.get_transaction(transaction.transaction_id).status is (
                 TransactionStatus.COMPLETED

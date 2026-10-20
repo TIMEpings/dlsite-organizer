@@ -691,6 +691,114 @@ def test_undo_replaces_previous_recent_operation_without_scrollbar(
         window.close()
 
 
+def test_partial_undo_replaces_stale_rename_with_cumulative_outcome(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    window = _window(tmp_path)
+    restored = RenameOperation(
+        transaction_id="tx",
+        sequence=2,
+        source_path=tmp_path / "RJ01609020",
+        target_path=tmp_path / "[RJ01609020] Target",
+        status=ExecutionStatus.SUCCESS,
+        undo_status=UndoStatus.SUCCESS,
+    )
+    failed = RenameOperation(
+        transaction_id="tx",
+        sequence=1,
+        source_path=tmp_path / "RJ01609021",
+        target_path=tmp_path / "[RJ01609021] Target",
+        status=ExecutionStatus.SUCCESS,
+        undo_status=UndoStatus.FAILED,
+        undo_error="synthetic failure",
+    )
+    pending = RenameOperation(
+        transaction_id="tx",
+        sequence=0,
+        source_path=tmp_path / "RJ01609022",
+        target_path=tmp_path / "[RJ01609022] Target",
+        status=ExecutionStatus.SUCCESS,
+        undo_status=UndoStatus.PENDING,
+    )
+    result = UndoResult(
+        status=TransactionStatus.UNDO_PARTIAL,
+        transaction=None,
+        operations=(restored, failed, pending),
+        error="撤销已停止，后续撤销操作未执行。",
+    )
+
+    try:
+        window.operation_list.add_full_text("RJ01609020  ✓ 已重命名")
+        window._show_undo_result(result)
+
+        assert window.operation_list.count() == 1
+        row = window.operation_list.item(0)
+        assert row is not None
+        assert row.data(Qt.ItemDataRole.UserRole) == (
+            "撤销部分完成（累计）：已恢复 1 个目录；失败 1 个；"
+            "仍有 2 个目录尚未撤销（含失败项）。"
+        )
+        assert row.toolTip() == row.data(Qt.ItemDataRole.UserRole)
+        assert "RJ01609020" not in row.data(Qt.ItemDataRole.UserRole)
+        assert "部分完成" in window.status_label.text()
+        assert "恢复 1" in window.status_label.text()
+        assert "失败 1" in window.status_label.text()
+        assert "仍有 2 个目录尚未撤销（含失败项）" in window.status_label.text()
+        assert result.error is not None
+        assert result.error in window.status_label.text()
+        assert "本次" not in window.status_label.text()
+    finally:
+        window.close()
+
+
+def test_initial_undo_failure_does_not_claim_a_restore(qapp: QApplication, tmp_path: Path) -> None:
+    window = _window(tmp_path)
+    operation = RenameOperation(
+        transaction_id="tx",
+        sequence=1,
+        source_path=tmp_path / "RJ01609020",
+        target_path=tmp_path / "[RJ01609020] Target",
+        status=ExecutionStatus.SUCCESS,
+        undo_status=UndoStatus.FAILED,
+    )
+    result = UndoResult(
+        status=TransactionStatus.FAILED,
+        transaction=None,
+        operations=(operation,),
+        error="撤销前验证失败；未执行文件操作。",
+    )
+    try:
+        window._show_undo_result(result)
+        assert window.status_label.text() == result.error
+        assert "恢复" not in window.status_label.text()
+    finally:
+        window.close()
+
+
+def test_recovery_required_undo_keeps_warning_in_status_and_recent_row(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    window = _window(tmp_path)
+    result = UndoResult(
+        status=TransactionStatus.RECOVERY_REQUIRED,
+        transaction=None,
+        error="撤销文件操作已完成，但 journal 更新失败。",
+    )
+    try:
+        window.operation_list.add_full_text("先前的重命名")
+        window._show_undo_result(result)
+        row = window.operation_list.item(0)
+        assert row is not None
+        row_text = row.data(Qt.ItemDataRole.UserRole)
+        assert isinstance(row_text, str)
+        assert "需要恢复" in window.status_label.text()
+        assert "journal 更新失败" in window.status_label.text()
+        assert "需要恢复" in row_text
+        assert window.operation_list.count() == 1
+    finally:
+        window.close()
+
+
 @pytest.mark.parametrize("region", ["body", "title", "detail", "recent", "list",
                                    "scroll", "status", "undo", "settings", "full"])
 def test_native_qt_drop_owner_covers_descendants(qapp, tmp_path, region):
