@@ -3,16 +3,21 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import QApplication, QMessageBox
+from tests.services.test_lookup import FakeProvider
 
+from dlsite_organizer.__main__ import _connect_quick_action_feedback
 from dlsite_organizer.app.application_lifecycle import ApplicationLifecycle
 from dlsite_organizer.app.durable_handoff import DurableHandoff, publish
 from dlsite_organizer.app.quick_action_controller import (
     QuickActionController,
     QuickActionRequest,
 )
+from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.app.single_instance import (
     CoordinatorRole,
     InstanceCoordinator,
@@ -20,6 +25,17 @@ from dlsite_organizer.app.single_instance import (
     LocalCommandName,
     LocalReplyStatus,
 )
+from dlsite_organizer.services.cover import CoverService
+from dlsite_organizer.services.lookup import LookupService
+from dlsite_organizer.services.naming import NamingService
+from dlsite_organizer.services.quick_rename import (
+    QuickRenameResult,
+    QuickRenameService,
+    QuickRenameStatus,
+)
+from dlsite_organizer.services.undo_service import UndoService
+from dlsite_organizer.ui.lightweight_window import LightweightWindow
+from dlsite_organizer.ui.main_window import MainWindow
 
 
 @pytest.fixture
@@ -126,6 +142,100 @@ def _lifecycle(qapp: QApplication, controller: QuickActionController):
         controller,
     )
     return lifecycle, full, lightweight, events
+
+
+@pytest.mark.parametrize("mode", ["full", "lightweight", "switch_to_lightweight"])
+def test_production_quick_completion_routing_uses_terminal_surface_once(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    class NoJournalUndo:
+        def unresolved_transaction(self):
+            return None
+
+        def latest_transaction(self):
+            return None
+
+    def forbidden_dialog(*_args, **_kwargs):
+        pytest.fail("terminal presentation must not show a blocking dialog")
+
+    for name in ("information", "warning", "critical", "question"):
+        monkeypatch.setattr(QMessageBox, name, forbidden_dialog)
+    runners: list[FakeRunner] = []
+
+    def factory(request, completion):
+        runner = FakeRunner(request, completion)
+        runners.append(runner)
+        return runner
+
+    controller = QuickActionController(factory)
+    settings = SettingsService(AppSettings(), config_path=tmp_path / "unused.toml")
+    full = MainWindow(
+        LookupService(FakeProvider(), NamingService()), CoverService(), settings_service=settings,
+    )
+    light = LightweightWindow(
+        cast(QuickRenameService, object()), cast(UndoService, NoJournalUndo()), settings,
+        quick_action_controller=controller,
+    )
+    events: list[str] = []
+    lifecycle = ApplicationLifecycle(
+        qapp, FakeCoordinator(events), FakeDatabase(events), full, light, controller,
+    )
+    _connect_quick_action_feedback(controller, lifecycle, full)
+    presented = []
+    original = full.present_quick_action_failure
+
+    def present(value):
+        presented.append(value.request.request_id)
+        original(value)
+
+    monkeypatch.setattr(full, "present_quick_action_failure", present)
+    light_results = []
+    light_errors = []
+    light.quick_action_finished.connect(light_results.append)
+    light.quick_action_failed.connect(light_errors.append)
+    if mode == "lightweight":
+        assert lifecycle.show_lightweight_mode()
+    else:
+        assert lifecycle.show_full_mode()
+    assert controller.submit(tmp_path / "first").accepted
+    assert controller.submit(tmp_path / "second").accepted
+    assert len(runners) == 1
+    if mode == "switch_to_lightweight":
+        assert lifecycle.show_lightweight_mode()
+    if mode != "full":
+        # Existing policy blocks Lightweight -> Full while work is pending.
+        assert not lifecycle.show_full_mode()
+    current = lifecycle.current_window
+    typed = QuickRenameResult(QuickRenameStatus.LOOKUP_FAILED, error="first lookup reason")
+    runners[0].finish(typed)
+    assert len(runners) == 2
+    runners[1].finish(error="second runner reason")
+    runners[1].finish(error="stale duplicate completion")
+    qapp.processEvents()
+    assert lifecycle.current_window is current
+    assert len(runners) == 2
+    assert controller.active_request is None and not controller.pending_requests
+    assert light_results == [typed] and light_errors == ["second runner reason"]
+    if mode == "full":
+        assert presented == [1, 2]
+        assert full.isVisible() and not light.isVisible()
+        assert full.quick_failure_selector.count() == 2
+        assert "#2" in full.quick_failure_summary.text()
+        assert "second runner reason" in full.quick_failure_details.toPlainText()
+        full.quick_failure_selector.setCurrentIndex(0)
+        assert "#1" in full.quick_failure_dialog_summary.text()
+        assert "first lookup reason" in full.quick_failure_details.toPlainText()
+    else:
+        assert presented == []
+        assert light.isVisible() and not full.isVisible()
+        assert full.quick_failure_selector.count() == 0
+        assert lifecycle.show_full_mode()
+        assert full.quick_failure_selector.count() == 0  # No replay on mode change.
+    assert not list(tmp_path.rglob("*.sqlite3")) and not settings.config_path.exists()
+    full.set_close_handler(lambda window, event: cast(QCloseEvent, event).accept())
+    light.set_close_handler(lambda window, event: cast(QCloseEvent, event).accept())
+    full.close()
+    light.close()
 
 
 def test_activate_targets_current_runtime_window_without_switching_mode(

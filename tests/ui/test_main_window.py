@@ -10,14 +10,28 @@ from PySide6.QtWidgets import QApplication
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer import __version__
+from dlsite_organizer.app.quick_action_controller import QuickActionFinished, QuickActionRequest
 from dlsite_organizer.app.runtime import RuntimeSignals
+from dlsite_organizer.domain.organizer import ScanResult
+from dlsite_organizer.domain.rename_execution import (
+    ExecutionStatus,
+    RenameExecutionResult,
+    RenameOperation,
+    TransactionStatus,
+)
 from dlsite_organizer.domain.work import Work
 from dlsite_organizer.persistence.database import Database
 from dlsite_organizer.persistence.rename_journal import TransactionJournal
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
 from dlsite_organizer.services.naming import NamingService
-from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.organizer import (
+    OrganizerPreview,
+    OrganizerService,
+    WorkLookup,
+    WorkLookupStatus,
+)
+from dlsite_organizer.services.quick_rename import QuickRenameResult, QuickRenameStatus
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_history import RenameHistoryService
 from dlsite_organizer.services.undo_service import UndoService
@@ -65,6 +79,249 @@ def _select_navigation_label(window: MainWindow, label: str) -> None:
     ]
     assert len(matches) == 1
     window.navigation_list.setCurrentItem(matches[0])
+
+
+def _quick_completion(result=None, error=None, request_id=1) -> QuickActionFinished:
+    return QuickActionFinished(
+        QuickActionRequest(request_id, Path(f"X{request_id}"), f"x{request_id}"), result, error,
+    )
+
+
+@pytest.mark.parametrize("page", list(MainPage))
+def test_quick_failure_is_accessible_across_full_pages_without_focus_change(
+    qapp: QApplication, page: MainPage, tmp_path: Path,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    if page is MainPage.ORGANIZER:
+        from tests.ui.test_organizer_preview_model import synthetic_preview
+
+        window.organizer_page.set_preview(synthetic_preview(tmp_path, 8))
+    window.show()
+    window.navigate_to(page)
+    window.settings_button.setFocus()
+    qapp.processEvents()
+    focus = qapp.focusWidget()
+    reason = "controlled lookup failure " + "long reason " * 300
+    preview = OrganizerPreview(
+        Path("X"), ScanResult(Path("X"), (), ()),
+        (WorkLookup("RJ123456", WorkLookupStatus.FAILED, error="specific lookup reason"),), (),
+    )
+    result = QuickRenameResult(QuickRenameStatus.LOOKUP_FAILED, preview=preview, error=reason)
+    window.present_quick_action_failure(_quick_completion(result))
+    qapp.processEvents()
+
+    assert window.current_page is page
+    assert window.quick_failure_panel.isVisible()
+    assert "controlled lookup failure" in window.quick_failure_summary.text()
+    assert "未修改任何文件" in window.quick_failure_summary.text()
+    assert reason in window.quick_failure_details.toPlainText()
+    assert "specific lookup reason" in window.quick_failure_details.toPlainText()
+    assert qapp.focusWidget() is focus
+    assert window.quick_failure_summary.accessibleDescription()
+    assert not window.quick_failure_dialog.isVisible()
+    button = window.quick_failure_details_button
+    assert button.focusPolicy() is Qt.FocusPolicy.StrongFocus
+    # Tab traversal reaches the action using the existing shell focus chain.
+    for _ in range(100):
+        if qapp.focusWidget() is button:
+            break
+        QTest.keyClick(qapp.focusWidget() or window, Qt.Key.Key_Tab)
+    assert qapp.focusWidget() is button
+    QTest.keyClick(button, Qt.Key.Key_Space)
+    qapp.processEvents()
+    assert window.quick_failure_dialog.isVisible()
+    assert not window.quick_failure_dialog.isModal()
+    assert window.quick_failure_details.isReadOnly()
+    assert window.quick_failure_details.height() > 120
+    assert reason in window.quick_failure_dialog_summary.text()
+    window.resize(960, 749)
+    qapp.processEvents()
+    pages_geometry = window.pages.geometry()
+    assert window.quick_failure_panel.height() <= 70
+    central = window.centralWidget()
+    assert central is not None
+    assert window.quick_failure_panel.geometry().bottom() <= central.height()
+    assert window.quick_failure_details.viewport().height() > 0
+    if page is MainPage.ORGANIZER:
+        organizer = window.organizer_page
+        assert not organizer.table.geometry().intersects(organizer.footer.geometry())
+    old_dialog_detail = window.quick_failure_details.toPlainText()
+    viewer_focus = qapp.focusWidget()
+    window.present_quick_action_failure(
+        _quick_completion(error="newest background failure", request_id=2),
+    )
+    qapp.processEvents()
+    assert qapp.focusWidget() is viewer_focus
+    assert window.quick_failure_details.toPlainText() == old_dialog_detail
+    assert "#2" in window.quick_failure_summary.text()
+    assert window.quick_failure_dialog_summary.text().startswith("Quick Rename #1")
+    assert window.pages.geometry() == pages_geometry
+    window.quick_failure_dialog.close()
+    assert not window.quick_failure_dialog.isVisible()
+    window.quick_failure_details_button.click()
+    qapp.processEvents()
+    assert window.quick_failure_dialog.isVisible()
+    assert "controlled lookup failure" in window.quick_failure_details.toPlainText()
+    assert "newest background failure" not in window.quick_failure_details.toPlainText()
+    assert window.quick_failure_selector.count() == 2
+    window.navigate_to(MainPage.LOOKUP)
+    assert window.quick_failure_panel.isVisible()
+    window.hide()
+    qapp.processEvents()
+    assert not window.quick_failure_dialog.isVisible()
+    window.close()
+
+
+@pytest.mark.parametrize("status", list(QuickRenameStatus))
+def test_quick_failure_classifies_typed_status_with_no_worker_exception(
+    qapp: QApplication, status: QuickRenameStatus,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    result = QuickRenameResult(status, error="reason")
+    window.present_quick_action_failure(_quick_completion(result))
+    if status in {QuickRenameStatus.SUCCESS, QuickRenameStatus.NO_CHANGE}:
+        assert window.quick_failure_selector.count() == 0
+        assert window.quick_failure_panel.isHidden()
+    else:
+        assert window.quick_failure_selector.count() == 1
+        assert "reason" in window.quick_failure_details.toPlainText()
+        if status is QuickRenameStatus.RECOVERY_REQUIRED:
+            assert "需要恢复" in window.quick_failure_summary.text()
+            assert "未修改任何文件" not in window.quick_failure_summary.text()
+    window.close()
+
+
+@pytest.mark.parametrize("status", [TransactionStatus.PARTIAL, TransactionStatus.RECOVERY_REQUIRED])
+def test_quick_failure_preserves_partial_and_recovery_facts(
+    qapp: QApplication, status: TransactionStatus,
+) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    execution = RenameExecutionResult(status, None, (
+        RenameOperation("tx", 0, Path("A"), Path("B"), ExecutionStatus.SUCCESS),
+        RenameOperation("tx", 1, Path("C"), Path("D"), ExecutionStatus.FAILED, "denied"),
+    ), error="stopped")
+    result = QuickRenameResult(
+        QuickRenameStatus.RECOVERY_REQUIRED if status is TransactionStatus.RECOVERY_REQUIRED
+        else QuickRenameStatus.EXECUTION_FAILED, execution=execution,
+    )
+    window.present_quick_action_failure(_quick_completion(result))
+    text = window.quick_failure_details.toPlainText()
+    outcome = "需要恢复" if status is TransactionStatus.RECOVERY_REQUIRED else "部分操作已完成"
+    assert outcome in text
+    assert "已完成 1 项" in text and "denied" in text and "stopped" in text
+    assert "未修改任何文件" not in text
+    window.close()
+
+
+def test_quick_failure_retains_bounded_matching_request_details(qapp: QApplication) -> None:
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    for request_id in range(1, 13):
+        window.present_quick_action_failure(_quick_completion(
+            error=f"runner diagnostic {request_id}", request_id=request_id,
+        ))
+    selector = window.quick_failure_selector
+    assert selector.count() == 10
+    assert selector.currentText() == "Quick Rename #12"
+    assert "runner diagnostic 12" in window.quick_failure_details.toPlainText()
+    selector.setCurrentIndex(0)
+    assert "#3" in window.quick_failure_dialog_summary.text()
+    assert "runner diagnostic 3" in window.quick_failure_details.toPlainText()
+    assert "runner diagnostic 12" not in window.quick_failure_details.toPlainText()
+    assert "未修改任何文件" not in window.quick_failure_details.toPlainText()
+    window.quick_failure_details_button.click()
+    qapp.processEvents()
+    assert window.quick_failure_dialog.isVisible()
+    window.present_quick_action_failure(
+        _quick_completion(error="runner diagnostic 13", request_id=13),
+    )
+    assert selector.count() == 10
+    assert selector.currentText() == "Quick Rename #4"
+    assert "#4" in window.quick_failure_dialog_summary.text()
+    assert "runner diagnostic 4" in window.quick_failure_details.toPlainText()
+    assert "runner diagnostic 3" not in window.quick_failure_details.toPlainText()
+    window.present_quick_action_failure(_quick_completion(QuickRenameResult(QuickRenameStatus.SUCCESS)))
+    assert selector.count() == 10 and selector.currentIndex() == 0
+    window.close()
+
+
+def test_quick_failure_viewer_keeps_organizer_geometry_and_scrolls_long_details(
+    qapp: QApplication, tmp_path: Path,
+) -> None:
+    from tests.ui.test_organizer_preview_model import synthetic_preview
+
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    window.organizer_page.set_preview(synthetic_preview(tmp_path, 8))
+    window.show()
+    window.resize(960, 749)
+    minimum_before_feedback = window.minimumSize()
+    qapp.processEvents()
+    no_feedback_pages = window.pages.geometry()
+    window.present_quick_action_failure(
+        _quick_completion(error="diagnostic detail " * 500),
+    )
+    qapp.processEvents()
+    assert window.minimumSize() == minimum_before_feedback
+    baseline_pages = window.pages.geometry()
+    assert baseline_pages.height() < no_feedback_pages.height()
+    organizer = window.organizer_page
+    assert not organizer.table.geometry().intersects(organizer.footer.geometry())
+
+    window.quick_failure_details_button.click()
+    qapp.processEvents()
+    viewer = window.quick_failure_dialog
+    assert viewer.isVisible() and not viewer.isModal()
+    assert window.pages.geometry() == baseline_pages
+    assert not organizer.table.geometry().intersects(organizer.footer.geometry())
+    assert window.quick_failure_details.verticalScrollBar().maximum() > 0
+    window.resize(1160, 800)
+    qapp.processEvents()
+    medium_pages = window.pages.geometry()
+    assert medium_pages.height() == 742
+    assert not organizer.table.geometry().intersects(organizer.footer.geometry())
+    assert window.quick_failure_details.verticalScrollBar().maximum() > 0
+    screen = QApplication.screenAt(window.frameGeometry().center()) or QApplication.primaryScreen()
+    if screen is not None:
+        available = screen.availableGeometry()
+        assert viewer.width() <= available.width()
+        assert viewer.height() <= available.height()
+
+    viewer.close()
+    qapp.processEvents()
+    assert window.pages.geometry() == medium_pages
+    window.resize(960, 749)
+    qapp.processEvents()
+    assert window.pages.geometry() == baseline_pages
+    assert not organizer.table.geometry().intersects(organizer.footer.geometry())
+    window.close()
+
+
+def test_quick_failure_viewer_placement_fits_constrained_available_geometry(
+    qapp: QApplication,
+) -> None:
+    available = QRect(40, 70, 640, 420)
+    geometry = MainWindow._quick_failure_viewer_geometry(available)
+    assert available.contains(geometry)
+    assert geometry.size() == available.size()
+
+    short_screen = QRect(-300, 20, 640, 360)
+    geometry = MainWindow._quick_failure_viewer_geometry(short_screen)
+    assert short_screen.contains(geometry)
+    assert geometry.height() <= 360
+    assert geometry.width() <= 640
+
+    window = MainWindow(LookupService(FakeProvider(), NamingService()), CoverService())
+    window.present_quick_action_failure(
+        _quick_completion(error="constrained screen detail " * 200),
+    )
+    window.quick_failure_details_button.click()
+    window.quick_failure_dialog.setMaximumSize(640, 360)
+    window.quick_failure_dialog.resize(640, 360)
+    qapp.processEvents()
+    assert window.quick_failure_dialog.width() <= 640
+    assert window.quick_failure_dialog.height() <= 360
+    assert window.quick_failure_details.viewport().height() > 0
+    assert window.quick_failure_details.verticalScrollBar().maximum() > 0
+    window.close()
 
 
 def test_main_window_exposes_organizer_page_without_running_filesystem_work(

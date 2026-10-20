@@ -25,7 +25,7 @@ from dlsite_organizer.app.invocation import (
     parse_invocation,
 )
 from dlsite_organizer.app.logging_config import configure_logging
-from dlsite_organizer.app.quick_action_controller import QuickActionController
+from dlsite_organizer.app.quick_action_controller import QuickActionController, QuickActionFinished
 from dlsite_organizer.app.settings import (
     SettingsError,
     StartupMode,
@@ -152,6 +152,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lightweight_window,
         quick_action_controller,
     )
+    _connect_quick_action_feedback(quick_action_controller, lifecycle, window)
     try:
         durable = DurableHandoff(
             profile_root,
@@ -207,6 +208,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     lifecycle.request_shutdown()
     logger.info("DLsite Organizer stopped")
     return exit_code
+
+
+def _connect_quick_action_feedback(
+    controller: QuickActionController,
+    lifecycle: ApplicationLifecycle,
+    window: MainWindow,
+) -> None:
+    """Project each terminal event onto Full only when it is the current surface."""
+    def completed(value: QuickActionFinished) -> None:
+        current = lifecycle.current_window
+        if current is window or (current is None and window.isVisible()):
+            window.present_quick_action_failure(value)
+
+    controller.request_finished.connect(completed)
 
 
 class _DeferredCommandHandler:

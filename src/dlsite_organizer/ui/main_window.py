@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QShowEvent
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QCloseEvent, QHideEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QDialog,
     QHBoxLayout,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -22,14 +28,17 @@ from PySide6.QtWidgets import (
 
 from dlsite_organizer import __version__
 from dlsite_organizer.app.branding import load_application_icon
+from dlsite_organizer.app.quick_action_controller import QuickActionFinished
 from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import AppSettings, SettingsService
+from dlsite_organizer.domain.rename_execution import TransactionStatus
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.drop_input import DropInputService
 from dlsite_organizer.services.explorer_integration import ExplorerIntegrationService
 from dlsite_organizer.services.folder_scanner import FolderScanner
 from dlsite_organizer.services.lookup import LookupService, operation_settings_key
 from dlsite_organizer.services.organizer import OrganizerService
+from dlsite_organizer.services.quick_rename import QuickRenameResult, QuickRenameStatus
 from dlsite_organizer.services.rename_executor import RenameExecutor
 from dlsite_organizer.services.rename_history import RenameHistoryService
 from dlsite_organizer.services.rename_planner import RenamePlanner
@@ -59,10 +68,75 @@ class MainPage(StrEnum):
     ABOUT = "about"
 
 
+@dataclass(frozen=True)
+class _QuickActionFailure:
+    request_id: int
+    summary: str
+    details: str
+
+
+def _quick_action_failure(value: QuickActionFinished) -> _QuickActionFailure | None:
+    """Keep result facts and safe diagnostics, without retaining metadata payloads."""
+    result = value.result
+    lines: list[str] = []
+    if isinstance(result, QuickRenameResult):
+        if result.status in {QuickRenameStatus.SUCCESS, QuickRenameStatus.NO_CHANGE}:
+            return None
+        execution = result.execution
+        if result.status is QuickRenameStatus.RECOVERY_REQUIRED or (
+            execution is not None and execution.status is TransactionStatus.RECOVERY_REQUIRED
+        ):
+            outcome = "需要恢复，请先处理该事务"
+        elif result.mutated or (
+            execution is not None and execution.status is TransactionStatus.PARTIAL
+        ):
+            outcome = "部分操作已完成"
+        elif execution is None:
+            outcome = "重命名失败，未修改任何文件"
+        else:
+            outcome = "重命名执行失败"
+        reason = result.error or (execution.error if execution else None)
+        summary = f"{outcome}：{reason}" if reason else outcome
+        lines.append(f"结果：{result.status.value}\n{summary}")
+        if result.preview is not None:
+            lines.extend(
+                f"{lookup.work_code}：{lookup.error}"
+                for lookup in result.preview.lookups if lookup.error
+            )
+            lines.extend(
+                f"{plan.source_path}：{plan.error}" for plan in result.plans if plan.error
+            )
+        if execution is not None:
+            lines.append(f"执行状态：{execution.status.value}；已完成 {execution.success_count} 项")
+            if execution.transaction_id:
+                lines.append(f"事务：{execution.transaction_id}")
+            if execution.error and execution.error != reason:
+                lines.append(execution.error)
+            lines.extend(
+                f"{operation.source_path} → {operation.target_path}："
+                f"{operation.status.value}" + (f"；{operation.error}" if operation.error else "")
+                for operation in execution.operations
+            )
+            if execution.transaction is not None and execution.transaction.recovery_error:
+                lines.append(execution.transaction.recovery_error)
+    else:
+        summary = "Quick Rename 异常结束，无法确认执行结果；请查看详情"
+        lines.append(summary)
+    if value.error:
+        lines.append(value.error)
+    identity = f"Quick Rename #{value.request.request_id}"
+    paths = "\n".join(str(path) for path in value.request.paths)
+    return _QuickActionFailure(
+        value.request.request_id, f"{identity} · {summary}",
+        f"{identity}\n{paths}\n\n" + "\n\n".join(lines),
+    )
+
+
 class MainWindow(QMainWindow):
     """Host the public pages of the full application."""
 
     lightweight_requested = Signal()
+    QUICK_FAILURE_LIMIT = 10
 
     def __init__(
         self,
@@ -209,8 +283,65 @@ class MainWindow(QMainWindow):
         self.organizer_page.view_transaction_requested.connect(self.show_transaction_history)
         self.navigate_to(MainPage.ORGANIZER)
         shell.addWidget(self.navigation)
-        shell.addWidget(self.pages, 1)
+        content = QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0)
+        content.addWidget(self.pages, 1)
+        self.quick_failure_panel = QWidget()
+        feedback = QVBoxLayout(self.quick_failure_panel)
+        feedback.setContentsMargins(16, 4, 16, 8)
+        summary_row = QHBoxLayout()
+        self.quick_failure_summary = QLabel()
+        self.quick_failure_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.quick_failure_summary.setObjectName("statusLabel")
+        self.quick_failure_summary.setProperty("state", "error")
+        self.quick_failure_summary.setAccessibleName("Quick Rename 失败状态")
+        self.quick_failure_summary.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed,
+        )
+        summary_row.addWidget(self.quick_failure_summary, 1)
+        self.quick_failure_details_button = QPushButton("详情（最近 10 次失败）")
+        self.quick_failure_details_button.clicked.connect(self._show_quick_failure_details)
+        self.quick_failure_details_button.setAccessibleName("查看 Quick Rename 失败详情")
+        summary_row.addWidget(self.quick_failure_details_button)
+        feedback.addLayout(summary_row)
+
+        self.quick_failure_dialog = QDialog(self, Qt.WindowType.Window)
+        self.quick_failure_dialog.setWindowTitle("Quick Rename 失败详情")
+        self.quick_failure_dialog.setModal(False)
+        self.quick_failure_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        details_layout = QVBoxLayout(self.quick_failure_dialog)
+        details_layout.setContentsMargins(16, 12, 16, 16)
+        self.quick_failure_selector = QComboBox()
+        self.quick_failure_selector.setAccessibleName("最近 10 次 Quick Rename 失败请求")
+        self.quick_failure_selector.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon,
+        )
+        self.quick_failure_selector.setMinimumContentsLength(16)
+        self.quick_failure_dialog_summary = QLabel()
+        self.quick_failure_dialog_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.quick_failure_dialog_summary.setObjectName("statusLabel")
+        self.quick_failure_dialog_summary.setProperty("state", "error")
+        self.quick_failure_dialog_summary.setAccessibleName("所选 Quick Rename 失败摘要")
+        self.quick_failure_dialog_summary.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed,
+        )
+        self.quick_failure_details = QPlainTextEdit()
+        self.quick_failure_details.setReadOnly(True)
+        self.quick_failure_details.setTabChangesFocus(True)
+        self.quick_failure_details.setAccessibleName("Quick Rename 完整失败详情")
+        details_layout.addWidget(self.quick_failure_selector)
+        details_layout.addWidget(self.quick_failure_dialog_summary)
+        details_layout.addWidget(self.quick_failure_details, 1)
+        self.quick_failure_dialog.resize(760, 520)
+        self.quick_failure_dialog.hide()
+        self.quick_failure_panel.hide()
+        self.quick_failure_selector.currentIndexChanged.connect(self._select_quick_failure)
+        content.addWidget(self.quick_failure_panel)
+        shell.addLayout(content, 1)
         self.setCentralWidget(central)
+        # Reach shell feedback before entering page tables that use Tab for cells.
+        self.setTabOrder(self.lightweight_button, self.quick_failure_details_button)
         self.setStyleSheet(light_stylesheet())
         # These controls retain the shell's focus border (or an explicit local
         # equivalent). Keep this opt-in list explicit: notably, Organizer's
@@ -219,6 +350,7 @@ class MainWindow(QMainWindow):
             self.settings_button,
             self.about_button,
             self.lightweight_button,
+            self.quick_failure_details_button,
             self.settings_page.save_button,
             self.settings_page.remove_explorer_button,
             self.lookup_page.query_button,
@@ -257,6 +389,89 @@ class MainWindow(QMainWindow):
             self._runtime_signals.mutation_history_changed.connect(
                 self.rename_history_page.refresh_after_mutation
             )
+
+    def present_quick_action_failure(self, value: QuickActionFinished) -> None:
+        """Retain at most ten failures across all pages without changing focus or mode."""
+        failure = _quick_action_failure(value)
+        if failure is None:
+            return
+        selector = self.quick_failure_selector
+        selected_record = selector.currentData()
+        inspected_id = (
+            selected_record.request_id
+            if isinstance(selected_record, _QuickActionFailure) else None
+        )
+        selector.blockSignals(True)
+        try:
+            if selector.count() == self.QUICK_FAILURE_LIMIT:
+                selector.removeItem(0)
+            selector.addItem(f"Quick Rename #{failure.request_id}", failure)
+            if inspected_id is None:
+                selector.setCurrentIndex(selector.count() - 1)
+            else:
+                retained_index = next(
+                    (
+                        index for index in range(selector.count())
+                        if isinstance(selector.itemData(index), _QuickActionFailure)
+                        and selector.itemData(index).request_id == inspected_id
+                    ), -1,
+                )
+                selector.setCurrentIndex(
+                    retained_index if retained_index >= 0 else 0,
+                )
+        finally:
+            selector.blockSignals(False)
+        if not self.quick_failure_dialog.isVisible():
+            selector.setCurrentIndex(selector.count() - 1)
+        self._select_quick_failure(selector.currentIndex())
+        self.quick_failure_summary.setText(
+            self._failure_summary_preview(failure.summary),
+        )
+        self.quick_failure_summary.setToolTip(failure.summary)
+        self.quick_failure_summary.setAccessibleDescription(failure.summary)
+        self.quick_failure_panel.show()
+
+    @staticmethod
+    def _failure_summary_preview(summary: str) -> str:
+        preview = " ".join(summary.split())
+        return preview[:120] + ("…" if len(preview) > 120 else "")
+
+    @Slot()
+    def _show_quick_failure_details(self) -> None:
+        if self.quick_failure_selector.count() == 0:
+            return
+        if not self.quick_failure_dialog.isVisible():
+            screen = QApplication.screenAt(self.frameGeometry().center())
+            if screen is None:
+                screen = QApplication.primaryScreen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                geometry = self._quick_failure_viewer_geometry(available)
+                self.quick_failure_dialog.setMaximumSize(available.size())
+                self.quick_failure_dialog.resize(geometry.size())
+                self.quick_failure_dialog.move(geometry.topLeft())
+        self.quick_failure_dialog.show()
+        self.quick_failure_dialog.raise_()
+        self.quick_failure_dialog.activateWindow()
+
+    @staticmethod
+    def _quick_failure_viewer_geometry(available: QRect) -> QRect:
+        """Center a comfortably sized viewer within the usable screen rectangle."""
+        width = min(760, available.width())
+        height = min(520, available.height())
+        x = available.x() + max(0, (available.width() - width) // 2)
+        y = available.y() + max(0, (available.height() - height) // 2)
+        return QRect(x, y, width, height)
+
+    @Slot(int)
+    def _select_quick_failure(self, index: int) -> None:
+        failure = self.quick_failure_selector.itemData(index)
+        if not isinstance(failure, _QuickActionFailure):
+            return
+        self.quick_failure_dialog_summary.setText(failure.summary)
+        self.quick_failure_dialog_summary.setToolTip(failure.summary)
+        self.quick_failure_dialog_summary.setAccessibleDescription(failure.summary)
+        self.quick_failure_details.setPlainText(failure.details)
 
     @property
     def current_page(self) -> MainPage:
@@ -333,6 +548,11 @@ class MainWindow(QMainWindow):
             # Child show/layout events can finalize legacy page hints after
             # this parent's showEvent. Re-measure once they have been delivered.
             QTimer.singleShot(0, self._update_minimum_size_from_layout)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        """Keep the owned details viewer hidden with Full Mode."""
+        self.quick_failure_dialog.hide()
+        super().hideEvent(event)
 
     @Slot()
     def _toggle_maximized(self) -> None:
