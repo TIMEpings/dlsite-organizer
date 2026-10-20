@@ -7,6 +7,7 @@ import logging
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QThread, QUrl, Slot
 from PySide6.QtGui import QDesktopServices, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -503,9 +504,17 @@ class AboutPage(QWidget):
         self._restore_update_focus_if_needed()
 
     def _restore_update_focus_if_needed(self) -> None:
-        if self._restore_update_button_focus:
-            self.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
+        restore_focus = self._restore_update_button_focus
         self._restore_update_button_focus = False
+        if (
+            restore_focus
+            and self.isVisible()
+            and QApplication.focusWidget() is self.update_section
+            and self.check_update_button.isVisible()
+            and self.check_update_button.isEnabled()
+            and self.check_update_button.focusPolicy() is not Qt.FocusPolicy.NoFocus
+        ):
+            self.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
 
     @Slot()
     def _open_release_page(self) -> None:

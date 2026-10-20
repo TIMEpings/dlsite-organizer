@@ -686,6 +686,8 @@ def test_about_keyboard_update_focus_returns_to_action(qapp: QApplication) -> No
     page = AboutPage(update_check_service=service)
     page.resize(960, 640)
     page.show()
+    page.activateWindow()
+    qapp.processEvents()
     page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
     QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
     assert service.started.wait(1)
@@ -694,3 +696,155 @@ def test_about_keyboard_update_focus_returns_to_action(qapp: QApplication) -> No
     _wait_until(qapp, lambda: not page.is_busy())
     assert qapp.focusWidget() is page.check_update_button
     page.close()
+
+
+def test_about_keyboard_update_preserves_deliberate_license_focus(qapp: QApplication) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    service = FakeUpdateService(_result(UpdateCheckStatus.CHECK_FAILED), block=True)
+    page = AboutPage(update_check_service=service)
+    page.resize(960, 640)
+    page.show()
+    qapp.processEvents()
+    page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
+    assert qapp.focusWidget() is page.check_update_button
+
+    try:
+        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        assert service.started.wait(1)
+        assert page.is_busy()
+        assert qapp.focusWidget() is page.update_section
+
+        page.license_button.setFocus(Qt.FocusReason.TabFocusReason)
+        qapp.processEvents()
+        assert qapp.focusWidget() is page.license_button
+
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert qapp.focusWidget() is page.license_button
+        assert page.check_update_button.isEnabled()
+        assert page.update_status_label.text() == "检查失败，请稍后重试"
+        assert service.calls == 1
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+def test_about_programmatic_update_does_not_restore_keyboard_focus(qapp: QApplication) -> None:
+    service = FakeUpdateService(_result(UpdateCheckStatus.CHECK_FAILED), block=True)
+    page = AboutPage(update_check_service=service)
+    page.resize(960, 640)
+    page.show()
+    qapp.processEvents()
+    page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
+    assert qapp.focusWidget() is page.check_update_button
+
+    try:
+        page.check_update_button.click()
+        assert service.started.wait(1)
+        assert page.is_busy()
+        assert qapp.focusWidget() is page.update_section
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert qapp.focusWidget() is page.update_section
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+def test_about_keyboard_retry_respects_new_focus_choice(qapp: QApplication) -> None:
+    from PySide6.QtTest import QTest
+
+    service = FakeUpdateService(
+        _result(UpdateCheckStatus.CHECK_FAILED),
+        _result(UpdateCheckStatus.CHECK_FAILED),
+        block=True,
+    )
+    page = AboutPage(update_check_service=service)
+    page.resize(960, 640)
+    page.show()
+    qapp.processEvents()
+    page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
+
+    try:
+        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        assert service.started.wait(1)
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert qapp.focusWidget() is page.check_update_button
+
+        service.release.clear()
+        page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
+        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        _wait_until(qapp, lambda: service.calls == 2)
+        assert page.is_busy()
+        assert qapp.focusWidget() is page.update_section
+        page.license_button.setFocus(Qt.FocusReason.TabFocusReason)
+        qapp.processEvents()
+        assert qapp.focusWidget() is page.license_button
+
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert qapp.focusWidget() is page.license_button
+        assert page.check_update_button.isEnabled()
+        assert page.update_status_label.text() == "检查失败，请稍后重试"
+        assert service.calls == 2
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+def test_about_keyboard_update_does_not_restore_focus_after_navigation(
+    qapp: QApplication,
+) -> None:
+    from PySide6.QtTest import QTest
+    from tests.services.test_lookup import FakeProvider
+
+    from dlsite_organizer.services.cover import CoverService
+    from dlsite_organizer.services.lookup import LookupService
+    from dlsite_organizer.services.naming import NamingService
+    from dlsite_organizer.ui.main_window import MainPage, MainWindow
+
+    service = FakeUpdateService(_result(UpdateCheckStatus.CHECK_FAILED), block=True)
+    window = MainWindow(
+        LookupService(FakeProvider(), NamingService()),
+        CoverService(),
+        update_check_service=service,
+    )
+    window.resize(1100, 800)
+    window.show()
+    qapp.processEvents()
+    window.navigate_to(MainPage.ABOUT)
+    qapp.processEvents()
+    page = window.about_page
+    page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
+    assert qapp.focusWidget() is page.check_update_button
+
+    try:
+        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        assert service.started.wait(1)
+        assert page.is_busy()
+        assert page.isVisible()
+
+        window.navigate_to(MainPage.LOOKUP)
+        assert window.pages.currentWidget() is window.lookup_page
+        assert window.lookup_page.isVisible()
+        assert not page.isVisible()
+        window.settings_button.setFocus(Qt.FocusReason.OtherFocusReason)
+        qapp.processEvents()
+        assert qapp.focusWidget() is window.settings_button
+
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert window.pages.currentWidget() is window.lookup_page
+        assert window.lookup_page.isVisible()
+        assert not page.isVisible()
+        assert qapp.focusWidget() is window.settings_button
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        window.close()
