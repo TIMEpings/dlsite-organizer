@@ -1,15 +1,17 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QThread, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QImage, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget, QMainWindow, QMessageBox
 
 from dlsite_organizer.app.quick_action_controller import (
     QuickActionController,
     QuickActionRequest,
 )
+from dlsite_organizer.app.runtime import RuntimeSignals
 from dlsite_organizer.app.settings import AppSettings, SettingsService
 from dlsite_organizer.domain.rename_execution import (
     ExecutionStatus,
@@ -163,7 +165,7 @@ def test_unified_surface_busy_state_blocks_duplicate_drop_and_restores_controls(
     window._thread = thread
 
     try:
-        window._set_busy(True)
+        window._set_busy()
         assert not window.drop_zone.acceptDrops()
         assert not window.undo_button.isEnabled()
         assert not window.settings_button.isEnabled()
@@ -173,7 +175,7 @@ def test_unified_surface_busy_state_blocks_duplicate_drop_and_restores_controls(
         assert window._worker is None
     finally:
         window._thread = None
-        window._set_busy(False)
+        window._set_busy()
         thread.deleteLater()
         qapp.processEvents()
         window.close()
@@ -397,6 +399,212 @@ def test_explorer_entry_point_forwards_one_path_batch_to_drop_handler(
 
     assert captured == [paths]
     window.close()
+
+
+@pytest.fixture
+def controller_window(qapp: QApplication, tmp_path: Path):
+    """Hold a controller before journal creation; seed only an older journal record."""
+    database = Database(tmp_path / "journal.sqlite3")
+    database.initialize()
+    journal = TransactionJournal(database)
+    transaction = journal.create_transaction(
+        tmp_path, [(tmp_path / "old", tmp_path / "renamed")]
+    )
+    when = datetime.now(UTC)
+    journal.mark_operation_success(transaction.transaction_id, 1, when)
+    journal.mark_transaction_completed(transaction.transaction_id, when)
+    runners: list[FakeQuickActionRunner] = []
+
+    def factory(_request: QuickActionRequest, completion) -> FakeQuickActionRunner:
+        runner = FakeQuickActionRunner(completion)
+        runners.append(runner)
+        return runner
+
+    controller = QuickActionController(factory)
+    signals = RuntimeSignals()
+    window = LightweightWindow(
+        QuickRenameService(OrganizerService(FakeLookupService()), RenameExecutor(journal)),
+        UndoService(journal),
+        SettingsService(AppSettings(database_path=tmp_path / "metadata.sqlite3")),
+        runtime_signals=signals,
+        quick_action_controller=controller,
+    )
+    try:
+        yield window, controller, runners, signals, journal
+    finally:
+        window._thread = None
+        while controller.active_request is not None:
+            runners[-1].finish()
+        window.close()
+        database.dispose()
+
+
+@pytest.mark.parametrize("refresh", ["show", "journal"])
+def test_controller_busy_survives_eligibility_refresh(
+    qapp: QApplication, tmp_path: Path, controller_window, refresh: str
+) -> None:
+    window, controller, runners, signals, journal = controller_window
+    # An inert Full surface represents Full Mode with no active page worker.
+    # Exercise Lightweight's actual showEvent, without changing lifecycle policy.
+    full = QMainWindow()
+    full.show()
+    try:
+        assert window.isHidden()
+        assert window.undo_button.isEnabled()
+        assert controller.submit(tmp_path / "active").accepted
+        assert full.isVisible()
+        assert window._thread is None
+        assert journal.find_unresolved_transaction() is None
+        assert not window.undo_button.isEnabled()
+        if refresh == "show":
+            window.show()
+            full.hide()
+            qapp.processEvents()
+        else:
+            signals.notify_mutation_history_changed()
+        assert window.is_busy()
+        assert not window.undo_button.isEnabled()
+        assert not window.drop_zone.acceptDrops()
+        assert not window.settings_button.isEnabled()
+        assert not window.full_mode_button.isEnabled()
+        runners[0].finish()
+        assert not window.is_busy()
+        assert window.undo_button.isEnabled()
+        assert window.drop_zone.acceptDrops()
+        assert window.settings_button.isEnabled()
+        assert window.full_mode_button.isEnabled()
+    finally:
+        full.close()
+
+
+def test_controller_busy_rejects_direct_undo_and_worker_admission(
+    tmp_path: Path, controller_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, controller, _, _, _ = controller_window
+    assert controller.submit(tmp_path / "active").accepted
+    confirmations = []
+    workers = []
+
+    def confirm(*args):
+        confirmations.append(args)
+        return QMessageBox.StandardButton.Yes
+
+    def unexpected_worker(*args):
+        workers.append(args)
+        raise AssertionError("conflicting Undo worker constructed")
+
+    monkeypatch.setattr(QMessageBox, "question", confirm)
+    monkeypatch.setattr(
+        "dlsite_organizer.ui.lightweight_window.RenameActionWorker", unexpected_worker
+    )
+    window.undo_button.setEnabled(True)  # Deliberately stale UI cannot authorize Undo.
+    window.undo_recent()
+    window._start_action(lambda _: None, lambda _: None)
+    assert confirmations == []
+    assert workers == []
+    assert window._thread is None
+
+
+def test_controller_start_during_undo_confirmation_rejects_worker(
+    tmp_path: Path, controller_window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, controller, _, _, _ = controller_window
+
+    def confirm(*args):
+        assert controller.submit(tmp_path / "active").accepted
+        return QMessageBox.StandardButton.Yes
+
+    def unexpected_worker(*args):
+        raise AssertionError("Undo worker constructed after controller admission")
+
+    monkeypatch.setattr(QMessageBox, "question", confirm)
+    monkeypatch.setattr(
+        "dlsite_organizer.ui.lightweight_window.RenameActionWorker", unexpected_worker
+    )
+    window.undo_recent()
+    assert window._thread is None
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_controller_completion_rereads_unresolved_journal(
+    tmp_path: Path, controller_window, recovery: bool
+) -> None:
+    window, controller, runners, signals, journal = controller_window
+    assert controller.submit(tmp_path / "active").accepted
+    transaction = journal.create_transaction(
+        tmp_path, [(tmp_path / "pending", tmp_path / "target")]
+    )
+    if recovery:
+        journal.mark_recovery_required(
+            transaction.transaction_id, 1, "isolated recovery", datetime.now(UTC)
+        )
+    signals.notify_mutation_history_changed()
+    assert not window.undo_button.isEnabled()
+    assert not window.drop_zone.acceptDrops()
+    runners[0].finish()
+    assert not window.undo_button.isEnabled()
+    assert not window.drop_zone.acceptDrops()
+    assert window.settings_button.isEnabled()
+    assert window.full_mode_button.isEnabled()
+    assert "恢复" in window.status_label.text()
+
+
+@pytest.mark.parametrize("controller_active", [False, True])
+def test_local_worker_busy_survives_refresh_and_controller_completion(
+    tmp_path: Path, controller_window, controller_active: bool
+) -> None:
+    window, controller, runners, signals, _ = controller_window
+    if controller_active:
+        assert controller.submit(tmp_path / "active").accepted
+    thread = QThread()  # Ownership sentinel only; never started.
+    window._thread = thread
+    try:
+        window._set_busy()
+        if controller_active:
+            runners[0].finish()
+        signals.notify_mutation_history_changed()
+        assert window.is_busy()
+        assert not window.undo_button.isEnabled()
+        assert not window.drop_zone.acceptDrops()
+        assert not window.settings_button.isEnabled()
+        assert not window.full_mode_button.isEnabled()
+    finally:
+        window._operation_finished()
+    assert window.undo_button.isEnabled()
+
+
+def test_controller_queue_preserves_busy_eligibility_through_fifo(
+    tmp_path: Path, controller_window
+) -> None:
+    window, controller, runners, signals, _ = controller_window
+    first, second = tmp_path / "first", tmp_path / "second"
+    window.start_quick_rename(first)
+    signals.notify_mutation_history_changed()
+    assert not window.drop_zone.acceptDrops()
+    # Programmatic input still reaches controller admission while the surface is busy.
+    window.start_quick_rename(second)
+    window.start_quick_rename(first)
+    window.start_quick_rename(second)
+    assert controller.queue_depth == 1
+    assert len(runners) == 1
+    assert "队列" in window.status_label.text()
+    completion_states = []
+    controller.request_finished.connect(
+        lambda _: completion_states.append(
+            (window.is_busy(), window.undo_button.isEnabled(), window.settings_button.isEnabled())
+        )
+    )
+    runners[0].finish()
+    assert len(runners) == 2
+    assert controller.active_request is not None
+    assert controller.active_request.paths == (second,)
+    assert completion_states == [(True, False, False)]
+    runners[1].finish()
+    assert controller.active_request is None
+    assert completion_states[-1] == (False, True, True)
+    # Completed identities are released for an explicit later request.
+    window.start_quick_rename(first)
+    assert len(runners) == 3
 
 
 def test_controller_wiring_keeps_local_and_follow_up_actions_on_one_queue(

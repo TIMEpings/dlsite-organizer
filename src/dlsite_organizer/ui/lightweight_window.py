@@ -219,7 +219,7 @@ class LightweightWindow(QMainWindow):
         thread.finished.connect(self._operation_finished)
         self._thread = thread
         self._worker = worker
-        self._set_busy(True)
+        self._set_busy()
         thread.start()
 
     @Slot(str)
@@ -237,7 +237,7 @@ class LightweightWindow(QMainWindow):
         self.status_label.setProperty("state", "loading")
         self.status_label.setText("正在查询 metadata 并准备安全重命名…")
         self._refresh_status_style()
-        self._set_busy(True)
+        self._set_busy()
 
     @Slot(object)
     def _quick_action_progress(self, value: object) -> None:
@@ -258,8 +258,7 @@ class LightweightWindow(QMainWindow):
             self._show_result(finished.result)
         else:
             self._show_error("轻量模式执行失败，详细信息已写入日志。")
-        self._set_busy(False)
-        self._refresh_recent_transaction()
+        self._set_busy()
 
     def _show_admission_result(self, result: QuickActionAdmissionResult) -> None:
         messages = {
@@ -317,7 +316,7 @@ class LightweightWindow(QMainWindow):
 
     @Slot()
     def undo_recent(self) -> None:
-        if self._thread is not None:
+        if self.is_busy():
             return
         try:
             transaction = self._undo_service.latest_transaction()
@@ -350,7 +349,7 @@ class LightweightWindow(QMainWindow):
         )
 
     def _start_action(self, action, result_handler) -> None:
-        if self._thread is not None:
+        if self.is_busy():
             return
         thread = QThread()
         worker = RenameActionWorker(action)
@@ -365,7 +364,7 @@ class LightweightWindow(QMainWindow):
         thread.finished.connect(self._operation_finished)
         self._thread = thread
         self._worker = worker
-        self._set_busy(True)
+        self._set_busy()
         thread.start()
 
     @Slot(int, int, str, str)
@@ -404,8 +403,7 @@ class LightweightWindow(QMainWindow):
     def _operation_finished(self) -> None:
         self._thread = None
         self._worker = None
-        self._set_busy(False)
-        self._refresh_recent_transaction()
+        self._set_busy()
 
     @Slot()
     def refresh_mutation_state(self) -> None:
@@ -445,11 +443,11 @@ class LightweightWindow(QMainWindow):
             return
         self.full_mode_requested.emit()
 
-    def _set_busy(self, busy: bool) -> None:
-        self.drop_zone.set_drop_enabled(not busy)
-        self.undo_button.setEnabled(False if busy else self.undo_button.isEnabled())
+    def _set_busy(self) -> None:
+        busy = self.is_busy()
         self.settings_button.setEnabled(not busy)
         self.full_mode_button.setEnabled(not busy)
+        self._refresh_recent_transaction()
 
     def _refresh_recent_transaction(self) -> None:
         try:
@@ -457,7 +455,7 @@ class LightweightWindow(QMainWindow):
             if unresolved is not None:
                 self.drop_zone.set_drop_enabled(False)
                 self.undo_button.setEnabled(False)
-                if self._thread is None:
+                if not self.is_busy():
                     self.status_label.setProperty("state", "error")
                     self.status_label.setText("最近一次重命名需要恢复，请先处理该事务。")
                     self._refresh_status_style()
@@ -470,7 +468,7 @@ class LightweightWindow(QMainWindow):
             self.status_label.setText("事务日志不可用，已禁用轻量模式重命名。")
             self._refresh_status_style()
             return
-        if self._thread is not None:
+        if self.is_busy():
             self.drop_zone.set_drop_enabled(False)
             self.undo_button.setEnabled(False)
             return
