@@ -409,6 +409,8 @@ def test_about_resource_keyboard_order_and_activation(
     page = AboutPage()
     page.resize(720, 540)
     page.show()
+    page.activateWindow()
+    qapp.processEvents()
     opened: list[str] = []
     monkeypatch.setattr(page, "_open_resource", lambda path, name: opened.append(path))
     page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
@@ -530,6 +532,9 @@ def test_about_update_row_aligns_visible_controls(
     if page.release_page_button.isVisible():
         visible.append(page.release_page_button)
     visible.append(page.check_update_button)
+    assert page.check_update_button.height() == 32
+    if page.release_page_button.isVisible():
+        assert page.release_page_button.height() == 32
     centers = [widget.mapTo(page.update_section, widget.rect().center()).y() for widget in visible]
     x_positions = [
         widget.mapTo(page.update_section, widget.rect().topLeft()).x() for widget in visible
@@ -555,6 +560,72 @@ def test_about_update_row_aligns_visible_controls(
     scroll = page.findChild(QScrollArea)
     assert scroll is not None
     assert scroll.horizontalScrollBar().maximum() == 0
+    page.close()
+
+
+def test_about_identity_reflows_when_resized_without_losing_content(qapp: QApplication) -> None:
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QScrollArea
+
+    page = AboutPage(update_check_service=FakeUpdateService())
+    page.show()
+    for width in (1160, 420, 720, 1160):
+        page.resize(width, 420)
+        qapp.processEvents()
+        scroll = page.findChild(QScrollArea)
+        assert scroll is not None
+        content = scroll.widget()
+        assert content is not None
+        assert content.width() <= scroll.viewport().width()
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert page.about_header.title_label.text() == "DLsite Organizer"
+        assert page.copyright_value.text() == "Copyright © 2026 TIMEpings"
+        assert page.branding_image.size().width() == 104
+        for label in (page.about_header.title_label, page.copyright_value):
+            assert label.isVisible()
+            assert label.height() >= label.heightForWidth(label.width())
+            bounds = label.rect().translated(label.mapTo(content, QPoint(0, 0)))
+            assert content.rect().contains(bounds)
+        if width == 420:
+            assert page.about_header.title_label.height() > (
+                page.about_header.title_label.fontMetrics().height()
+            )
+            assert scroll.verticalScrollBar().maximum() > 0
+        else:
+            assert page.about_header.title_label.height() < (
+                2 * page.about_header.title_label.fontMetrics().height()
+            )
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        qapp.processEvents()
+        link = page.third_party_licenses_button
+        assert scroll.viewport().rect().contains(
+            link.rect().translated(link.mapTo(scroll.viewport(), QPoint(0, 0)))
+        )
+    page.close()
+
+
+def test_about_update_actions_allow_larger_fonts_after_repolish(qapp: QApplication) -> None:
+    page = AboutPage(update_check_service=FakeUpdateService())
+    page.resize(720, 720)
+    for button in (page.check_update_button, page.release_page_button):
+        font = button.font()
+        font.setPointSize(18)
+        button.setFont(font)
+    page.show()
+    for result in (
+        _result(
+            UpdateCheckStatus.UPDATE_AVAILABLE,
+            latest_version="9.9.9",
+            release_url="https://github.com/TIMEpings/dlsite-organizer/releases/tag/v9.9.9",
+        ),
+        _result(UpdateCheckStatus.CHECK_FAILED),
+    ):
+        page._render_update_result(result)
+        qapp.processEvents()
+        for button in (page.check_update_button, page.release_page_button):
+            if button.isVisible():
+                assert button.height() >= 32
+                assert button.height() >= button.fontMetrics().height() + 10
     page.close()
 
 

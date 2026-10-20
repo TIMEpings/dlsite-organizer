@@ -218,6 +218,7 @@ class AboutPage(QWidget):
         header.addWidget(self.branding_image)
 
         self.about_header = PageHeader("DLsite Organizer", f"v{__version__}")
+        self.about_header.title_label.setWordWrap(True)
         version_value = self.about_header.description_label
         if version_value is None:
             raise RuntimeError("About identity header must include its version label")
@@ -240,10 +241,12 @@ class AboutPage(QWidget):
         identity_layout.setContentsMargins(0, 0, 0, 0)
         identity_layout.setHorizontalSpacing(24)
         identity_layout.setVerticalSpacing(8)
+        identity_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.developer_value = QLabel("TIMEpings")
         self.developer_value.setObjectName("aboutDeveloperValue")
         self.developer_label = self.developer_value
         self.copyright_value = QLabel("Copyright © 2026 TIMEpings")
+        self.copyright_value.setWordWrap(True)
         self.copyright_value.setObjectName("aboutCopyrightValue")
         self.copyright_label = self.copyright_value
         self.license_value = QLabel("MIT")
@@ -295,7 +298,8 @@ class AboutPage(QWidget):
         for action in (self.check_update_button, self.release_page_button):
             use_custom_focus_border(action)
             action.setStyleSheet(
-                "QPushButton { min-height: 20px; padding: 4px 12px; }"
+                "QPushButton { min-height: 22px; padding: 4px 12px;"
+                f" border: 1px solid {LIGHT_COLORS.border}; }}"
                 'QPushButton[visualRole="secondary"]:hover:enabled {'
                 f" background: {LIGHT_COLORS.sidebar_hover};"
                 f" border: 1px solid {LIGHT_COLORS.border_strong};"
@@ -311,7 +315,9 @@ class AboutPage(QWidget):
                 " }"
                 f"QPushButton:focus {{ border: 1px solid {LIGHT_COLORS.focus}; }}"
             )
-            action.setFixedHeight(32)
+            # QSS dimensions describe the content box: 22 + 8 padding + 2 border.
+            # Keep larger font size hints usable instead of imposing a hard cap.
+            action.setMinimumHeight(32)
         content_layout.addWidget(updates)
 
         self.disclaimer_value = QLabel(
