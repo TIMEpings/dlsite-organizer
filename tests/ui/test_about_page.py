@@ -749,7 +749,8 @@ def test_about_mouse_update_focus_stays_with_update_section(
         page.close()
 
 
-def test_about_keyboard_update_focus_returns_to_action(qapp: QApplication) -> None:
+@pytest.mark.parametrize("key", [Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter])
+def test_about_keyboard_update_focus_returns_to_action(qapp: QApplication, key: Qt.Key) -> None:
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
 
@@ -760,7 +761,7 @@ def test_about_keyboard_update_focus_returns_to_action(qapp: QApplication) -> No
     page.activateWindow()
     qapp.processEvents()
     page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
-    QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+    QTest.keyClick(page.check_update_button, key)
     assert service.started.wait(1)
     assert page.is_busy()
     assert qapp.focusWidget() is page.update_section
@@ -769,7 +770,10 @@ def test_about_keyboard_update_focus_returns_to_action(qapp: QApplication) -> No
     page.close()
 
 
-def test_about_keyboard_update_preserves_deliberate_license_focus(qapp: QApplication) -> None:
+@pytest.mark.parametrize("key", [Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter])
+def test_about_keyboard_update_preserves_deliberate_license_focus(
+    qapp: QApplication, key: Qt.Key,
+) -> None:
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
 
@@ -782,7 +786,7 @@ def test_about_keyboard_update_preserves_deliberate_license_focus(qapp: QApplica
     assert qapp.focusWidget() is page.check_update_button
 
     try:
-        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        QTest.keyClick(page.check_update_button, key)
         assert service.started.wait(1)
         assert page.is_busy()
         assert qapp.focusWidget() is page.update_section
@@ -826,7 +830,8 @@ def test_about_programmatic_update_does_not_restore_keyboard_focus(qapp: QApplic
         page.close()
 
 
-def test_about_keyboard_retry_respects_new_focus_choice(qapp: QApplication) -> None:
+@pytest.mark.parametrize("key", [Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter])
+def test_about_keyboard_retry_respects_new_focus_choice(qapp: QApplication, key: Qt.Key) -> None:
     from PySide6.QtTest import QTest
 
     service = FakeUpdateService(
@@ -841,7 +846,7 @@ def test_about_keyboard_retry_respects_new_focus_choice(qapp: QApplication) -> N
     page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
 
     try:
-        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        QTest.keyClick(page.check_update_button, key)
         assert service.started.wait(1)
         service.release.set()
         _wait_until(qapp, lambda: not page.is_busy())
@@ -849,7 +854,7 @@ def test_about_keyboard_retry_respects_new_focus_choice(qapp: QApplication) -> N
 
         service.release.clear()
         page.check_update_button.setFocus(Qt.FocusReason.TabFocusReason)
-        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        QTest.keyClick(page.check_update_button, key)
         _wait_until(qapp, lambda: service.calls == 2)
         assert page.is_busy()
         assert qapp.focusWidget() is page.update_section
@@ -869,8 +874,9 @@ def test_about_keyboard_retry_respects_new_focus_choice(qapp: QApplication) -> N
         page.close()
 
 
+@pytest.mark.parametrize("key", [Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter])
 def test_about_keyboard_update_does_not_restore_focus_after_navigation(
-    qapp: QApplication,
+    qapp: QApplication, key: Qt.Key,
 ) -> None:
     from PySide6.QtTest import QTest
     from tests.services.test_lookup import FakeProvider
@@ -896,7 +902,7 @@ def test_about_keyboard_update_does_not_restore_focus_after_navigation(
     assert qapp.focusWidget() is page.check_update_button
 
     try:
-        QTest.keyClick(page.check_update_button, Qt.Key.Key_Space)
+        QTest.keyClick(page.check_update_button, key)
         assert service.started.wait(1)
         assert page.is_busy()
         assert page.isVisible()
@@ -919,3 +925,116 @@ def test_about_keyboard_update_does_not_restore_focus_after_navigation(
         service.release.set()
         _wait_until(qapp, lambda: not page.is_busy())
         window.close()
+
+
+@pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Enter])
+def test_about_return_activates_once_on_press_and_retry(qapp: QApplication, key: Qt.Key) -> None:
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtTest import QSignalSpy, QTest
+
+    service = FakeUpdateService(
+        _result(UpdateCheckStatus.CHECK_FAILED),
+        _result(UpdateCheckStatus.CHECK_FAILED),
+        _result(UpdateCheckStatus.UP_TO_DATE),
+        block=True,
+    )
+    page = AboutPage(update_check_service=service)
+    page.resize(960, 640)
+    page.show()
+    page.activateWindow()
+    qapp.processEvents()
+    button = page.check_update_button
+    clicks = QSignalSpy(button.clicked)
+    assert not button.isDefault()
+    assert not button.autoDefault()
+    try:
+        for count in (1, 2):
+            service.release.clear()
+            button.setFocus(Qt.FocusReason.TabFocusReason)
+            assert button.hasFocus() and button.isVisible() and button.isEnabled()
+            if count == 2:
+                assert button.text() == "重新检查"
+            QTest.keyPress(button, key)
+            assert clicks.count() == count
+            assert service.started.wait(1)
+            _wait_until(qapp, lambda expected=count: service.calls == expected)
+            assert page.is_busy()
+            assert not button.isEnabled()
+            assert qapp.focusWidget() is page.update_section
+            QTest.keyClick(button, key)
+            button.click()
+            page.start_update_check()
+            assert clicks.count() == count
+            assert service.calls == count
+
+            service.release.set()
+            _wait_until(qapp, lambda: not page.is_busy())
+            assert qapp.focusWidget() is button
+            assert page.update_status_label.text() == "检查失败，请稍后重试"
+            # A held Return must not restart work after asynchronous re-enabling.
+            repeat = QKeyEvent(
+                QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier, "", True, 1,
+            )
+            QApplication.sendEvent(button, repeat)
+            QTest.keyRelease(button, key)
+            qapp.processEvents()
+            assert clicks.count() == count
+            assert service.calls == count
+            assert not page.is_busy()
+
+        # A later programmatic click must not inherit a rejected repeat's origin.
+        service.release.clear()
+        button.click()
+        _wait_until(qapp, lambda: service.calls == 3)
+        assert qapp.focusWidget() is page.update_section
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert qapp.focusWidget() is page.update_section
+        assert clicks.count() == service.calls == 3
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+@pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Enter])
+@pytest.mark.parametrize("state", ["disabled", "unfocused", "hidden", "auto_repeat"])
+def test_about_return_rejects_ineligible_activation(
+    qapp: QApplication, key: Qt.Key, state: str,
+) -> None:
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtTest import QSignalSpy, QTest
+
+    service = FakeUpdateService(_result(UpdateCheckStatus.CHECK_FAILED), block=True)
+    page = AboutPage(update_check_service=service)
+    page.resize(960, 640)
+    page.show()
+    page.activateWindow()
+    qapp.processEvents()
+    button = page.check_update_button
+    button.setFocus(Qt.FocusReason.TabFocusReason)
+    clicks = QSignalSpy(button.clicked)
+    if state == "disabled":
+        button.setEnabled(False)
+    elif state == "unfocused":
+        page.license_button.setFocus(Qt.FocusReason.TabFocusReason)
+    elif state == "hidden":
+        button.hide()
+    try:
+        event = QKeyEvent(
+            QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier,
+            "", state == "auto_repeat", 1,
+        )
+        QApplication.sendEvent(button, event)
+        QTest.keyRelease(button, key)
+        qapp.processEvents()
+        assert clicks.count() == 0
+        assert service.calls == 0
+        assert not page.is_busy()
+        assert button.consume_activation_source() == "other"
+    finally:
+        service.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()

@@ -155,7 +155,20 @@ class _UpdateActionButton(QPushButton):
         super().mousePressEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # This page's action is not a dialog default button. Activate on
+            # press and consume the event so Qt cannot also activate it.
+            event.accept()
+            if (
+                not event.isAutoRepeat()
+                and self.isEnabled()
+                and self.isVisible()
+                and self.hasFocus()
+            ):
+                self._activation_source = "keyboard"
+                self.click()
+            return
+        if event.key() == Qt.Key.Key_Space:
             self._activation_source = "keyboard"
         super().keyPressEvent(event)
 
