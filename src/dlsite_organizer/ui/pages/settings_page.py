@@ -257,6 +257,20 @@ class SettingsPage(QWidget):
         runtime_form.addRow("启动模式", self.startup_mode_input)
 
         self.explorer_box = QGroupBox("资源管理器集成")
+        # Role backgrounds override the generic shared button states. Keep these
+        # action states local, as on the other pages with secondary buttons.
+        self.explorer_box.setStyleSheet(
+            f"""
+            QPushButton:enabled:hover {{ background: {LIGHT_COLORS.surface_secondary}; }}
+            QPushButton:enabled:pressed {{ background: {LIGHT_COLORS.selection}; }}
+            QPushButton:focus {{ border-color: {LIGHT_COLORS.focus}; }}
+            QPushButton:disabled {{
+                color: {LIGHT_COLORS.text_muted};
+                background: {LIGHT_COLORS.surface_secondary};
+                border-color: {LIGHT_COLORS.border};
+            }}
+            """
+        )
         explorer_layout = QVBoxLayout(self.explorer_box)
         explorer_form = QFormLayout()
         self.explorer_status_label = QLabel()

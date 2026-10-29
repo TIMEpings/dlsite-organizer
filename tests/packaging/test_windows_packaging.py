@@ -4,7 +4,9 @@ import importlib.util
 import json
 import re
 import runpy
+from importlib import metadata
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -109,9 +111,18 @@ def test_audit_certifi_bundle_checks_size_and_source_bytes(tmp_path: Path) -> No
         windows_packaging.audit_certifi_bundle(distribution, source_bundle=source)
 
 
-def test_audit_packaged_resources_requires_application_and_runtime_licenses(
+@pytest.fixture(autouse=True)
+def no_installed_greenlet(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(_name: str) -> metadata.Distribution:
+        raise metadata.PackageNotFoundError("greenlet")
+
+    monkeypatch.setattr(windows_packaging.metadata, "distribution", missing)
+
+
+@pytest.fixture
+def licensed_distribution(
     tmp_path: Path,
-) -> None:
+) -> Path:
     distribution = tmp_path / "dist"
     internal = distribution / "_internal"
     internal.mkdir(parents=True)
@@ -125,12 +136,170 @@ def test_audit_packaged_resources_requires_application_and_runtime_licenses(
         package_dir = license_root / f"{name}-1.0.dist-info"
         package_dir.mkdir(parents=True)
         (package_dir / "LICENSE").write_text(name, encoding="utf-8")
+    return distribution
+
+
+def test_audit_packaged_resources_requires_application_and_runtime_licenses(
+    licensed_distribution: Path,
+) -> None:
+    distribution = licensed_distribution
+    internal = distribution / "_internal"
+    license_root = distribution / "licenses"
 
     resources = windows_packaging.audit_packaged_resources(distribution)
 
-    assert len(resources) == 19
+    assert len(resources) == 18
     assert internal / "LICENSE" in resources
     assert license_root / "httpx-1.0.dist-info" / "LICENSE" in resources
+
+
+@pytest.fixture
+def installed_greenlet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    dist_info = tmp_path / "source" / "greenlet-1.0.dist-info"
+    licenses = dist_info / "licenses"
+    licenses.mkdir(parents=True)
+    (dist_info / "METADATA").write_text("Name: greenlet\nVersion: 1.0\n", encoding="utf-8")
+    for name in ("LICENSE", "LICENSE.PSF"):
+        (licenses / name).write_text(f"original {name}", encoding="utf-8")
+    (dist_info / "RECORD").write_text(
+        "".join(
+            f"greenlet-1.0.dist-info/licenses/{name},,\n" for name in ("LICENSE", "LICENSE.PSF")
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        windows_packaging.metadata,
+        "distribution",
+        lambda _name: metadata.PathDistribution(dist_info),
+    )
+    return licenses
+
+
+def test_greenlet_shipped_with_original_licenses_passes(
+    licensed_distribution: Path,
+    installed_greenlet: Path,
+) -> None:
+    import shutil
+
+    distribution = licensed_distribution
+    (distribution / "_internal" / "greenlet").mkdir()
+    (distribution / "_internal" / "greenlet" / "_greenlet.cp312-win_amd64.pyd").write_bytes(
+        b"synthetic binary"
+    )
+    target = distribution / "licenses" / "greenlet-1.0.dist-info"
+    shutil.copytree(installed_greenlet, target)
+    resources = windows_packaging.audit_packaged_resources(distribution)
+    assert target / "LICENSE.PSF" in resources
+    assert target / "LICENSE" in resources
+
+
+@pytest.mark.parametrize("missing", ["directory", "LICENSE", "LICENSE.PSF"])
+def test_greenlet_shipped_without_required_license_fails(
+    licensed_distribution: Path,
+    installed_greenlet: Path,
+    missing: str,
+) -> None:
+    import shutil
+
+    distribution = licensed_distribution
+    (distribution / "_internal" / "greenlet").mkdir()
+    if missing != "directory":
+        target = distribution / "licenses" / "greenlet-1.0.dist-info"
+        shutil.copytree(installed_greenlet, target)
+        (target / missing).unlink()
+    with pytest.raises(FileNotFoundError, match="greenlet"):
+        windows_packaging.audit_packaged_resources(distribution)
+
+
+@pytest.mark.parametrize("changed", ["LICENSE", "LICENSE.PSF"])
+def test_greenlet_license_integrity_is_checked(
+    licensed_distribution: Path,
+    installed_greenlet: Path,
+    changed: str,
+) -> None:
+    import shutil
+
+    target = licensed_distribution / "licenses" / "greenlet-1.0.dist-info"
+    shutil.copytree(installed_greenlet, target)
+    (target / changed).write_text("altered", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="does not match installed source"):
+        windows_packaging.audit_packaged_resources(licensed_distribution)
+
+
+def test_installed_greenlet_requires_license_even_without_collected_code(
+    licensed_distribution: Path,
+    installed_greenlet: Path,
+) -> None:
+    with pytest.raises(FileNotFoundError, match="greenlet"):
+        windows_packaging.audit_packaged_resources(licensed_distribution)
+
+
+def test_greenlet_wrong_version_license_cannot_substitute(
+    licensed_distribution: Path,
+    installed_greenlet: Path,
+) -> None:
+    import shutil
+
+    shutil.copytree(
+        installed_greenlet, licensed_distribution / "licenses" / "greenlet-0.9.dist-info"
+    )
+    with pytest.raises(FileNotFoundError, match=r"greenlet-1\.0"):
+        windows_packaging.audit_packaged_resources(licensed_distribution)
+
+
+def test_greenlet_incomplete_source_metadata_fails_closed(
+    licensed_distribution: Path,
+    installed_greenlet: Path,
+) -> None:
+    (installed_greenlet.parent / "RECORD").write_text(
+        "greenlet-1.0.dist-info/licenses/LICENSE,,\n", encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="metadata is incomplete"):
+        windows_packaging.audit_packaged_resources(licensed_distribution)
+
+
+@pytest.mark.parametrize("inventory", ["package", "binary", "metadata", "zip", "pyz", "exe"])
+def test_greenlet_inventory_cannot_bypass_absent_installed_metadata(
+    licensed_distribution: Path,
+    tmp_path: Path,
+    inventory: str,
+) -> None:
+    from PyInstaller.archive.writers import CArchiveWriter, ZlibArchiveWriter
+
+    internal = licensed_distribution / "_internal"
+    if inventory == "package":
+        (internal / "greenlet").mkdir()
+    elif inventory == "binary":
+        (internal / "_greenlet.cp312-win_amd64.pyd").write_bytes(b"binary fixture")
+    elif inventory == "metadata":
+        (internal / "greenlet-1.0.dist-info").mkdir()
+    elif inventory == "zip":
+        with ZipFile(internal / "base_library.zip", "w") as archive:
+            archive.writestr("greenlet/__init__.pyc", b"fixture")
+    else:
+        # Synthetic archive tables only: no build or application execution.
+        pyz = tmp_path / "modules.pyz" if inventory == "exe" else internal / "modules.pyz"
+        ZlibArchiveWriter(str(pyz), [("greenlet", None, "PYMODULE")])
+        if inventory == "exe":
+            CArchiveWriter(
+                str(licensed_distribution / "dlsite-organizer.exe"),
+                [("PYZ.pyz", str(pyz), False, "z")],
+                "python312.dll",
+            )
+    with pytest.raises(RuntimeError, match="no installed metadata"):
+        windows_packaging.audit_packaged_resources(licensed_distribution)
+
+
+def test_unreadable_packaged_archive_fails_closed(licensed_distribution: Path) -> None:
+    (licensed_distribution / "dlsite-organizer.exe").write_bytes(b"invalid archive")
+    with pytest.raises(RuntimeError, match="Cannot inventory"):
+        windows_packaging.audit_packaged_resources(licensed_distribution)
+
+
+def test_other_mandatory_license_still_required(licensed_distribution: Path) -> None:
+    (licensed_distribution / "licenses" / "httpx-1.0.dist-info" / "LICENSE").unlink()
+    with pytest.raises(FileNotFoundError, match="license file missing: httpx"):
+        windows_packaging.audit_packaged_resources(licensed_distribution)
 
 
 def test_audit_packaged_resources_rejects_missing_runtime_license(tmp_path: Path) -> None:

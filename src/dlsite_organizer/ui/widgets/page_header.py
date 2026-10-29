@@ -59,6 +59,10 @@ class PageHeader(QWidget):
     def _set_font_role(label: QLabel, role: FontRole) -> None:
         spec = FONT_ROLES[role]
         font = label.font()
+        if role == FontRole.PAGE_TITLE:
+            # Segoe UI has no Chinese glyphs; Qt's implicit Windows fallback can
+            # select serif SimSun. Keep Latin typography and prefer CJK sans.
+            font.setFamilies([*font.families(), "Microsoft YaHei UI", "Microsoft YaHei"])
         font.setPointSizeF(spec.point_size)
         font.setWeight(QFont.Weight(spec.weight))
         label.setFont(font)

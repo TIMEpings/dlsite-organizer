@@ -1,10 +1,11 @@
 """Behavioral and rendering characterization for Settings form controls."""
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
-from PySide6.QtGui import QImage, QPainterPath
+from PySide6.QtGui import QFontDatabase, QImage, QPainter, QPainterPath, QTextLayout
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStyle,
+    QStyleOptionButton,
     QStyleOptionSpinBox,
     QVBoxLayout,
     QWidget,
@@ -25,9 +27,15 @@ from dlsite_organizer.app.settings import (
     StartupMode,
     load_settings,
 )
+from dlsite_organizer.services.explorer_integration import (
+    ExplorerIntegrationService,
+    ExplorerRegistration,
+    ExplorerRegistrationState,
+)
 from dlsite_organizer.ui.pages.settings_page import SettingsPage
-from dlsite_organizer.ui.theme import light_stylesheet
-from dlsite_organizer.ui.theme.tokens import Shape
+from dlsite_organizer.ui.theme import apply_light_theme, light_stylesheet
+from dlsite_organizer.ui.theme.tokens import LIGHT_COLORS, Shape
+from dlsite_organizer.ui.widgets.page_header import PageHeader
 
 
 @pytest.fixture
@@ -48,6 +56,104 @@ def _page(tmp_path: Path) -> SettingsPage:
     page.show()
     QApplication.processEvents()
     return page
+
+
+def test_settings_heading_matches_shared_page_typography(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    apply_light_theme(qapp)
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    reference = PageHeader("整理")
+    layout.addWidget(reference)
+    page = _page(tmp_path)
+    layout.addWidget(page)
+    host.setStyleSheet(light_stylesheet())
+    host.show()
+    qapp.processEvents()
+    try:
+        header = page.findChild(PageHeader)
+        assert header is not None
+        actual = header.title_label.font()
+        expected = reference.title_label.font()
+        assert actual.family() == expected.family() == qapp.font().family()
+        assert actual.pointSizeF() == expected.pointSizeF() == 19
+        assert actual.weight() == expected.weight() == 600
+        assert actual.families() == expected.families()
+        assert actual.families()[1:] == ["Microsoft YaHei UI", "Microsoft YaHei"]
+        if "Microsoft YaHei UI" in QFontDatabase.families():
+            # Inspect the resolved Chinese glyph font, not just QFont properties.
+            for font in (actual, expected):
+                text_layout = QTextLayout("设置 Settings", font)
+                text_layout.beginLayout()
+                text_layout.createLine()
+                text_layout.endLayout()
+                families = {run.rawFont().familyName() for run in text_layout.glyphRuns()}
+                assert "Microsoft YaHei UI" in families
+                assert "Segoe UI" in families
+                assert "SimSun" not in families
+    finally:
+        host.close()
+
+
+def test_explorer_action_rendered_states_and_callbacks(qapp: QApplication, tmp_path: Path) -> None:
+    integration = Mock(spec=ExplorerIntegrationService)
+    absent = ExplorerRegistration(state=ExplorerRegistrationState.ABSENT)
+    current = ExplorerRegistration(state=ExplorerRegistrationState.CURRENT)
+    integration.inspect.return_value = absent
+    integration.register_current_executable.return_value = current
+    integration.unregister.return_value = absent
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    page = SettingsPage(
+        SettingsService(AppSettings(), config_path=tmp_path / "config.toml"),
+        explorer_integration_service=integration,
+    )
+    layout.addWidget(page)
+    host.setStyleSheet(light_stylesheet())
+    host.show()
+    qapp.processEvents()
+    try:
+        for button in (page.register_explorer_button, page.remove_explorer_button):
+            for enabled, extra_state, background in (
+                (True, QStyle.StateFlag.State_None, LIGHT_COLORS.surface),
+                (True, QStyle.StateFlag.State_MouseOver, LIGHT_COLORS.surface_secondary),
+                (
+                    True,
+                    QStyle.StateFlag.State_MouseOver | QStyle.StateFlag.State_Sunken,
+                    LIGHT_COLORS.selection,
+                ),
+                (False, QStyle.StateFlag.State_MouseOver, LIGHT_COLORS.surface_secondary),
+            ):
+                button.setEnabled(enabled)
+                option = QStyleOptionButton()
+                option.initFrom(button)
+                option.state = (
+                    extra_state
+                    | (QStyle.StateFlag.State_Enabled if enabled else QStyle.StateFlag.State_None)
+                    | QStyle.StateFlag.State_HasFocus
+                )
+                image = QImage(button.size(), QImage.Format.Format_ARGB32)
+                image.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(image)
+                button.style().drawControl(
+                    QStyle.ControlElement.CE_PushButton, option, painter, button
+                )
+                painter.end()
+                assert image.pixelColor(8, image.height() // 2).name().upper() == background
+                border = LIGHT_COLORS.focus if enabled else LIGHT_COLORS.border
+                assert image.pixelColor(0, image.height() // 2).name().upper() == border
+        page.register_explorer_button.click()
+        integration.register_current_executable.assert_not_called()
+        page._render_explorer_registration(absent)
+        page.register_explorer_button.click()
+        integration.register_current_executable.assert_called_once_with()
+        assert page.explorer_status_label.text() == "状态：已注册"
+        page.remove_explorer_button.click()
+        integration.unregister.assert_called_once_with()
+        assert page.explorer_status_label.text() == "状态：未注册"
+    finally:
+        host.close()
 
 
 def test_settings_combos_keep_item_data_and_staged_keyboard_selection(

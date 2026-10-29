@@ -23,7 +23,7 @@ requirements declared by this project.
 | h11 | selected by HTTPX/httpcore | MIT | [h11](https://github.com/python-hyper/h11) · [license](https://github.com/python-hyper/h11/blob/master/LICENSE.txt) |
 | Pydantic | `pydantic>=2.10,<3` | MIT | [Pydantic](https://github.com/pydantic/pydantic) · [license](https://github.com/pydantic/pydantic/blob/main/LICENSE) |
 | pydantic-core | selected by Pydantic | MIT | [pydantic-core](https://github.com/pydantic/pydantic-core) · [license](https://github.com/pydantic/pydantic-core/blob/main/LICENSE) |
-| greenlet | selected by SQLAlchemy | MIT; PSF-2.0 applies to Stackless-derived files | [greenlet](https://github.com/python-greenlet/greenlet) · [license](https://github.com/python-greenlet/greenlet/blob/main/LICENSE) |
+| greenlet | optional SQLAlchemy dependency; included only when collected from the build environment | MIT; PSF-2.0 applies to Stackless-derived files | [greenlet](https://github.com/python-greenlet/greenlet) · [license](https://github.com/python-greenlet/greenlet/blob/main/LICENSE) |
 | annotated-types | selected by Pydantic | MIT | [annotated-types](https://github.com/annotated-types/annotated-types) · [license](https://github.com/annotated-types/annotated-types/blob/main/LICENSE) |
 | typing-extensions | selected by Pydantic | Python Software Foundation License / 2-clause BSD License | [typing-extensions](https://github.com/python/typing_extensions) · [license](https://github.com/python/typing_extensions/blob/main/LICENSE) |
 | typing-inspection | selected by Pydantic | MIT | [typing-inspection](https://github.com/pydantic/typing-inspection) · [license](https://github.com/pydantic/typing-inspection/blob/main/LICENSE) |

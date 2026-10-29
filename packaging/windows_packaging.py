@@ -13,8 +13,10 @@ import os
 import re
 import sys
 from collections.abc import Iterable
+from importlib import metadata
 from pathlib import Path
 from typing import Any
+from zipfile import ZipFile
 
 FOREIGN_PATH_COMPONENTS = frozenset(
     {
@@ -67,7 +69,7 @@ CERTIFI_BUNDLE_RELATIVE_PATH = Path("certifi") / "cacert.pem"
 CERTIFI_BUNDLE_MIN_BYTES = 100_000
 CERTIFI_BUNDLE_MAX_BYTES = 1_000_000
 
-# These are the runtime distributions named in THIRD_PARTY_NOTICES.md.  The
+# These are the mandatory runtime distributions named in THIRD_PARTY_NOTICES.md. The
 # version part is intentionally matched separately because the canonical
 # environment can be refreshed between two verification builds.
 REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS = (
@@ -83,7 +85,6 @@ REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS = (
     "h11",
     "pydantic",
     "pydantic_core",
-    "greenlet",
     "annotated_types",
     "typing_extensions",
     "typing_inspection",
@@ -287,6 +288,65 @@ def audit_certifi_bundle(
     return bundle
 
 
+def _packaged_greenlet_present(distribution: Path) -> bool:
+    """Inspect actual loose and archived names, independently of installed metadata."""
+    from PyInstaller.archive.readers import ZlibArchiveReader, pkg_archive_contents
+
+    def is_greenlet(name: str) -> bool:
+        return any(
+            re.match(r"^_?greenlet(?:$|[._-])", part.casefold())
+            for part in re.split(r"[\\/]+", name)
+        )
+
+    present = False
+    for path in distribution.rglob("*"):
+        present |= is_greenlet(path.relative_to(distribution).as_posix())
+        if not path.is_file():
+            continue
+        try:
+            names: Iterable[str] = ()
+            if path == distribution / "dlsite-organizer.exe":
+                names = pkg_archive_contents(str(path), recursive=True)
+            elif path.suffix.casefold() == ".pyz":
+                names = ZlibArchiveReader(str(path)).toc
+            elif path.suffix.casefold() == ".zip":
+                with ZipFile(path) as archive:
+                    names = archive.namelist()
+            present |= any(is_greenlet(name) for name in names)
+        except Exception as exc:
+            raise RuntimeError(f"Cannot inventory packaged Python archive: {path}") from exc
+    return present
+
+
+def _greenlet_license_sources(distribution: Path) -> dict[Path, Path]:
+    shipped = _packaged_greenlet_present(distribution)
+    try:
+        installed = metadata.distribution("greenlet")
+    except metadata.PackageNotFoundError as exc:
+        if shipped:
+            raise RuntimeError(
+                "Packaged greenlet has no installed metadata for license provenance"
+            ) from exc
+        return {}
+
+    # Keep the copier's exact dist-info-relative layout and compare original bytes.
+    # An installed distribution also requires its notices even if collection omitted code.
+    sources = {
+        Path(*file.parts[2:]): Path(str(installed.locate_file(file)))
+        for file in installed.files or ()
+        if len(file.parts) > 2
+        and file.parts[0].casefold() == f"greenlet-{installed.version}.dist-info".casefold()
+        and file.parts[1].casefold() == "licenses"
+        and ("license" in file.name.casefold() or "notice" in file.name.casefold())
+    }
+    if not {"LICENSE", "LICENSE.PSF"}.issubset({path.name for path in sources}):
+        raise RuntimeError("Installed greenlet license metadata is incomplete")
+    return {
+        Path(f"greenlet-{installed.version}.dist-info") / key: value
+        for key, value in sources.items()
+    }
+
+
 def audit_packaged_resources(distribution: Path) -> tuple[Path, ...]:
     """Verify application branding and runtime license resources in an onedir build."""
     runtime_root = distribution / "_internal"
@@ -317,7 +377,11 @@ def audit_packaged_resources(distribution: Path) -> tuple[Path, ...]:
         raise FileNotFoundError("Packaged resource missing: licenses directory")
 
     resources = list(required_files)
-    for distribution_name in REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS:
+    greenlet_sources = _greenlet_license_sources(distribution)
+    required_distributions = REQUIRED_RUNTIME_LICENSE_DISTRIBUTIONS + (
+        ("greenlet",) if greenlet_sources else ()
+    )
+    for distribution_name in required_distributions:
         matches = [
             directory
             for license_root in license_roots
@@ -343,6 +407,16 @@ def audit_packaged_resources(distribution: Path) -> tuple[Path, ...]:
                 f"Packaged third-party license file missing: {distribution_name}"
             )
         resources.extend(license_files)
+    for relative, source in greenlet_sources.items():
+        copies = [root / relative for root in license_roots if (root / relative).is_file()]
+        if not copies:
+            raise FileNotFoundError(f"Packaged greenlet license file missing: {relative}")
+        if not source.is_file() or not source.stat().st_size:
+            raise RuntimeError(f"Installed greenlet license file missing or empty: {source}")
+        if any(copy.read_bytes() != source.read_bytes() for copy in copies):
+            raise RuntimeError(
+                f"Packaged greenlet license does not match installed source: {relative}"
+            )
     return tuple(resources)
 
 
@@ -643,7 +717,7 @@ def _command_audit_certifi(args: argparse.Namespace) -> int:
 def _command_audit_resources(args: argparse.Namespace) -> int:
     try:
         resources = audit_packaged_resources(Path(args.dist))
-    except (FileNotFoundError, OSError) as exc:
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     print(f"Packaged resource audit: PASS ({len(resources)} resources)")

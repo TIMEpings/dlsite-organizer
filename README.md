@@ -22,7 +22,7 @@ DLsite Organizer 是一个面向 Windows 的桌面工具，用于查询 DLsite �
 
 应用以 PyInstaller onedir ZIP 形式分发，不需要安装器。解压后启动 `dlsite-organizer.exe`；首次启动会自动创建本机数据目录和 SQLite schema。
 
-当前源码版本为 `1.3.1`；Windows portable 版本支持下文所述的 Explorer Quick Rename 约定。
+当前源码版本为 `1.4.0`；Windows portable 版本支持下文所述的 Explorer Quick Rename 约定。
 
 ### 从源码运行
 
@@ -50,8 +50,8 @@ python -m dlsite_organizer
 全新 profile 默认启动轻量模式；已有配置中的 `startup_mode` 会原样保留。完整模式可从设置或运行时切换进入，主导航和 About footer 为：
 
 ```text
-整理 → 查询 → 设置 → 重命名历史
-关于 · v<version>
+主导航：整理 → 查询 → 重命名历史
+底部入口：设置、关于 · v<version>
 ```
 
 在“整理”页可选择根目录，也可将文件夹拖入窗口。点击“扫描并预览”会查询 RJ / BJ / VJ 作品编号并替换当前预览；完整模式拖入会将新的唯一项目追加/合并到当前预览，不会立即重命名。可用“删除选中项”移除一项或多项，也可用“清空”清除当前预览；这两项都不会删除或改名磁盘上的目录。检查需要修改的项目后，点击“执行重命名”并明确确认。
