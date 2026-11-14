@@ -1,0 +1,42 @@
+{
+  "RJ01619571": {
+    "work_name": "Japanese original",
+    "translation_info": {"is_original": true, "child_worknos": []},
+    "dl_count_items": [
+      {"workno": "RJ01619571", "edition_id": 50328, "edition_type": "language", "lang": "JPN"},
+      {"workno": "RJ01628427", "edition_id": 50328, "edition_type": "language", "lang": "CHI_HANS"},
+      {"workno": "RJ01628429", "edition_id": 50328, "edition_type": "language", "lang": "CHI_HANT"}
+    ]
+  },
+  "RJ01628427": {
+    "work_name": "Simplified Chinese edition",
+    "translation_info": {
+      "is_parent": true, "original_workno": "RJ01619571",
+      "child_worknos": ["RJ01628428"], "lang": "CHI_HANS"
+    },
+    "translators": [{"product_id": "RJ01628428", "maker_name": "むしぞる中尉"}]
+  },
+  "RJ01628429": {
+    "work_name": "Traditional Chinese edition",
+    "translation_info": {
+      "is_parent": true, "original_workno": "RJ01619571",
+      "child_worknos": ["RJ01628430", "RJ01706442"], "lang": "CHI_HANT"
+    }
+  },
+  "RJ01628430": {
+    "work_name": "Traditional Chinese translation",
+    "maker_name": "むしぞる中尉",
+    "translation_info": {
+      "is_child": true, "original_workno": "RJ01619571",
+      "parent_workno": "RJ01628429", "lang": "CHI_HANT"
+    }
+  },
+  "RJ01706442": {
+    "work_name": "Second Traditional Chinese translation",
+    "maker_name": "Second translator",
+    "translation_info": {
+      "is_child": true, "original_workno": "RJ01619571",
+      "parent_workno": "RJ01628429", "lang": "CHI_HANT"
+    }
+  }
+}

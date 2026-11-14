@@ -102,7 +102,7 @@ bool BuildRequestJson(const BatchRequest& request, std::string& json) {
             return false;
         }
     }
-    json += "]}}";
+    json += request.from_explorer ? "],\"source\":\"explorer\"}}" : "]}}";
     return json.size() <= kMaxQuickRenameRequestPayloadSize;
 }
 

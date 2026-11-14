@@ -172,6 +172,9 @@ class LightweightWindow(QMainWindow):
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         return button
 
+    def focus_quick_rename(self) -> None:
+        self.operation_list.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def start_quick_rename(
         self,
         paths: Path | str | Sequence[Path | str],

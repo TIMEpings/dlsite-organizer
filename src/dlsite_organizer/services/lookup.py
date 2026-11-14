@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Lock
@@ -12,14 +12,15 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol, cast, runtime_checkab
 if TYPE_CHECKING:
     from dlsite_organizer.app.settings import AppSettings
 
-from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
+from dlsite_organizer.domain.bonus import DEFAULT_BONUS_DATE_TOLERANCE_DAYS, BonusEvidenceSnapshot
 from dlsite_organizer.domain.relation import TranslationRole, WorkRelation
 from dlsite_organizer.domain.candidate import CandidateSearchResult
 from dlsite_organizer.domain.manual_review import ManualReviewEvent
 from dlsite_organizer.domain.work import TranslationAttribution, Work
 from dlsite_organizer.domain.work_code import WorkCodeError, normalize_workno
-from dlsite_organizer.persistence.metadata_store import MetadataStore
+from dlsite_organizer.persistence.metadata_store import BONUS_SCAN_CACHE_SOURCE, MetadataStore
 from dlsite_organizer.providers.base import WorkProvider
+from dlsite_organizer.providers.dlsite.client import DLSITE_PRODUCT_INFO_AJAX, DlsiteProvider
 from dlsite_organizer.providers.dlsite.exceptions import (
     DlsiteConnectionError,
     DlsiteHttpError,
@@ -28,10 +29,15 @@ from dlsite_organizer.providers.dlsite.exceptions import (
 )
 from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
 from dlsite_organizer.services.naming import NamingService
+from dlsite_organizer.services.bonus_search import (
+    BonusScanSession,
+    BonusSearchRequest, BonusSearchResult, BonusSearchService,
+)
 from dlsite_organizer.services.translation_relations import (
     TranslationAnalysis,
     TranslationRelationService,
 )
+from dlsite_organizer.services.translation_discovery import TranslationDiscovery, TranslationListings
 from dlsite_organizer.services.historical_relations import HistoricalRelationService, HistoricalRelations
 from dlsite_organizer.services.candidate_relations import CandidateRelationService
 from dlsite_organizer.services.manual_reviews import ManualReviewService
@@ -51,6 +57,7 @@ class LookupFreshness(StrEnum):
     LIVE = "live"
     CACHE_FRESH = "cache_fresh"
     CACHE_STALE_FALLBACK = "cache_stale_fallback"
+    LOCAL_BONUS_REVIEW = "local_bonus_review"
 
 
 class LookupFailure(Exception):
@@ -89,6 +96,14 @@ class LookupResult:
     core_source: str | None = None
     metadata_source: str | None = None
     translation_attribution: TranslationAttribution | None = None
+    bonus_evidence: BonusEvidenceSnapshot | None = None
+    bonus_observed_at: datetime | None = None
+    bonus_preview: BonusSearchResult | None = None
+    has_local_bonus_relation: bool = False
+
+    @property
+    def bonus_ajax_at(self) -> datetime | None:
+        return self.fetched_at if self.core_source == DLSITE_PRODUCT_INFO_AJAX else None
 
     @property
     def translation_role(self) -> TranslationRole | None:
@@ -123,11 +138,13 @@ class LookupConfiguration:
 
 def operation_settings_key(settings: AppSettings) -> tuple[object, ...]:
     """Launch-time fields do not change the active profile or provider route."""
+    cache = settings.cache
     return (
         settings.naming_template, settings.cv_separator, settings.cv_prefix, settings.cv_suffix,
         settings.tag_separator, settings.max_tags, settings.hide_general_age,
         settings.date_format, settings.illegal_char_replacement,
-        settings.provider.timeout_seconds, settings.provider.metadata_locale, settings.cache,
+        settings.provider.timeout_seconds, settings.provider.metadata_locale,
+        cache.enabled, cache.ttl_hours, cache.allow_stale_on_error,
     )
 
 
@@ -196,9 +213,14 @@ class LookupService:
             else None
         )
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._bonus_scan_session = BonusScanSession()
 
-    def lookup(self, raw_workno: str, *, force_refresh: bool = False) -> LookupResult:
-        return self.snapshot()._lookup(raw_workno, force_refresh=force_refresh)
+    def lookup(
+        self, raw_workno: str, *, force_refresh: bool = False, prefer_bonus_review: bool = False,
+    ) -> LookupResult:
+        return self.snapshot()._lookup(
+            raw_workno, force_refresh=force_refresh, prefer_bonus_review=prefer_bonus_review,
+        )
 
     @property
     def settings_generation(self) -> int:
@@ -209,17 +231,119 @@ class LookupService:
         with self._settings_lock:
             return copy(self)
 
-    def _lookup(self, raw_workno: str, *, force_refresh: bool = False) -> LookupResult:
+    def bonus_search(self) -> BonusSearchService:
+        configuration = self.snapshot()._configuration
+        provider = configuration.provider
+        settings = configuration.settings
+        return BonusSearchService(
+            provider if isinstance(provider, DlsiteProvider) else None,
+            configuration.metadata_store,
+            self._manual_review_service,
+            clock=self._now,
+            cache_ttl=configuration.cache_ttl,
+            scan_session=self._bonus_scan_session,
+            save_scan_metadata=settings is None or settings.cache.save_bonus_scan_metadata,
+            date_tolerance_days=(
+                settings.bonus_date_tolerance_days if settings else DEFAULT_BONUS_DATE_TOLERANCE_DAYS
+            ),
+        )
+
+    def preview_bonuses(self, result: LookupResult) -> BonusSearchResult | None:
+        work = result.work
+        if not work.workno.startswith("RJ") or result.translation_role in {
+            TranslationRole.TRANSLATION_PARENT, TranslationRole.TRANSLATION_CHILD,
+        }:
+            return None
+        return self.bonus_search().search(
+            BonusSearchRequest(
+                work.workno, work.maker_id, work.release_date, local_only=True,
+                main_evidence=result.bonus_evidence,
+                main_ajax_at=result.bonus_ajax_at,
+                main_evidence_at=result.bonus_observed_at,
+            ),
+            cancelled=lambda: False, progress=lambda _: None,
+        )
+
+    def discover_translations(
+        self,
+        result: LookupResult,
+        *,
+        publish: Callable[[TranslationListings], None],
+        cancelled: Callable[[], bool],
+        allow_online: bool = True,
+    ) -> None:
         configuration = self._configuration
-        store = configuration.metadata_store
+        provider = configuration.provider
+        TranslationDiscovery(
+            provider if allow_online and isinstance(provider, DlsiteProvider) else None,
+            configuration.metadata_store,
+            clock=self._now,
+            ttl=configuration.cache_ttl,
+        ).discover(
+            result.work.workno, result.translation, result.translation_attribution,
+            result.historical_relations, result.fetched_at, result.source,
+            release_date=result.work.release_date, availability=result.work.availability,
+            publish=publish, cancelled=cancelled,
+        )
+
+    def is_recent_bonus_observation(self, observed_at: datetime | None) -> bool:
+        return observed_at is not None and (
+            timedelta(0) <= self._now() - observed_at < self._configuration.cache_ttl
+        )
+
+    def _lookup(
+        self, raw_workno: str, *, force_refresh: bool = False, prefer_bonus_review: bool = False,
+    ) -> LookupResult:
         try:
             workno = normalize_workno(raw_workno)
         except WorkCodeError as exc:
             raise LookupFailure(LookupFailureKind.INVALID_CODE, str(exc)) from exc
+        if force_refresh or not prefer_bonus_review or not workno.startswith("RJ"):
+            return self._lookup_metadata(workno, force_refresh=force_refresh)
+
+        bonus = self.bonus_search()
+        incoming = bonus.pairs_for_work(workno, as_bonus=True)
+        if not incoming and not bonus.pairs_for_work(workno):
+            return self._lookup_metadata(workno, force_refresh=False)
+
+        try:
+            result = self._lookup_metadata(workno, force_refresh=False, require_full_metadata=True)
+        except LookupFailure as exc:
+            if not isinstance(
+                exc.__cause__, (DlsiteConnectionError, DlsiteHttpError, WorkNotFoundError),
+            ):
+                raise
+            store = self._configuration.metadata_store
+            observations = store.list_observations(workno) if store else ()
+            observation = observations[-1] if observations else None
+            work = Work(
+                workno=workno,
+                title=observation.title if observation else next(
+                    (pair.match.title for pair in incoming if pair.match.title != workno),
+                    workno,
+                ),
+                maker_id=observation.maker_id if observation else None,
+                maker_name=observation.maker_name if observation else None,
+                release_date=observation.release_date if observation else None,
+            )
+            result = self._result(
+                workno, work, None, LookupFreshness.LOCAL_BONUS_REVIEW,
+                observation.source if observation else "LOCAL_BONUS_RELATION",
+                observation.observed_at if observation else None,
+            )
+        return replace(result, has_local_bonus_relation=True)
+
+    def _lookup_metadata(
+        self, workno: str, *, force_refresh: bool, require_full_metadata: bool = False,
+    ) -> LookupResult:
+        configuration = self._configuration
+        store = configuration.metadata_store
         cached = store.get(workno) if store else None
         if (
             cached
             and not force_refresh
+            # Bonus scans can save core listing data without the ordinary enrichment.
+            and not (require_full_metadata and cached.source == BONUS_SCAN_CACHE_SOURCE)
             and self._now() - cached.fetched_at < configuration.cache_ttl
         ):
             return self._result(
@@ -232,6 +356,8 @@ class LookupService:
                 core_source=cached.core_source,
                 metadata_source=cached.metadata_source,
                 translation_attribution=cached.translation_attribution,
+                bonus_evidence=cached.bonus_evidence,
+                bonus_observed_at=cached.bonus_observed_at,
             )
         try:
             (
@@ -264,6 +390,8 @@ class LookupService:
                     core_source=cached.core_source,
                     metadata_source=cached.metadata_source,
                     translation_attribution=cached.translation_attribution,
+                    bonus_evidence=cached.bonus_evidence,
+                    bonus_observed_at=cached.bonus_observed_at,
                 )
             kind = (
                 LookupFailureKind.CONNECTION
@@ -279,12 +407,12 @@ class LookupService:
         except Exception as exc:
             logger.exception("Unexpected lookup failure for %s", workno)
             raise LookupFailure(LookupFailureKind.UNEXPECTED, "Unexpected lookup failure") from exc
+        bonus_evidence = cast(
+            BonusEvidenceSnapshot | None,
+            getattr(obj, "bonus_evidence", None),
+        )
         if store:
             product = getattr(obj, "product_info", None)
-            bonus_evidence = cast(
-                BonusEvidenceSnapshot | None,
-                getattr(obj, "bonus_evidence", None),
-            )
             regist_datetime = cast(
                 datetime | None,
                 getattr(obj, "regist_datetime", None)
@@ -318,6 +446,7 @@ class LookupService:
                     age_category=age_category,
                     regist_datetime=regist_datetime,
                     bonus_evidence=bonus_evidence,
+                    bonus_listing=getattr(product, "bonus_listing", None),
                     translation_attribution=attribution,
                     core_source=core_source,
                     metadata_source=metadata_source,
@@ -334,6 +463,8 @@ class LookupService:
             core_source=core_source,
             metadata_source=metadata_source,
             translation_attribution=attribution,
+            bonus_evidence=bonus_evidence,
+            bonus_observed_at=fetched if bonus_evidence is not None else None,
         )
 
     @property
@@ -347,6 +478,8 @@ class LookupService:
             if current.settings is not None and (
                 operation_settings_key(current.settings) == operation_settings_key(settings)
             ):
+                if current.settings.cache.save_bonus_scan_metadata != settings.cache.save_bonus_scan_metadata:
+                    self._configuration = replace(current, settings=settings)
                 return
             naming = copy(current.naming)
             naming.apply_settings(settings)
@@ -396,6 +529,8 @@ class LookupService:
         core_source: str | None = None,
         metadata_source: str | None = None,
         translation_attribution: TranslationAttribution | None = None,
+        bonus_evidence: BonusEvidenceSnapshot | None = None,
+        bonus_observed_at: datetime | None = None,
     ):
         formatted_name = self._configuration.naming.format(work)
         translation = self._translation_relations.analyze(workno, info)
@@ -423,6 +558,8 @@ class LookupService:
             core_source=core_source,
             metadata_source=metadata_source,
             translation_attribution=translation_attribution,
+            bonus_evidence=bonus_evidence,
+            bonus_observed_at=bonus_observed_at,
             historical_relations=historical,
             candidate_relations=candidates,
             manual_reviews=(self._manual_review_service.reviews_for_work(workno) if self._manual_review_service else ()),

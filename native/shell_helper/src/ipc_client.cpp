@@ -305,6 +305,14 @@ DispatchResult Win32IpcClient::SendToPipe(
     }
 
     const Deadline ack_deadline(ack_deadline_ms_);
+    // The shell helper can pass along foreground eligibility when Windows
+    // granted it to the helper. Admission still proceeds if the grant fails.
+    if (request.from_explorer) {
+        ULONG server_pid = 0;
+        if (GetNamedPipeServerProcessId(pipe.get(), &server_pid) && server_pid != 0) {
+            AllowSetForegroundWindow(server_pid);
+        }
+    }
     // A failed write does not tell us whether zero bytes or a partial frame
     // reached the peer. Keep both cases conservatively ambiguous.
     if (!WriteAll(pipe.get(), frame, ack_deadline, write_file_)) {

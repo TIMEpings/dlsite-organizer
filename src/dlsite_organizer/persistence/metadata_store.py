@@ -6,15 +6,24 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from itertools import batched
 from typing import cast
 
-from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, case, func, or_, select
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, and_, case, func, or_, select, text
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Mapped, mapped_column
 
-from dlsite_organizer.domain.bonus import BonusEvidenceSnapshot
+from dlsite_organizer.domain.bonus import (
+    AJAX_TITLE_CROSS_VALIDATION, BonusEvidenceSnapshot, BonusListingSnapshot, BonusMatch,
+)
+from dlsite_organizer.domain.manual_review import (
+    CandidateEvidenceSnapshot, ManualRelationType, canonical_pair,
+)
+from dlsite_organizer.domain.relation import Confidence
 from dlsite_organizer.domain.work import (
     AgeCategory,
     Availability,
@@ -26,9 +35,11 @@ from dlsite_organizer.domain.work import (
 )
 from dlsite_organizer.domain.candidate import CandidateSnapshotSource, KnownWorkSnapshot
 from dlsite_organizer.persistence.database import Base, Database
+from dlsite_organizer.persistence.manual_reviews import ManualRelationReviewRecord
 from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
 
 logger = logging.getLogger(__name__)
+BONUS_SCAN_CACHE_SOURCE = "DLSITE_BONUS_SCAN"
 
 
 class WorkMetadataCache(Base):
@@ -74,6 +85,7 @@ class MetadataObservation(Base):
     source: Mapped[str] = mapped_column(String(64))
     translation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     bonus_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bonus_listing_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     series_name: Mapped[str | None] = mapped_column(String, nullable=True)
     cvs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -87,6 +99,16 @@ class MetadataObservation(Base):
     def bonus_evidence(self) -> BonusEvidenceSnapshot | None:
         """Decode the optional typed bonus snapshot without changing legacy rows."""
         return _parse_bonus_evidence(self.bonus_evidence_json)
+
+    @property
+    def bonus_listing(self) -> BonusListingSnapshot | None:
+        if self.bonus_listing_json is None:
+            return None
+        try:
+            return BonusListingSnapshot.model_validate_json(self.bonus_listing_json)
+        except ValueError:
+            logger.warning("Ignoring malformed bonus listing observation %s", self.id)
+            return None
 
     @property
     def cvs(self) -> tuple[str, ...] | None:
@@ -111,6 +133,14 @@ class MetadataObservation(Base):
         return _parse_translation_attribution(self.translation_attribution_json)
 
 
+class LimitedBonusRelationRecord(Base):
+    __tablename__ = "limited_bonus_relations"
+    main_workno: Mapped[str] = mapped_column(String(16), primary_key=True)
+    bonus_workno: Mapped[str] = mapped_column(String(16), primary_key=True)
+    evidence_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    match_json: Mapped[str] = mapped_column(Text)
+
+
 @dataclass(frozen=True, slots=True)
 class CachedMetadata:
     work: Work
@@ -121,6 +151,8 @@ class CachedMetadata:
     translation_attribution: TranslationAttribution | None = None
     core_source: str | None = None
     metadata_source: str | None = None
+    bonus_evidence: BonusEvidenceSnapshot | None = None
+    bonus_observed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +185,18 @@ class MetadataStore:
     def get(self, workno: str) -> CachedMetadata | None:
         try:
             with self._database.session() as session:
-                row = session.get(WorkMetadataCache, workno)
-                if row is None:
+                model = MetadataObservation
+                latest_bonus = select(model.id).where(
+                    model.workno == workno, model.bonus_evidence_json.is_not(None),
+                ).order_by(model.observed_at.desc(), model.id.desc()).limit(1).scalar_subquery()
+                cached = session.execute(
+                    select(WorkMetadataCache, model.bonus_evidence_json, model.observed_at)
+                    .outerjoin(model, model.id == latest_bonus)
+                    .where(WorkMetadataCache.workno == workno)
+                ).one_or_none()
+                if cached is None:
                     return None
+                row, bonus_json, bonus_observed_at = cached
                 translation = (
                     TranslationInfoSource.model_validate(json.loads(row.translation_json))
                     if row.translation_json
@@ -189,6 +230,8 @@ class MetadataStore:
                     _parse_translation_attribution(row.translation_attribution_json),
                     row.core_source,
                     row.metadata_source,
+                    _parse_bonus_evidence(bonus_json),
+                    _as_utc(bonus_observed_at),
                 )
         except Exception:
             logger.exception("Metadata cache read failed for %s", workno)
@@ -226,6 +269,141 @@ class MetadataStore:
             )
             for row in self.list_observations(workno)
         )
+
+    def list_limited_bonus_matches(
+        self, workno: str, *, as_bonus: bool = False,
+    ) -> tuple[BonusMatch, ...]:
+        column = (
+            LimitedBonusRelationRecord.bonus_workno if as_bonus
+            else LimitedBonusRelationRecord.main_workno
+        )
+        with self._database.session() as session:
+            payloads = session.scalars(
+                select(LimitedBonusRelationRecord.match_json).where(column == workno)
+            ).all()
+        return tuple(BonusMatch.model_validate_json(payload) for payload in payloads)
+
+    def save_limited_bonus_matches(self, matches: tuple[BonusMatch, ...]) -> tuple[BonusMatch, ...]:
+        """Retain evidence and serialize automatic promotion with manual review writes."""
+        saved = []
+        with self._database.session() as session:
+            automatic = any(match.automatically_linked for match in matches)
+            if automatic:
+                session.execute(text("BEGIN IMMEDIATE"))
+            has_reviews = automatic and bool(session.scalar(text(
+                "SELECT 1 FROM sqlite_master WHERE name = 'manual_relation_reviews' AND type = 'table'"
+            )))
+            for match in matches:
+                relation = match.relation
+                assert match.observed_at is not None
+                if match.automatically_linked and has_reviews:
+                    a, b = canonical_pair(relation.source_workno, relation.target_workno)
+                    reviews = ManualRelationReviewRecord
+                    events = session.scalars(select(reviews).where(
+                        reviews.workno_a == a, reviews.workno_b == b,
+                    ).order_by(reviews.reviewed_at.desc(), reviews.id.desc())).all()
+                    if _blocks_automatic_bonus(events, relation.source_workno, relation.target_workno):
+                        relation = relation.model_copy(update={
+                            "detection_source": next(
+                                (item.attributes["source"] for item in relation.evidence
+                                 if "source" in item.attributes),
+                                "DLSITE_PRODUCT_INFO_AJAX",
+                            ),
+                        })
+                        match = match.model_copy(update={"relation": relation})
+                table = LimitedBonusRelationRecord
+                statement = insert(table).values(
+                    main_workno=relation.source_workno,
+                    bonus_workno=relation.target_workno,
+                    evidence_at=_as_utc(match.observed_at),
+                    match_json=match.model_dump_json(),
+                )
+                incoming = statement.excluded
+                was_direct = func.json_extract(table.match_json, "$.relation.confidence") == "confirmed"
+                was_auto = (
+                    func.json_extract(table.match_json, "$.relation.detection_source")
+                    == AJAX_TITLE_CROSS_VALIDATION
+                )
+                is_direct = relation.confidence == Confidence.CONFIRMED
+                session.execute(statement.on_conflict_do_update(
+                    index_elements=[table.main_workno, table.bonus_workno],
+                    set_={
+                        "evidence_at": incoming.evidence_at,
+                        "match_json": incoming.match_json,
+                    },
+                    where=(~was_direct | is_direct) & (
+                        ~was_auto | is_direct | match.automatically_linked
+                    ) & (
+                        (incoming.evidence_at > table.evidence_at)
+                        | (~was_direct & is_direct)
+                        | (~was_auto & match.automatically_linked)
+                    ),
+                ))
+                payload = session.scalar(select(table.match_json).where(
+                    table.main_workno == relation.source_workno,
+                    table.bonus_workno == relation.target_workno,
+                ))
+                assert payload is not None
+                saved.append(BonusMatch.model_validate_json(payload))
+            session.commit()
+        return tuple(saved)
+
+    def list_bonus_candidate_summaries(
+        self, maker_id: str, regist_date: date, *, days: int
+    ) -> tuple[KnownWorkSnapshot, ...]:
+        """Reuse the local known-work index, scoped to a maker and registration window."""
+        first = regist_date - timedelta(days=days)
+        last = regist_date + timedelta(days=days)
+        with self._database.session() as session:
+            def matching(model):
+                day = func.coalesce(model.release_date, func.date(model.regist_datetime))
+                return select(model.workno).where(
+                    model.maker_id == maker_id,
+                    model.workno.like("RJ%"),
+                    day.between(first.isoformat(), last.isoformat()),
+                )
+
+            worknos = matching(WorkMetadataCache).union(matching(MetadataObservation))
+            return self._known_work_summaries(worknos, session=session)
+
+    def latest_bonus_listings(self, worknos: tuple[str, ...]) -> dict[str, MetadataObservation]:
+        """Get the latest AJAX listing observation for each requested local work."""
+        with self._database.session() as session:
+            return {
+                row.workno: row
+                for batch in batched(worknos, 500)
+                for row in session.scalars(self._latest_bonus_listing_query(
+                    MetadataObservation.workno.in_(batch)
+                ))
+            }
+
+    def latest_bonus_listings_in_ranges(
+        self, bounds: tuple[tuple[str, str], ...]
+    ) -> Iterator[MetadataObservation]:
+        """Read cached listings within fixed-width RJ intervals."""
+        workno = MetadataObservation.workno
+        conditions = [
+            and_(workno.between(first, last), func.length(workno) == len(first))
+            for first, last in bounds
+        ]
+        with self._database.session() as session:
+            yield from session.scalars(
+                self._latest_bonus_listing_query(or_(*conditions))
+                .order_by(workno)
+                .execution_options(yield_per=500)
+            )
+
+    @staticmethod
+    def _latest_bonus_listing_query(condition):
+        model = MetadataObservation
+        ranked = select(
+            model.id,
+            func.row_number().over(
+                partition_by=model.workno,
+                order_by=(model.observed_at.desc(), model.id.desc()),
+            ).label("position"),
+        ).where(condition, model.bonus_listing_json.is_not(None)).subquery()
+        return select(model).join(ranked, model.id == ranked.c.id).where(ranked.c.position == 1)
 
     def list_all_observations(self) -> tuple[MetadataObservation, ...]:
         """Return all persisted observations for historical relation derivation."""
@@ -373,6 +551,18 @@ class MetadataStore:
             logger.exception("Relation observations read failed for %s", workno)
             return ()
 
+    def latest_translation_observation(self, workno: str) -> MetadataObservation | None:
+        """Read the latest translation snapshot by exact work number."""
+        model = MetadataObservation
+        with self._database.session() as session:
+            row = session.scalar(
+                select(model).where(model.workno == workno, model.translation_json.is_not(None))
+                .order_by(model.observed_at.desc(), model.id.desc()).limit(1)
+            )
+            if row is not None:
+                row.observed_at = cast(datetime, _as_utc(row.observed_at))
+            return row
+
     def list_current_relation_pairs_for_work(self, workno: str) -> tuple[tuple[str, str], ...]:
         """Return current confirmed exclusions involving this work only."""
         from dlsite_organizer.services.translation_relations import TranslationRelationService
@@ -442,6 +632,7 @@ class MetadataStore:
         translation_attribution: TranslationAttribution | None = None,
         core_source: str | None = None,
         metadata_source: str | None = None,
+        from_bonus_scan: bool = False,
     ) -> None:
         now = _as_utc(fetched_at) or datetime.now(UTC)
         normalized_regist_datetime = _as_utc(regist_datetime or work.regist_datetime)
@@ -449,37 +640,34 @@ class MetadataStore:
         stored_language = _storage_language(work.language)
         try:
             with self._database.session() as session:
-                row = session.get(WorkMetadataCache, work.workno) or WorkMetadataCache(
-                    workno=work.workno
+                if from_bonus_scan:
+                    source = BONUS_SCAN_CACHE_SOURCE
+                values = dict(
+                    workno=work.workno, title=work.title, maker_id=work.maker_id,
+                    maker_name=work.maker_name, release_date=work.release_date,
+                    regist_datetime=normalized_regist_datetime,
+                    work_regist_datetime=_as_utc(work.regist_datetime),
+                    series_name=work.series_name, cvs_json=json.dumps(work.cvs, ensure_ascii=False),
+                    tags_json=json.dumps(work.tags, ensure_ascii=False), cover_url=work.cover_url,
+                    availability=work.availability.value, source_section=work.source_section,
+                    age_category=stored_age_category, language=stored_language,
+                    translation_json=translation_info.model_dump_json() if translation_info else None,
+                    translation_attribution_json=(
+                        translation_attribution.model_dump_json() if translation_attribution else None
+                    ),
+                    core_source=core_source, metadata_source=metadata_source,
+                    source=source, fetched_at=now,
                 )
-                row.title, row.maker_id, row.maker_name = work.title, work.maker_id, work.maker_name
-                row.release_date, row.regist_datetime = (
-                    work.release_date,
-                    normalized_regist_datetime,
-                )
-                row.work_regist_datetime = _as_utc(work.regist_datetime)
-                row.series_name, row.cvs_json, row.tags_json = (
-                    work.series_name,
-                    json.dumps(work.cvs, ensure_ascii=False),
-                    json.dumps(work.tags, ensure_ascii=False),
-                )
-                row.cover_url, row.availability, row.source_section = (
-                    work.cover_url,
-                    work.availability.value,
-                    work.source_section,
-                )
-                row.age_category, row.language = stored_age_category, stored_language
-                row.translation_json = (
-                    translation_info.model_dump_json() if translation_info else None
-                )
-                row.translation_attribution_json = (
-                    translation_attribution.model_dump_json()
-                    if translation_attribution is not None
-                    else None
-                )
-                row.core_source, row.metadata_source = core_source, metadata_source
-                row.source, row.fetched_at = source, now
-                session.add(row)
+                table = WorkMetadataCache
+                statement = insert(table).values(**values)
+                newer = statement.excluded.fetched_at >= table.fetched_at
+                if from_bonus_scan:
+                    newer = newer & (table.source == BONUS_SCAN_CACHE_SOURCE)
+                else:
+                    newer = newer | (table.source == BONUS_SCAN_CACHE_SOURCE)
+                session.execute(statement.on_conflict_do_update(
+                    index_elements=[table.workno], set_=values, where=newer,
+                ))
                 session.commit()
         except Exception:
             logger.exception("Metadata cache write failed for %s", work.workno)
@@ -495,6 +683,7 @@ class MetadataStore:
         age_category: str | int | None = None,
         regist_datetime: datetime | None = None,
         bonus_evidence: BonusEvidenceSnapshot | None = None,
+        bonus_listing: BonusListingSnapshot | None = None,
         translation_attribution: TranslationAttribution | None = None,
         core_source: str | None = None,
         metadata_source: str | None = None,
@@ -534,12 +723,42 @@ class MetadataStore:
                         bonus_evidence_json=bonus_evidence.model_dump_json()
                         if bonus_evidence is not None
                         else None,
+                        bonus_listing_json=bonus_listing.model_dump_json()
+                        if bonus_listing is not None
+                        else None,
                         observed_at=normalized_observed_at,
                     )
                 )
                 session.commit()
         except Exception:
             logger.exception("Metadata observation write failed for %s", work.workno)
+
+
+def _blocks_automatic_bonus(
+    events: Sequence[ManualRelationReviewRecord],
+    main: str,
+    bonus: str,
+) -> bool:
+    for event in events:
+        try:
+            snapshot = CandidateEvidenceSnapshot.model_validate_json(event.evidence_snapshot_json)
+        except ValueError:
+            return True
+        scopes = [item for item in snapshot.context if "limited_bonus_main" in item]
+        if scopes:
+            if any(
+                item.get("limited_bonus_main") == main
+                and item.get("limited_bonus_candidate") == bonus for item in scopes
+            ):
+                return True
+            continue
+        if event.relation_type == ManualRelationType.LIMITED_BONUS_OF:
+            if event.target_workno == main and event.subject_workno == bonus:
+                return True
+            continue
+        # An unscoped review of this pair may concern a competing relation.
+        return True
+    return False
 
 
 def _relation_context_predicate(model, workno: str):

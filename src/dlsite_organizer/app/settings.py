@@ -16,6 +16,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from dlsite_organizer.app.locale import SUPPORTED_METADATA_LOCALES, default_metadata_locale
+from dlsite_organizer.domain.bonus import (
+    DEFAULT_BONUS_DATE_TOLERANCE_DAYS,
+    MAX_BONUS_DATE_TOLERANCE_DAYS,
+)
 from dlsite_organizer.services.naming import DEFAULT_NAMING_TEMPLATE, NamingService
 
 _SUPPORTED_METADATA_LOCALES = frozenset(SUPPORTED_METADATA_LOCALES)
@@ -64,6 +68,7 @@ class CacheSettings(BaseModel):
     enabled: bool = True
     ttl_hours: float = Field(default=24.0, gt=0)
     allow_stale_on_error: bool = True
+    save_bonus_scan_metadata: bool = True
 
 
 class StartupMode(StrEnum):
@@ -88,6 +93,11 @@ class AppSettings(BaseModel):
     date_format: str = "%Y-%m-%d"
     illegal_char_replacement: str = "_"
     startup_mode: StartupMode = StartupMode.LIGHTWEIGHT
+    explorer_auto_wake: bool = True
+    bonus_date_tolerance_days: int = Field(
+        default=DEFAULT_BONUS_DATE_TOLERANCE_DAYS, ge=0, le=MAX_BONUS_DATE_TOLERANCE_DAYS,
+        strict=True,
+    )
     database_path: Path = Field(default_factory=lambda: default_data_dir() / "metadata.sqlite3")
     provider: ProviderSettings = Field(default_factory=ProviderSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
@@ -279,6 +289,8 @@ def _settings_to_toml(settings: AppSettings) -> str:
         f"date_format = {_toml_string(settings.date_format)}",
         f"illegal_char_replacement = {_toml_string(settings.illegal_char_replacement)}",
         f"startup_mode = {_toml_string(settings.startup_mode.value)}",
+        f"explorer_auto_wake = {_toml_bool(settings.explorer_auto_wake)}",
+        f"bonus_date_tolerance_days = {settings.bonus_date_tolerance_days}",
         f"database_path = {_toml_string(str(settings.database_path))}",
         "",
         "[provider]",
@@ -291,6 +303,7 @@ def _settings_to_toml(settings: AppSettings) -> str:
         f"enabled = {_toml_bool(settings.cache.enabled)}",
         f"ttl_hours = {_toml_float(settings.cache.ttl_hours)}",
         f"allow_stale_on_error = {_toml_bool(settings.cache.allow_stale_on_error)}",
+        f"save_bonus_scan_metadata = {_toml_bool(settings.cache.save_bonus_scan_metadata)}",
         "",
     ]
     return "\n".join(lines)

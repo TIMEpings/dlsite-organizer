@@ -151,6 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         window,
         lightweight_window,
         quick_action_controller,
+        explorer_auto_wake=lambda: components.settings_service.settings.explorer_auto_wake,
     )
     _connect_quick_action_feedback(quick_action_controller, lifecycle, window)
     try:

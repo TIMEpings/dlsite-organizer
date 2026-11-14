@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import pytest
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 from tests.services.test_lookup import FakeProvider
 
 from dlsite_organizer.__main__ import _connect_quick_action_feedback
@@ -24,6 +25,8 @@ from dlsite_organizer.app.single_instance import (
     LocalCommand,
     LocalCommandName,
     LocalReplyStatus,
+    decode_request,
+    encode_request,
 )
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.lookup import LookupService
@@ -300,6 +303,67 @@ def test_ipc_status_mapping_keeps_business_outcomes_distinct(
     assert accepted.status is LocalReplyStatus.ACCEPTED
     assert duplicate.status is LocalReplyStatus.DUPLICATE
     assert shutting_down.status is LocalReplyStatus.SHUTTING_DOWN
+
+
+@pytest.mark.parametrize(("enabled", "state", "expected"), [
+    (True, "minimized", "foreground"),
+    (True, "background", "foreground"),
+    (False, "minimized", "alert"),
+    (False, "background", "alert"),
+    (True, "active", None),
+    (True, "full", "alert"),
+])
+def test_explorer_wake_respects_current_window_and_queued_paths(
+    qapp, tmp_path, monkeypatch, enabled, state, expected,
+):
+    class Window(QWidget):
+        def is_busy(self):
+            return False
+
+        def set_close_handler(self, handler: Callable[[object, object], None]) -> None:
+            pass
+
+        def isActiveWindow(self):
+            return state == "active"
+
+    full, light = Window(), Window()
+    events = []
+    controller = QuickActionController(FakeRunner)
+    lifecycle = ApplicationLifecycle(
+        qapp, FakeCoordinator([]), FakeDatabase([]), full, light, controller,
+        explorer_auto_wake=lambda: enabled,
+    )
+    monkeypatch.setattr(
+        "dlsite_organizer.app.application_lifecycle.request_foreground",
+        lambda window: events.append(("foreground", window)),
+    )
+    monkeypatch.setattr(QApplication, "alert", lambda window, _duration: events.append(
+        ("alert", window)
+    ))
+    if state == "full":
+        lifecycle.show_full_mode()
+    else:
+        lifecycle.show_lightweight_mode()
+    if state == "minimized":
+        light.showMinimized()
+    try:
+        for index in range(2):
+            command = LocalCommand(
+                1, f"explorer-{index}", LocalCommandName.QUICK_RENAME,
+                {"paths": [str(tmp_path / str(index))], "source": "explorer"},
+            )
+            reply = lifecycle.handle_command(decode_request(encode_request(command)))
+            assert reply.status is LocalReplyStatus.ACCEPTED
+        assert controller.active_request and controller.active_request.path == tmp_path / "0"
+        assert controller.pending_requests[0].path == tmp_path / "1"
+        window = full if state == "full" else light
+        assert lifecycle.current_window is window
+        assert light.isMinimized() is (state == "minimized" and not enabled)
+        assert events == ([(expected, window)] * 2 if expected else [])
+    finally:
+        lifecycle.deleteLater()
+        full.close()
+        light.close()
 
 
 def test_admitted_ipc_quick_action_preserves_existing_full_surface(

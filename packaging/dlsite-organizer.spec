@@ -1,12 +1,32 @@
 import importlib.util
 import os
+import runpy
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.win32.versioninfo import (
+    FixedFileInfo, StringFileInfo, StringStruct, StringTable,
+    VarFileInfo, VarStruct, VSVersionInfo,
+)
 
 
 project_root = Path(SPEC).resolve().parents[1]
 source_root = project_root / "src"
+_version = runpy.run_path(str(source_root / "dlsite_organizer" / "version.py"))["__version__"]
+_file_version = (*map(int, _version.split(".")), 0)
+_windows_version = VSVersionInfo(
+    ffi=FixedFileInfo(filevers=_file_version, prodvers=_file_version, fileType=1),
+    kids=[
+        StringFileInfo([StringTable("040904B0", [
+            StringStruct("FileDescription", "DLsite Organizer"),
+            StringStruct("FileVersion", _version),
+            StringStruct("OriginalFilename", "dlsite-organizer.exe"),
+            StringStruct("ProductName", "DLsite Organizer"),
+            StringStruct("ProductVersion", _version),
+        ])]),
+        VarFileInfo([VarStruct("Translation", [0x0409, 1200])]),
+    ],
+)
 _packaging_helper_path = project_root / "packaging" / "windows_packaging.py"
 _packaging_helper_spec = importlib.util.spec_from_file_location(
     "dlsite_windows_packaging", _packaging_helper_path
@@ -126,6 +146,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     icon=str(_branding_ico),
+    version=_windows_version,
 )
 
 coll = COLLECT(

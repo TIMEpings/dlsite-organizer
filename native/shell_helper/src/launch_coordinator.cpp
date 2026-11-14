@@ -93,6 +93,7 @@ LaunchResult Win32ProcessLauncher::LaunchSiblingApplication(const std::string& h
 DispatchResult LaunchCoordinator::Send(const std::vector<std::wstring>& paths) {
     BatchRequest request;
     request.paths = paths;
+    request.from_explorer = true;
     if (!GenerateRequestId(request.request_id)) {
         return DispatchResult::AmbiguousFailure;
     }

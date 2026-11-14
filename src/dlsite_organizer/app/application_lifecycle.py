@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Protocol
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from dlsite_organizer.app.durable_handoff import DurableHandoff
@@ -23,6 +23,7 @@ from dlsite_organizer.app.single_instance import (
     LocalReplyStatus,
 )
 from dlsite_organizer.services.quick_rename import QuickRenameService
+from dlsite_organizer.ui.windows.native_chrome import request_foreground
 from dlsite_organizer.ui.workers.quick_rename_worker import QuickRenameWorker
 
 logger = logging.getLogger(__name__)
@@ -194,6 +195,8 @@ class ApplicationLifecycle(QObject):
         lightweight_window: _WindowLike,
         quick_action_controller: QuickActionController,
         parent: QObject | None = None,
+        *,
+        explorer_auto_wake: Callable[[], bool] = lambda: True,
     ) -> None:
         super().__init__(parent or application)
         self._application = application
@@ -201,6 +204,7 @@ class ApplicationLifecycle(QObject):
         self._database = database
         self._main_window = main_window
         self._lightweight_window = lightweight_window
+        self._explorer_auto_wake = explorer_auto_wake
         self.quick_action_controller = quick_action_controller
         self.durable_handoff: DurableHandoff | None = None
         self._current_window: _WindowLike | None = None
@@ -317,7 +321,7 @@ class ApplicationLifecycle(QObject):
                 # falsely recording a terminal rejection.
                 self.durable_handoff.note_controller_request(command.request_id, admission.request)
             if admission.status is QuickActionAdmissionStatus.ACCEPTED:
-                self._present_quick_action()
+                self._present_quick_action(from_explorer=command.from_explorer)
             return LocalReply(
                 PROTOCOL_VERSION,
                 command.request_id,
@@ -330,9 +334,32 @@ class ApplicationLifecycle(QObject):
             LocalReplyStatus.REJECTED,
         )
 
-    def _present_quick_action(self) -> None:
+    def _present_quick_action(self, *, from_explorer: bool) -> None:
         """Surface an admitted IPC action without changing the current mode."""
-        if self._shutdown_started or self._main_window.is_busy():
+        if self._shutdown_started:
+            return
+        if from_explorer:
+            window = self._current_window or self._visible_window()
+            if not isinstance(window, QWidget):
+                return
+            if window.isActiveWindow() and not window.isMinimized():
+                return
+            if (
+                window is not self._lightweight_window or not self._explorer_auto_wake()
+                or QApplication.activeModalWidget() is not None
+            ):
+                QApplication.alert(window, 0)
+                return
+            if window.isMinimized():
+                window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
+            if not window.isVisible():
+                window.show()
+            focus = getattr(window, "focus_quick_rename", None)
+            if callable(focus):
+                focus()
+            request_foreground(window)
+            return
+        if self._main_window.is_busy():
             return
         if self._current_window is None:
             if not self.activate_current_window():

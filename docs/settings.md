@@ -64,6 +64,15 @@ omitted while disabled; manual reviews and rename journals remain independent. A
 operations keep the enabled/disabled policy they captured. If database initialization failed,
 persistent metadata remains unavailable for that runtime even when enabled.
 
+`cache.save_bonus_scan_metadata` defaults to `true`. The option allows limited
+bonus searches to seed the ordinary metadata cache using the same TTL. Disabling
+it still allows cache reads, preservation of bonus evidence, and manual reviews.
+
+**期限特典候选登记日期容差** (`bonus_date_tolerance_days`) defaults to 7 and accepts
+integers from 0 to 30. Zero requires the same registration date. Candidates included
+by a date difference require manual review. The setting applies to subsequent lookups
+and searches. The RJ range and request limits stay the same.
+
 The GUI exposes the verified provider locales and stores their canonical codes:
 
 ```text
@@ -88,6 +97,12 @@ while `zh_TW`, `zh_HK`, and `zh_MO` map to `zh_tw`. This keeps Traditional Chine
 mistaken for Simplified Chinese on systems whose locale name is not sufficient by itself.
 
 ## Startup mode and drag-and-drop
+
+**右键重命名时自动唤醒窗口** (`explorer_auto_wake`) defaults to `true`. When an
+Explorer Quick Rename request reaches an already-running lightweight window, the app
+restores it if minimized and attempts to bring it to the foreground. Windows can
+deny activation, in which case the taskbar can signal the request. Turning the
+setting off keeps the window in its current state and requests taskbar attention.
 
 The **启动模式** setting controls which window appears on the next launch:
 
@@ -168,9 +183,10 @@ Because the distribution is a portable ZIP, moving the application makes the abs
 Before deleting the portable application directory, use **移除** first. On Windows 11 and some
 Explorer configurations, the ordinary shell verb may appear under **显示更多选项**.
 
-The Explorer action opens the existing lightweight Quick Action surface and calls the same
-`QuickRenameService` as drag-and-drop. If Full mode is busy, the request remains queued in the
-primary and the shared Lightweight surface updates when it is next shown. It does not show a second
+With no running instance, the Explorer action starts the lightweight Quick Action surface. An
+already-running instance keeps its current mode and queues the request through the same
+`QuickRenameService` as drag-and-drop. The shared Lightweight surface updates when it is next
+shown. The action does not show a second
 ordinary confirmation dialog,
 but it still performs input validation, lookup, naming, planning, final preflight, durable journal
 creation, and executor mutation. A fresh metadata cache is reused, and an unresolved journal

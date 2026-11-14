@@ -36,7 +36,7 @@ def _start_primary(profile_parent: Path, marker: Path) -> subprocess.Popen[str]:
         env=_child_environment(profile_parent, marker),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
     )
     _wait_for_marker(process, marker, "ready")
     assert process.poll() is None
@@ -44,6 +44,8 @@ def _start_primary(profile_parent: Path, marker: Path) -> subprocess.Popen[str]:
 
 
 def _native_client_path() -> Path:
+    if staging_client := os.environ.get("DLSITE_NATIVE_INTEROP_CLIENT"):
+        return Path(staging_client).resolve()
     repository = Path(__file__).resolve().parents[2]
     return (
         repository
@@ -64,7 +66,7 @@ def _run_native_client(profile: Path, paths: tuple[Path, ...]) -> subprocess.Com
         arguments.extend(("--path", str(path)))
     return subprocess.run(
         arguments,
-        cwd=client.parents[4],
+        cwd=Path(__file__).resolve().parents[2],
         capture_output=True,
         text=True,
         timeout=10,
@@ -81,7 +83,7 @@ def _run_secondary(
         cwd=Path(__file__).resolve().parents[2],
         env=_child_environment(profile_parent, marker),
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         timeout=10,
     )
 
@@ -202,7 +204,7 @@ def test_rapid_secondary_quick_requests_keep_one_primary_and_no_duplicate_bootst
                 env=_child_environment(tmp_path, marker),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                encoding="utf-8",
             )
             clients.append((process, marker))
 
@@ -237,7 +239,7 @@ def test_no_primary_quick_launch_becomes_persistent_primary_without_changing_sta
         env=_child_environment(tmp_path, marker),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
     )
     try:
         _wait_for_marker(process, marker, "ready")
@@ -264,7 +266,7 @@ def test_no_primary_helper_host_starts_lightweight_without_creating_a_quick_acti
         env=_child_environment(tmp_path, marker),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
     )
     try:
         _wait_for_marker(process, marker, "ready")
@@ -334,7 +336,7 @@ def test_durable_request_survives_startup_beyond_old_deadline(tmp_path: Path) ->
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
     )
     try:
         _wait_for_marker(process, marker, "startup-paused")
@@ -364,7 +366,7 @@ def test_shutdown_gap_secondary_takes_lock_and_drains_request(tmp_path: Path) ->
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
     )
     new: subprocess.Popen[str] | None = None
     try:
@@ -397,7 +399,7 @@ def test_shutdown_gap_secondary_takes_lock_and_drains_request(tmp_path: Path) ->
             env=new_environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            encoding="utf-8",
         )
         # A failed production election proves contention, not just a process
         # that has been spawned but has yet to attempt ownership.
@@ -495,7 +497,7 @@ def test_terminated_primary_can_be_replaced_in_isolated_profile(
             env=_child_environment(tmp_path, second_marker),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            encoding="utf-8",
         )
     else:
         second = subprocess.Popen(
@@ -504,7 +506,7 @@ def test_terminated_primary_can_be_replaced_in_isolated_profile(
             env=_child_environment(tmp_path, second_marker),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            encoding="utf-8",
         )
     try:
         _wait_for_marker(second, second_marker, "ready")

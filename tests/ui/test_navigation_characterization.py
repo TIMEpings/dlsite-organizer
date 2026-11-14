@@ -1,9 +1,12 @@
 import threading
 import time
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 from tests.services.test_lookup import FakeProvider
 
@@ -122,6 +125,115 @@ def test_lookup_restores_input_focus_only_when_focus_was_not_moved(
         provider.release.set()
         _wait_until(qapp, lambda: not page.is_busy())
         assert qapp.focusWidget() is other_control
+    finally:
+        provider.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+def test_lookup_history_walks_branches_and_only_records_success(
+    qapp: QApplication,
+) -> None:
+    a, b, c, d = ("RJ00000001", "RJ00000002", "RJ00000003", "RJ00000004")
+    provider = BlockingLookupProvider()
+    provider.release.set()
+    page = LookupPage(LookupService(provider, NamingService()), CoverService())
+    page.resize(480, 520)
+    page.show()
+
+    def query(code: str, *, refresh: bool = False) -> None:
+        page.code_input.setText(code)
+        (page.force_refresh if refresh else page.start_lookup)()
+        _wait_until(qapp, lambda: not page.is_busy())
+
+    def check(code: str, *, back: bool, forward: bool) -> None:
+        assert page.code_input.text() == page.workno_value.text() == code
+        assert code in page.name_output.text()
+        assert page.back_button.isEnabled() == back
+        assert page.forward_button.isEnabled() == forward
+
+    try:
+        assert not page.back_button.isEnabled() and not page.forward_button.isEnabled()
+        for code in (a, b, c):
+            query(code)
+        check(c, back=True, forward=False)
+        page.code_input.setFocus()
+        qapp.processEvents()
+        QTest.keyClick(page.code_input, Qt.Key.Key_Left, Qt.KeyboardModifier.AltModifier)
+        check(b, back=True, forward=True)
+        page.back_button.click()
+        check(a, back=False, forward=True)
+        page.code_input.setFocus()
+        QTest.keyClick(page.code_input, Qt.Key.Key_Right, Qt.KeyboardModifier.AltModifier)
+        check(b, back=True, forward=True)
+        page.forward_button.click()
+        check(c, back=True, forward=False)
+        assert provider.calls == [a, b, c]
+
+        page.back_button.click()
+        query("invalid")
+        check(b, back=True, forward=True)
+        assert page.status_label.property("state") == "error"
+        query(b)
+        query(b, refresh=True)
+        check(b, back=True, forward=True)
+        query(d)
+        check(d, back=True, forward=False)
+        page.back_button.click()
+        check(b, back=True, forward=True)
+        page.back_button.click()
+        check(a, back=False, forward=True)
+        assert provider.calls == [a, b, c, b, b, d]
+
+        controls = (
+            page.back_button, page.forward_button, page.code_input,
+            page.query_button, page.refresh_button,
+        )
+        assert all(left.geometry().right() < right.geometry().left()
+                   for left, right in pairwise(controls))
+        assert page._scroll_area.horizontalScrollBar().maximum() == 0
+    finally:
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+def test_lookup_history_rejects_late_metadata_when_navigating(qapp: QApplication) -> None:
+    a, b, c, d = ("RJ00000001", "RJ00000002", "RJ00000003", "RJ00000004")
+    provider = BlockingLookupProvider()
+    provider.release.set()
+    page = LookupPage(LookupService(provider, NamingService()), CoverService())
+    page.show()
+    try:
+        for code in (a, b):
+            page.code_input.setText(code)
+            page.start_lookup()
+            _wait_until(qapp, lambda: not page.is_busy())
+        provider.started.clear()
+        provider.release.clear()
+        page.code_input.setText(c)
+        page.start_lookup()
+        assert provider.started.wait(timeout=2)
+        thread = page._thread
+        worker = page._worker
+        assert worker is not None and hasattr(worker, "result_ready")
+        page.back_button.click()
+        assert page.is_busy() and page.code_input.text() == page.workno_value.text() == a
+        page.forward_button.click()
+        assert page.code_input.text() == page.workno_value.text() == b
+        page._open_related_work(d)
+        page._open_related_work(d)
+        assert page._thread is thread
+        stale_projections: list[str] = []
+        worker.result_ready.connect(
+            lambda _: stale_projections.append(page.workno_value.text())
+        )
+        provider.release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert stale_projections == [b]
+        assert page.code_input.text() == page.workno_value.text() == d
+        assert provider.calls == [a, b, c, d]
+        page.back_button.click()
+        assert page.workno_value.text() == b
     finally:
         provider.release.set()
         _wait_until(qapp, lambda: not page.is_busy())

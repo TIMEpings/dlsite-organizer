@@ -134,7 +134,16 @@ def _atomic_write(path: Path, content: bytes) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        # A concurrent Windows reader can briefly deny replacement because its
+        # file handle does not share delete access.
+        for attempt in range(4):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as exc:
+                if attempt == 3 or getattr(exc, "winerror", None) not in {5, 32}:
+                    raise
+                time.sleep(0.02)
     finally:
         temporary.unlink(missing_ok=True)
 

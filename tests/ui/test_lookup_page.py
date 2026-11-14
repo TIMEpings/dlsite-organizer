@@ -1,12 +1,31 @@
-from datetime import UTC, datetime
+import json
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from threading import Event
 
+import httpx
 import pytest
 from PySide6.QtCore import QBuffer, QEvent, QEventLoop, QIODevice, QPoint, QPointF, Qt, QTimer
-from PySide6.QtGui import QColor, QEnterEvent, QImage, QPainter
+from PySide6.QtGui import QColor, QEnterEvent, QImage, QPainter, QTextDocument
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QStyle, QStyleOptionButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QStyle,
+    QStyleOptionButton,
+    QToolButton,
+)
+from sqlalchemy import delete
 from tests.services.test_lookup import FakeProvider
+from tests.ui.test_navigation_characterization import _wait_until
 
+from dlsite_organizer.domain.bonus import BonusMatch
+from dlsite_organizer.domain.manual_review import CandidateReviewOutcome
 from dlsite_organizer.domain.relation import (
     Confidence,
     EvidenceType,
@@ -16,19 +35,168 @@ from dlsite_organizer.domain.relation import (
     WorkRelation,
 )
 from dlsite_organizer.domain.work import AgeCategory, TranslationAttribution, Work
+from dlsite_organizer.persistence.database import Database
+from dlsite_organizer.persistence.manual_reviews import ManualReviewRepository
+from dlsite_organizer.persistence.metadata_store import MetadataStore, WorkMetadataCache
+from dlsite_organizer.providers.dlsite.client import DlsiteProvider
+from dlsite_organizer.services import bonus_search
 from dlsite_organizer.services.cover import CoverService
 from dlsite_organizer.services.historical_relations import (
     HistoricalRelation,
     HistoricalRelations,
 )
 from dlsite_organizer.services.lookup import LookupFreshness, LookupResult, LookupService
+from dlsite_organizer.services.manual_reviews import ManualReviewService
 from dlsite_organizer.services.naming import NamingService
+from dlsite_organizer.services.translation_discovery import TranslationListings
 from dlsite_organizer.services.translation_relations import (
     TranslationAnalysis,
     TranslationAnalysisStatus,
 )
 from dlsite_organizer.ui.pages.lookup_page import LookupPage
 from dlsite_organizer.ui.theme import light_stylesheet
+
+
+def test_local_bonus_lookup_uses_the_normal_cover_pipeline(qapp, monkeypatch, tmp_path):
+    main, bonus = "RJ01741384", "RJ01741449"
+    images = {main: _png_bytes(24, 16), bonus: _png_bytes(32, 24)}
+    cover_host = "https://example.test"
+    client = httpx.Client
+    requests = []
+    offline = False
+    missing = False
+    now = datetime(2026, 11, 13, tzinfo=UTC)
+    products = {
+        main: {
+            "work_name": "Main", "maker_id": "RG42470", "regist_date": "2026-11-06",
+            "work_image": f"{cover_host}/{main}.png",
+            "bonuses": [{"title": "期間限定特典", "end_date": "2026-11-19"}],
+        },
+        bonus: {
+            "work_name": "期間限定特典", "maker_id": "RG42470", "regist_date": "2026-11-06",
+            "price": 0, "is_sale": False, "is_free": True, "is_oly": True,
+            "work_image": f"{cover_host}/{bonus}.png",
+        },
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if offline:
+            raise httpx.ConnectError("offline", request=request)
+        if request.url.host == "example.test":
+            code = request.url.path.removeprefix("/").removesuffix(".png")
+            return httpx.Response(200, content=images[code], headers={"Content-Type": "image/png"})
+        if request.url.path.endswith("/ajax"):
+            codes = request.url.params["product_id"].split(",")
+            return httpx.Response(200, json={code: products[code] for code in codes
+                                            if code in products and not missing})
+        return httpx.Response(404)
+
+    def mock_client(**kwargs):
+        return client(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", mock_client)
+    monkeypatch.setattr(bonus_search, "BONUS_REQUEST_INTERVAL", 0.0)
+    database = Database(tmp_path / "metadata.sqlite3")
+    database.initialize()
+    store = MetadataStore(database)
+    lookup = LookupService(
+        DlsiteProvider(client_factory=mock_client), NamingService(),
+        metadata_store=store, clock=lambda: now,
+        manual_review_service=ManualReviewService(ManualReviewRepository(database)),
+    )
+    page = LookupPage(lookup, CoverService())
+    page.show()
+
+    def query(code: str) -> None:
+        page.code_input.setText(code)
+        page.start_lookup()
+        _wait_until(qapp, lambda: not page.is_busy())
+
+    def freshness() -> LookupFreshness:
+        result = page._current_result
+        assert result is not None
+        return result.freshness
+
+    try:
+        query(main)
+        assert page._cover_content == images[main]
+        match = lookup.bonus_search().search(
+            bonus_search.BonusSearchRequest(main, "RG42470", date(2026, 11, 6), bonus),
+            cancelled=lambda: False, progress=lambda _: None,
+        ).matches
+        assert len(match) == 1 and store.list_limited_bonus_matches(main) == match
+
+        # Simulate reopening the app with a warm SQLite cache and cold cover memory.
+        page.close()
+        page = LookupPage(lookup, CoverService())
+        page.show()
+        requests.clear()
+        query(main)
+        assert page._cover_content == images[main]
+        assert requests == [f"{cover_host}/{main}.png"]
+
+        # A saved relation and observation can survive eviction of the work metadata.
+        with database.session() as session:
+            session.execute(delete(WorkMetadataCache).where(WorkMetadataCache.workno == bonus))
+            session.commit()
+        requests.clear()
+        link = next(label for label in page.bonus_review_widget.findChildren(QLabel)
+                    if f'href="{bonus}"' in label.text())
+        link.linkActivated.emit(bonus)
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert page._cover_content == images[bonus]
+        assert freshness() is LookupFreshness.LIVE
+        assert len(requests) == 3
+        cached_bonus = store.get(bonus)
+        assert cached_bonus and cached_bonus.work.cover_url == f"{cover_host}/{bonus}.png"
+
+        requests.clear()
+        page.back_button.click()
+        assert page._cover_content == images[main]
+        page.forward_button.click()
+        assert page._cover_content == images[bonus]
+        query(main)
+        assert page._cover_content == images[main]
+        assert requests == []
+
+        now += timedelta(days=2)
+        offline = True
+        query(main)
+        assert freshness() is LookupFreshness.CACHE_STALE_FALLBACK
+        assert page._cover_content == images[main]
+        assert len(requests) == 2 and all(url.startswith("https://www.dlsite.com/")
+                                          for url in requests)
+        assert store.list_limited_bonus_matches(main) == match
+        assert store.get(bonus) == cached_bonus
+
+        requests.clear()
+        offline = False
+        page.force_refresh()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert freshness() is LookupFreshness.LIVE
+        assert page._cover_content == images[main]
+        assert len(requests) == 3 and requests[-1] == f"{cover_host}/{main}.png"
+
+        with database.session() as session:
+            session.execute(delete(WorkMetadataCache).where(WorkMetadataCache.workno == main))
+            session.commit()
+        offline = True
+        query(main)
+        assert freshness() is LookupFreshness.LOCAL_BONUS_REVIEW
+        assert page._cover_content == images[main]
+        assert store.list_limited_bonus_matches(main) == match
+        assert store.get(main) is None
+        offline = False
+        missing = True
+        query(main)
+        assert freshness() is LookupFreshness.LOCAL_BONUS_REVIEW
+        assert page._cover_content == images[main]
+        assert store.list_limited_bonus_matches(main) == match
+    finally:
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+        database.dispose()
 
 
 def _png_bytes(width: int, height: int) -> bytes:
@@ -46,12 +214,101 @@ def _png_bytes(width: int, height: int) -> bytes:
     return content
 
 
-def _render_button_state(button, state: QStyle.StateFlag) -> QImage:
+def test_history_ignores_abandoned_cover_translation_and_bonus_callbacks(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    a, b = "RJ00000001", "RJ00000002"
+    covers = {a: _png_bytes(24, 16), b: _png_bytes(32, 24)}
+    started, release = Event(), Event()
+    background_writes: list[str] = []
+
+    class Provider:
+        def fetch_work(self, workno: str) -> Work:
+            return Work(workno=workno, title=workno, cover_url="https://example.test/cover.png")
+
+    class Covers(CoverService):
+        def fetch_for_work(self, workno: str, url: str) -> bytes:
+            if workno == b:
+                started.set()
+                release.wait(timeout=5)
+            self.remember_cached_cover(workno, covers[workno])
+            return covers[workno]
+
+    def discover(_service, result, *, publish, cancelled, allow_online):
+        if result.work.workno == b:
+            assert cancelled()
+            background_writes.append(b)
+        publish(TranslationListings(original=result.work.workno))
+
+    def scan(_service, request, *, cancelled, progress):
+        if request.local_only:
+            return bonus_search.BonusSearchResult(request.main_workno)
+        started.set()
+        release.wait(timeout=5)
+        assert cancelled()
+        progress("旧页面进度")
+        return bonus_search.BonusSearchResult(
+            request.main_workno, notices=("旧页面结果",), cancelled=True,
+            scan=bonus_search.BonusScanProgress(
+                "RJ00000003", "RJ00000102", 100, 5, 1, 4, 0, 0, 1, (1, 100),
+            ),
+        )
+
+    monkeypatch.setattr(LookupService, "discover_translations", discover)
+    monkeypatch.setattr(bonus_search.BonusSearchService, "search", scan)
+    page = LookupPage(LookupService(Provider(), NamingService()), Covers())
+    page.show()
+    try:
+        page.code_input.setText(a)
+        page.start_lookup()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.code_input.setText(b)
+        page.start_lookup()
+        assert started.wait(timeout=2)
+        _wait_until(qapp, lambda: page.workno_value.text() == b)
+        assert not page.cover_status_label.isHidden()
+        assert page.cover_label.text() != "暂无封面"
+        page.back_button.click()
+        release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert background_writes == [b]
+        assert page.workno_value.text() == a
+        assert page._cover_content == covers[a]
+        assert page._translation_listings == TranslationListings(original=a)
+
+        page.forward_button.click()
+        assert page._cover_content == covers[b]
+        started.clear()
+        release.clear()
+        page.bonus_search_button.click()
+        assert started.wait(timeout=2)
+        page.back_button.click()
+        page.forward_button.click()
+        page.back_button.click()
+        release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        assert page.workno_value.text() == a
+        assert page.bonus_status.isHidden()
+        assert "旧页面结果" not in page.bonus_output.text()
+        assert page.bonus_search_button.isEnabled()
+        page.forward_button.click()
+        assert page.workno_value.text() == b
+        assert "已核验 1 / 100 个编号" in rendered_text(page.bonus_output)
+        assert page.bonus_search_button.text() == "继续搜索剩余范围"
+    finally:
+        release.set()
+        _wait_until(qapp, lambda: not page.is_busy())
+        page.close()
+
+
+def _render_button_state(
+    button: QPushButton, state: QStyle.StateFlag, *, enabled: bool = True,
+) -> QImage:
     option = QStyleOptionButton()
     option.initFrom(button)
     option.rect = button.rect()
     option.text = button.text()
-    option.state = QStyle.StateFlag.State_Enabled | state
+    option.state = (QStyle.StateFlag.State_Enabled | state) if enabled else state
     image = QImage(button.size(), QImage.Format.Format_ARGB32)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
@@ -60,13 +317,19 @@ def _render_button_state(button, state: QStyle.StateFlag) -> QImage:
     return image
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def qapp() -> QApplication:
     application = QApplication.instance()
     if isinstance(application, QApplication):
         return application
     return QApplication([])
 
+
+
+def rendered_text(label: QLabel) -> str:
+    doc = QTextDocument()
+    doc.setHtml(label.text())
+    return doc.toPlainText()
 
 def historical_relation(target: str) -> HistoricalRelation:
     when = datetime(2026, 8, 30, 9, 0, tzinfo=UTC)
@@ -87,7 +350,7 @@ def test_lookup_page_uses_generic_work_code_placeholder_and_subtitle(
 ) -> None:
     page = LookupPage(LookupService(FakeProvider(), NamingService()), CoverService())
 
-    assert page.code_input.placeholderText() == "输入完整RJ|BJ|VJ号"
+    assert page.code_input.placeholderText() == "输入完整作品编号（RJ / BJ / VJ）"
     assert "RJ01609020" not in page.code_input.placeholderText()
     labels = "\n".join(label.text() for label in page.findChildren(QLabel))
     assert "读取当前作品信息并生成安全的格式化名称。" in labels
@@ -96,7 +359,6 @@ def test_lookup_page_uses_generic_work_code_placeholder_and_subtitle(
     assert page.status_label.property("state") != "error"
     assert page.identity_frame.isHidden()
     assert page.name_section.isHidden()
-    assert page.metadata_frame.isHidden()
     page.close()
 
 
@@ -109,10 +371,386 @@ def test_lookup_page_idle_and_no_result_error_hide_result_sections(
 
     assert page.identity_frame.isHidden()
     assert page.name_section.isHidden()
-    assert page.metadata_frame.isHidden()
     assert page.status_label.text() == "未找到作品。"
     assert not page.status_label.isHidden()
     page.close()
+
+
+def test_lookup_page_verifies_known_bonus_after_regular_lookup(qapp: QApplication) -> None:
+    main = "RJ01690645"
+    bonus = "RJ01690654"
+    calls: list[str] = []
+
+    def response(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/ajax"):
+            return httpx.Response(404)
+        code = request.url.params["product_id"]
+        calls.append(code)
+        product = {
+            "work_name": "Campaign bonus" if code == bonus else "Main",
+            "regist_date": "2026-08-24",
+            "maker_id": "RG01061132",
+            "is_sale": code == main,
+            "is_free": code == bonus,
+            "is_oly": code == bonus,
+            "price": 0,
+            "bonuses": [{"title": "Campaign bonus", "end_date": "2026-09-06"}]
+            if code == main else [],
+        }
+        return httpx.Response(200, json={code: product})
+
+    provider = DlsiteProvider(client_factory=lambda: httpx.Client(
+        transport=httpx.MockTransport(response)
+    ))
+    page = LookupPage(LookupService(provider, NamingService()), CoverService())
+    page.show()
+    qapp.processEvents()
+    page.code_input.setText(main)
+    assert page.bonus_panel.isHidden()
+    page.start_lookup()
+    thread = page._thread
+    assert thread is not None
+    loop = QEventLoop()
+    thread.finished.connect(loop.quit)
+    QTimer.singleShot(3000, loop.quit)
+    loop.exec()
+    qapp.processEvents()
+    page.bonus_advanced.setChecked(True)
+    page.bonus_candidate_input.setText(bonus.lower())
+    page.bonus_verify_button.click()
+    thread = page._thread
+    assert thread is not None
+    assert page.is_busy()
+    assert page.bonus_search_button.text() == "取消搜索"
+    loop = QEventLoop()
+    thread.finished.connect(loop.quit)
+    QTimer.singleShot(3000, loop.quit)
+    loop.exec()
+    qapp.processEvents()
+
+    assert not page.is_busy()
+    assert page.bonus_search_button.text() != "取消搜索"
+    assert page.bonus_search_button.isEnabled()
+    assert calls == [main, bonus]
+    assert f"待确认候选 · 高置信标题匹配 · {bonus}" in rendered_text(page.bonus_output)
+    assert any("2026-09-06" in label.text() for label in page.bonus_campaign.findChildren(QLabel))
+    assert not page.identity_frame.isHidden()
+    page.close()
+
+
+def test_lookup_campaign_and_default_range_discovery(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr(bonus_search, "BONUS_REQUEST_INTERVAL", 0.0)
+    main, bonus = "RJ01741384", "RJ01741449"
+    title = "期間限定4大特典" + "長い日本語の特典タイトル" * 18
+    long_description = "長い特典の説明\n" * 200
+    calls = []
+    products = {
+        main: {
+            "work_name": "Main", "maker_id": "RG42470", "regist_date": "2026-11-06",
+            "bonuses": [
+                {"title": title, "end_date": "2099-11-19", "description": long_description},
+                {"title": "過去の特典", "end_date": "2026-11-12", "description": "<b>短い説明</b>"},
+                {"title": "期限未定", "description": "説明あり"},
+                {"title": "説明なし"},
+            ],
+        },
+        bonus: {
+            "work_name": title, "maker_id": "RG42470", "regist_date": "2026-11-06",
+            "price": 0, "is_sale": False, "is_free": True, "is_oly": True,
+        },
+    }
+
+    def response(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/ajax"):
+            calls.append([request.url.path])
+            return httpx.Response(404)
+        codes = request.url.params["product_id"].split(",")
+        calls.append(codes)
+        return httpx.Response(200, json={
+            code: products[code] for code in codes if code in products
+        })
+
+    provider = DlsiteProvider(client_factory=lambda: httpx.Client(
+        transport=httpx.MockTransport(response)
+    ))
+    database = Database(tmp_path / "metadata.sqlite3")
+    database.initialize()
+    now = datetime(2026, 11, 13, tzinfo=UTC)
+    lookup = LookupService(
+        provider, NamingService(), metadata_store=MetadataStore(database),
+        clock=lambda: now,
+        manual_review_service=ManualReviewService(ManualReviewRepository(database)),
+    )
+    page = LookupPage(lookup, CoverService())
+    page.setStyleSheet(light_stylesheet())
+    page.show()
+    page.code_input.setText(main)
+
+    def wait_for_page():
+        thread = page._thread
+        assert thread is not None
+        loop = QEventLoop()
+        thread.finished.connect(loop.quit)
+        QTimer.singleShot(3000, loop.quit)
+        loop.exec()
+        qapp.processEvents()
+        assert not page.is_busy()
+
+    page.start_lookup()
+    wait_for_page()
+    assert calls == [[main], ["/maniax/api/=/product.json"]]
+    campaign_text = "\n".join(label.text() for label in page.bonus_campaign.findChildren(QLabel))
+    assert f"活动进行中 · {title} · 截止 2099-11-19" in campaign_text
+    assert "已结束 · 過去の特典" in campaign_text
+    assert "状态未知 · 期限未定" in campaign_text
+    assert page._lookup_content_layout is not None
+    assert (
+        page._lookup_content_layout.indexOf(page.bonus_panel)
+        > page._lookup_content_layout.indexOf(page.related_card)
+    )
+    assert "尚未发现独立编号" in campaign_text
+    assert not page.bonus_campaign.findChildren(QToolButton)
+    assert not page.bonus_campaign.findChildren(QPushButton)
+    assert all(not label.toolTip() for label in page.bonus_campaign.findChildren(QLabel))
+    links = page.bonus_campaign.findChildren(QLabel, "lookupCampaignStatus")
+    assert len(links) == 3
+    for link, key, description in zip(
+        links,
+        (Qt.Key.Key_Space, Qt.Key.Key_Return, None),
+        (long_description.strip(), "<b>短い説明</b>", "説明あり"),
+        strict=True,
+    ):
+        assert link.cursor().shape() == Qt.CursorShape.PointingHandCursor
+        assert link.focusPolicy() == Qt.FocusPolicy.StrongFocus
+        if key is not None:
+            link.setFocus()
+            assert link.hasFocus()
+            QTest.keyClick(link, key)
+        else:
+            QTest.mouseClick(link, Qt.MouseButton.LeftButton, pos=QPoint(10, link.height() // 2))
+        dialog = page.findChild(QDialog)
+        assert dialog is not None and dialog.isVisible()
+        details = dialog.findChild(QPlainTextEdit)
+        assert details is not None and details.toPlainText() == description
+        if key == Qt.Key.Key_Space:
+            assert details.verticalScrollBar().maximum() > 0
+            details.verticalScrollBar().setValue(details.verticalScrollBar().maximum())
+            assert details.verticalScrollBar().value() > 0
+        dialog.reject()
+        qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not page.bonus_campaign.isHidden()
+    assert page.bonus_end.text() == "+100"
+    assert not page.bonus_panel.findChildren(QSpinBox)
+    assert "494" not in page.bonus_coverage_label.text()
+    assert "历史编号覆盖参考：约 30.8%" in page.bonus_coverage_label.text()
+    page.bonus_range.setValue(page.bonus_range.value() + 3)
+    assert page.bonus_end.text() == "+100"  # Near the recommended stop.
+    QTest.keyClick(page.bonus_range, Qt.Key.Key_Right)
+    assert page.bonus_end.text() == "+101"
+    page.bonus_end.setText("+5001")
+    page.bonus_end.editingFinished.emit()
+    assert page._selected_bonus_offsets() == (1, 5001)
+    assert "后方 5,001 个编号" in page.bonus_range_label.text()
+    page.bonus_end.setText("+100")
+    page.bonus_end.editingFinished.emit()
+
+    calls.clear()
+    page.start_lookup()
+    wait_for_page()
+    assert calls == []
+    assert not page.bonus_campaign.isHidden()
+
+    page.bonus_search_button.click()
+    wait_for_page()
+    assert len(calls) == 20
+    assert any(bonus in batch for batch in calls)
+    assert "目标范围尚未完成" in rendered_text(page.bonus_output)
+
+    def review_link(code: str) -> QLabel:
+        return next(label for label in page.bonus_review_widget.findChildren(QLabel)
+                    if label.isVisible() and f'href="{code}"' in label.text())
+
+    def review_button(text: str) -> QPushButton:
+        return next(button for button in page.bonus_review_widget.findChildren(QPushButton)
+                    if button.isVisible() and button.text() == text)
+
+    assert "标题完全一致" in rendered_text(review_link(bonus))
+    assert "自动关联 · 高置信" in rendered_text(review_link(bonus))
+    assert page.bonus_search_button.text() == "继续搜索剩余范围"
+    assert {button.text() for button in page.bonus_review_widget.findChildren(QPushButton)
+            if button.isVisible()} == {"更改判断"}
+    page.resize(480, 520)
+    qapp.processEvents()
+    scroll = page.findChild(QScrollArea, "lookupScrollArea")
+    assert scroll is not None and scroll.verticalScrollBar().maximum() > 0
+    assert scroll.horizontalScrollBar().maximum() == 0
+    page.bonus_advanced.setChecked(True)
+    assert page.bonus_start.isVisible() and page.bonus_range.isEnabled()
+    page.bonus_start.setText("-50")
+    page.bonus_end.setText("+100")
+    page.bonus_end.editingFinished.emit()
+    assert "可能需要多次手动继续" in page.bonus_budget_hint.text()
+    assert "未计入负向贡献" in page.bonus_coverage_label.text()
+    assert "重叠的已核验编号有 1 个" in page.bonus_range_progress.text()
+    page.bonus_end.setText("-1")
+    page.bonus_end.editingFinished.emit()
+    assert "暂无可靠" in page.bonus_coverage_label.text()
+    page.bonus_end.setText("+")
+    page.bonus_end.editingFinished.emit()
+    assert "有效" in page.bonus_range_label.text()
+    page.bonus_end.setText("-51")
+    page.bonus_end.editingFinished.emit()
+    assert "起点须小于或等于终点" in page.bonus_range_label.text()
+    page.bonus_end.setText("+40001")
+    page.bonus_end.editingFinished.emit()
+    assert "历史编号覆盖参考：约 91.3%" in page.bonus_coverage_label.text()
+    assert page._selected_bonus_offsets() == (-50, 40001)
+    assert page.bonus_range.value() == page.bonus_range.maximum()
+    page.bonus_range.triggerAction(page.bonus_range.SliderAction.SliderPageStepSub)
+    assert page.bonus_start.text() == "-50"
+    assert 0 < page._selected_bonus_offsets()[1] < 20_000
+    page.bonus_start.setText("+1")
+    page.bonus_end.setText("+200000")
+    page.bonus_end.editingFinished.emit()
+    assert "历史编号覆盖参考：约 99.8%" in page.bonus_coverage_label.text()
+    assert "已达到历史样本最大正向差值" in page.bonus_coverage_label.text()
+    assert "仍可能发现样本外特典" in page.bonus_coverage_label.text()
+    assert page._selected_bonus_offsets() == (1, 200000)
+    page.bonus_start.setText("-18545")
+    page.bonus_end.setText("+200000")
+    page.bonus_end.editingFinished.emit()
+    assert "历史样本覆盖：100%（已知样本）" in page.bonus_coverage_label.text()
+    page.bonus_start.setText("+1")
+    assert len(calls) == 20
+    calls.clear()
+    page.bonus_end.setText("+40000")
+    page.bonus_end.editingFinished.emit()
+    page.bonus_search_button.click()
+    wait_for_page()
+    assert len(calls) == 20
+    assert calls[0] == list(bonus_search.bonus_range_worknos(main, (101, 105)))
+    assert "历史编号覆盖参考：约 91.3%" in page.bonus_coverage_label.text()
+    assert "已核验 1 / 40,000 个编号" in rendered_text(page.bonus_output)
+    assert page.bonus_end.text() == "+40000"
+    calls.clear()
+    page.bonus_end.setText("+200000")
+    page.bonus_end.editingFinished.emit()
+    page.bonus_search_button.click()
+    wait_for_page()
+    assert page._selected_bonus_offsets() == (1, 200000)
+    assert len(calls) == 20
+    assert calls[0] == list(bonus_search.bonus_range_worknos(main, (201, 205)))
+    page.bonus_end.setText("+100")
+    page.bonus_end.editingFinished.emit()
+    calls.clear()
+    # Refresh expired metadata and keep using the saved association.
+    now = datetime(2026, 11, 15, tzinfo=UTC)
+    page.start_lookup()
+    wait_for_page()
+    assert calls == [[main], ["/maniax/api/=/product.json"]]
+    calls.clear()
+    assert page.bonus_search_button.text() == "查找更多特典"
+    assert not any(button.text() == "查看待确认候选" for button in page.findChildren(QPushButton))
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum() // 2)
+    saved_scroll = scroll.verticalScrollBar().value()
+    review_link(bonus).linkActivated.emit(bonus)
+    wait_for_page()
+    assert "自动关联 · 高置信" in rendered_text(review_link(main))
+    assert calls == [[bonus], ["/maniax/api/=/product.json"]]
+    calls.clear()
+    page.back_button.click()
+    qapp.processEvents()
+    assert page.code_input.text() == main
+    assert "自动关联 · 高置信" in rendered_text(review_link(bonus))
+    assert scroll.verticalScrollBar().value() == saved_scroll > 0
+    page.forward_button.click()
+    qapp.processEvents()
+    assert page.code_input.text() == bonus
+    assert calls == []
+    review_link(main).linkActivated.emit(main)
+    wait_for_page()
+    assert "自动关联 · 高置信" in rendered_text(review_link(bonus))
+    review_link(bonus).linkActivated.emit(bonus)
+    wait_for_page()
+    review_button("更改判断").click()
+    qapp.processEvents()
+    assert "待确认" in rendered_text(review_link(main))
+    review_button("不是该作品的特典").click()
+    qapp.processEvents()
+    assert "已拒绝配对" in rendered_text(review_link(main))
+    review_button("重新审阅").click()
+    qapp.processEvents()
+    assert "待确认" in rendered_text(review_link(main))
+    review_button("确认匹配").click()
+    qapp.processEvents()
+    assert "用户人工确认" in rendered_text(review_link(main))
+    review_link(main).linkActivated.emit(main)
+    wait_for_page()
+    assert calls == []
+    assert "人工确认" in rendered_text(review_link(bonus))
+    assert page.bonus_search_button.text() == "查找更多特典"
+    review_button("重新审阅").click()
+    qapp.processEvents()
+    assert "待确认" in rendered_text(review_link(bonus))
+    assert page.bonus_search_button.text() == "继续查找更多特典"
+    review_link(bonus).linkActivated.emit(bonus)
+    wait_for_page()
+    assert "待确认" in rendered_text(review_link(main))
+    assert calls == []
+    review_link(main).linkActivated.emit(main)
+    wait_for_page()
+    assert calls == []
+    page.bonus_search_button.click()
+    wait_for_page()
+    assert len(calls) == 20
+    assert "目标范围尚未完成" in rendered_text(page.bonus_output)
+    assert page.bonus_search_button.text() == "继续搜索剩余范围"
+
+    page.bonus_search_button.click()
+    assert page.bonus_search_button.text() == "取消搜索"
+    assert not page.bonus_range.isEnabled()
+    page.bonus_search_button.click()
+    assert not page.bonus_search_button.isEnabled()
+    wait_for_page()
+    assert "搜索已取消" in rendered_text(page.bonus_output)
+    assert page.bonus_search_button.isEnabled() and page.bonus_range.isEnabled()
+    assert page.bonus_search_button.text() == "继续搜索剩余范围"
+
+    for button in (
+        page.bonus_search_button, page.bonus_verify_button,
+        review_button("确认匹配"), review_button("不是该作品的特典"),
+    ):
+        normal = _render_button_state(button, QStyle.StateFlag.State_None)
+        hover = _render_button_state(button, QStyle.StateFlag.State_MouseOver)
+        assert hover != normal
+        assert _render_button_state(button, QStyle.StateFlag.State_Sunken) != hover
+        assert _render_button_state(button, QStyle.StateFlag.State_HasFocus) != normal
+        assert _render_button_state(button, QStyle.StateFlag.State_None, enabled=False) != normal
+
+    # A later direct observation must coexist with any local judgment.
+    calls.clear()
+    service = lookup.bonus_search()
+    (pair,) = service.pairs_for_work(main)
+    official = pair.match.model_copy(update={"relation": pair.match.relation.model_copy(update={
+        "confidence": Confidence.CONFIRMED, "detection_source": "product_info_ajax",
+    })})
+    MetadataStore(database).save_limited_bonus_matches((official,))
+    service.review_match(official, CandidateReviewOutcome.RELATED)
+    page.start_lookup()
+    wait_for_page()
+    assert "人工确认 · DLsite 官方直接证据" in rendered_text(review_link(bonus))
+    review_button("重新审阅").click()
+    qapp.processEvents()
+    assert "DLsite 官方直接证据 · 人工待确认" in rendered_text(review_link(bonus))
+    review_button("不是该作品的特典").click()
+    qapp.processEvents()
+    assert "已拒绝配对 · DLsite 官方直接证据" in rendered_text(review_link(bonus))
+    review_link(bonus).linkActivated.emit(bonus)
+    wait_for_page()
+    assert "已拒绝配对 · DLsite 官方直接证据" in rendered_text(review_link(main))
+    assert calls == []
+    page.close()
+    database.dispose()
 
 
 @pytest.mark.parametrize("workno", ["RJ00000001", "BJ00000001", "VJ00000001"])
@@ -171,11 +809,12 @@ def test_lookup_page_renders_application_relation_result(qapp: QApplication) -> 
 
     page._show_result(result)
 
-    assert page.relation_role_value.text() == "翻译父条目"
-    assert page.relation_source_value.text() == "DLsite 明确提供"
-    assert page.relation_confidence_value.text() == "已确认"
-    assert page.relation_language_value.text() == "CHI_HANS"
-    assert page.relation_details_value.text() == "翻译原作：RJ01609020"
+    assert "简体中文（CHI_HANS）" in rendered_text(page.relation_details_value)
+    assert "原作 · RJ01609020" in rendered_text(page.relation_details_value)
+    assert 'href="RJ01609020"' in page.relation_details_value.text()
+    assert page.historical_relations_value.isHidden()
+    assert "fixture" in page.historical_relations_value.text()
+    assert "暂无历史" not in page.historical_relations_value.text()
     assert not page.relation_frame.isHidden()
     page.close()
 
@@ -195,6 +834,7 @@ def test_lookup_page_renders_rich_work_fields_and_separate_translation_attributi
             tags=["ASMR", "标签"],
             language="CHI_HANS",
             age_category=AgeCategory.R18,
+            release_date=date(2026, 8, 24),
         ),
         formatted_name="[原作社团][RJ01637033] 中性测试作品",
         translation_attribution=TranslationAttribution(
@@ -212,6 +852,10 @@ def test_lookup_page_renders_rich_work_fields_and_separate_translation_attributi
     assert page.tags_value.text() == "ASMR、标签"
     assert page.language_value.text() == "简体中文（CHI_HANS）"
     assert page.age_value.text() == "R18"
+    assert page.release_value.text() == "2026-08-24"
+    assert page.identity_frame.isAncestorOf(page.cvs_value)
+    assert page.identity_frame.isAncestorOf(page.tags_value)
+    assert not any(label.text() == "作品信息" for label in page.findChildren(QLabel))
     assert page.relation_attribution_value.text() == "翻译署名 (RG01001331)"
     assert page.maker_value.text() != page.relation_attribution_value.text()
     assert not page.relation_frame.isHidden()
@@ -230,6 +874,7 @@ def test_lookup_page_renders_missing_rich_fields_as_dashes(qapp: QApplication) -
 
     assert page.maker_value.text() == "—"
     assert page.maker_id_value.text() == "—"
+    assert page.maker_id_value.isHidden()
     assert page.series_value.text() == "—"
     assert page.cvs_value.text() == "—"
     assert page.tags_value.text() == "—"
@@ -483,6 +1128,102 @@ def test_lookup_cover_missing_and_invalid_images_keep_restrained_placeholder(
     page.close()
 
 
+def test_translation_links_navigate_original_parent_and_child(
+    qapp: QApplication, tmp_path: Path,
+) -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "dlsite" / "translation_RJ01619571.json"
+    products = json.loads(fixture.read_text(encoding="utf-8"))
+    calls: list[tuple[str, ...]] = []
+    original, child = "RJ01619571", "RJ01628429"
+    images = {original: _png_bytes(24, 16), child: _png_bytes(32, 24)}
+    cover_requests = []
+    for code in images:
+        products[code]["work_image"] = f"https://example.test/{code}.png"
+
+    class Covers(CoverService):
+        def fetch_for_work(self, workno: str, url: str) -> bytes:
+            cover_requests.append(workno)
+            content = images[workno]
+            self.remember_cached_cover(workno, content)
+            return content
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/ajax"):
+            return httpx.Response(404)
+        codes = tuple(request.url.params["product_id"].split(","))
+        calls.append(codes)
+        return httpx.Response(200, json={
+            code: products[code] for code in codes if code in products
+        })
+
+    provider = DlsiteProvider(client_factory=lambda: httpx.Client(
+        transport=httpx.MockTransport(respond)
+    ))
+    database = Database(tmp_path / "metadata.sqlite3")
+    database.initialize()
+    store = MetadataStore(database)
+    store.save_limited_bonus_matches((BonusMatch(
+        relation=WorkRelation(
+            source_workno=original, target_workno="RJ01619572",
+            relation_type=RelationType.LIMITED_BONUS,
+            confidence=Confidence.CONFIRMED, evidence=[], detection_source="fixture",
+        ),
+        title="Saved bonus", observed_at=datetime.now(UTC),
+    ),))
+    page = LookupPage(LookupService(provider, NamingService(), metadata_store=store), Covers())
+    page.resize(620, 480)
+    page.show()
+
+    def wait_for_lookup() -> None:
+        thread = page._thread
+        assert thread is not None
+        loop = QEventLoop()
+        thread.finished.connect(loop.quit)
+        QTimer.singleShot(3000, loop.quit)
+        loop.exec()
+        qapp.processEvents()
+        assert not page.is_busy()
+
+    page.code_input.setText("RJ01619571")
+    page.start_lookup()
+    wait_for_lookup()
+    assert 'href="RJ01628429"' in page.relation_details_value.text()
+    assert 'href="RJ01628430"' in page.relation_details_value.text()
+    assert "むしぞる中尉" in rendered_text(page.relation_details_value)
+    assert "暂无历史" not in page.historical_relations_value.text()
+    assert calls == [("RJ01619571",), ("RJ01628427", "RJ01628429"), ("RJ01628430", "RJ01706442")]
+    assert page._cover_content == images[original]
+
+    page.relation_details_value.linkActivated.emit("RJ01628429")
+    wait_for_lookup()
+    assert page.workno_value.text() == "RJ01628429"
+    assert 'href="RJ01619571"' in page.relation_details_value.text()
+    assert page._cover_content == images[child]
+    visited_calls = calls.copy()
+    page.back_button.click()
+    assert page.code_input.text() == "RJ01619571"
+    assert "むしぞる中尉" in rendered_text(page.relation_details_value)
+    assert page._cover_content == images[original]
+    page.forward_button.click()
+    assert page.code_input.text() == "RJ01628429"
+    assert page._cover_content == images[child]
+    assert calls == visited_calls
+    page.start_lookup()
+    wait_for_lookup()
+    assert page._cover_content == images[child]
+    assert cover_requests == [original, child]
+    page.relation_details_value.linkActivated.emit("RJ01628430")
+    wait_for_lookup()
+    assert page.workno_value.text() == "RJ01628430"
+    assert 'href="RJ01628429"' in page.relation_details_value.text()
+    assert 'href="RJ01706442"' in page.relation_details_value.text()
+    assert page.bonus_panel.isHidden()
+    scroll = page.findChild(QScrollArea, "lookupScrollArea")
+    assert scroll is not None and scroll.horizontalScrollBar().maximum() == 0
+    page.close()
+    database.dispose()
+
+
 def test_lookup_page_renders_current_and_historical_confirmed_relations(
     qapp: QApplication,
 ) -> None:
@@ -511,7 +1252,7 @@ def test_lookup_page_renders_current_and_historical_confirmed_relations(
         )
     )
 
-    assert "翻译原作：RJ01609020" in page.relation_details_value.text()
+    assert "原作 · RJ01609020" in rendered_text(page.relation_details_value)
     assert "RJ01636950" in page.historical_relations_value.text()
     labels = "\n".join(label.text() for label in page.findChildren(QLabel))
     assert all(term not in labels for term in ("候选", "人工", "Candidate", "Review"))
@@ -780,6 +1521,8 @@ def test_identity_fact_columns_align_with_title_and_long_maker(
                 workno="RJ01609020",
                 title=title,
                 maker_name="社团名称很长" * 30,
+                cvs=["長い声優名" * 12, "もう一人の声優" * 8],
+                tags=["長いタグ名" * 10, "音声作品" * 14],
             ),
             formatted_name="[RJ01609020] 标题",
         )
@@ -787,8 +1530,12 @@ def test_identity_fact_columns_align_with_title_and_long_maker(
     page.show()
     qapp.processEvents()
 
-    captions = page.identity_frame.findChildren(QLabel, "lookupFactCaption")
-    assert [caption.text() for caption in captions] == ["作品编号", "社团"]
+    captions = [
+        caption for caption in page.identity_frame.findChildren(QLabel, "lookupFactCaption")
+        if caption.isVisible()
+    ]
+    assert [caption.text() for caption in captions] == ["作品编号", "社团", "CV", "标签"]
+    captions = captions[:2]
     caption_x = [
         caption.mapTo(page.identity_frame, caption.rect().topLeft()).x()
         for caption in captions
@@ -812,6 +1559,8 @@ def test_identity_fact_columns_align_with_title_and_long_maker(
     assert page.maker_value.text() == "社团名称很长" * 30
     assert page.maker_value.wordWrap()
     assert page.maker_value.height() > page.maker_value.fontMetrics().height()
+    for label in (page.cvs_value, page.tags_value):
+        assert label.height() >= label.heightForWidth(label.width()) > label.fontMetrics().height()
     assert page.title_value.text() == title
 
     title_bottom = page.title_value.mapTo(

@@ -101,11 +101,26 @@ QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{
   font-size: {section_title.point_size}pt;
   font-weight: {section_title.weight};
 }}
-#resultCard, #relationCard {{
+#resultCard, #relationCard, #bonusCard {{
   background: {colors.surface};
   border: 1px solid {colors.border};
   border-radius: {Shape.PANEL_RADIUS}px;
 }}
+#lookupSecondaryText {{ color: {colors.text_secondary}; }}
+#lookupCampaignStatus {{ border: 1px solid transparent; border-radius: {Shape.SOFT_RADIUS}px; }}
+#lookupCampaignStatus:hover {{ background: {colors.surface_secondary}; }}
+#lookupCampaignStatus:focus {{ border-color: {colors.focus}; }}
+#lookupDisclosure {{
+  background: transparent;
+  color: {colors.text_secondary};
+  border: 1px solid transparent;
+  border-radius: {Shape.CONTROL_RADIUS}px;
+  padding: {Spacing.XS}px;
+}}
+#lookupDisclosure:hover {{ background: {colors.surface_secondary}; }}
+#lookupDisclosure:pressed {{ background: {colors.selection}; }}
+#lookupDisclosure:focus {{ border-color: {colors.focus}; }}
+#lookupDisclosure:disabled {{ color: {colors.text_muted}; }}
 #coverPlaceholder {{
   background: {colors.surface_secondary};
   border: 1px solid {colors.border};
@@ -141,6 +156,8 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
   selection-color: {colors.surface};
 }}
 QLineEdit:read-only {{ background: {colors.surface_secondary}; }}
+QLineEdit:hover:enabled {{ background: {colors.surface_secondary}; }}
+QLineEdit:disabled {{ background: {colors.surface_secondary}; color: {colors.text_muted}; }}
 QPushButton {{
   min-height: {Geometry.CONTROL_HEIGHT}px;
   background: {colors.surface};
@@ -177,6 +194,20 @@ QPushButton[visualRole="secondary"] {{
   color: {colors.text_primary};
   border: 1px solid {colors.border};
 }}
+QPushButton[visualRole="secondary"]:hover {{
+  background: {colors.surface_secondary};
+  border-color: {colors.border_strong};
+}}
+QPushButton[visualRole="secondary"]:pressed {{
+  background: {colors.selection};
+}}
+QPushButton[visualRole="secondary"]:focus {{ border-color: {colors.focus}; }}
+QPushButton#lookupHistoryButton {{ padding: 0; }}
+QPushButton[visualRole="secondary"]:disabled {{
+  color: {colors.text_muted};
+  background: {colors.surface_secondary};
+  border-color: {colors.border};
+}}
 QPushButton[visualRole="quiet"] {{
   background: transparent;
   color: {colors.text_secondary};
@@ -195,7 +226,13 @@ QPushButton[visualRole="danger"]:hover {{
   background: {colors.surface_secondary};
   border-color: {colors.error};
 }}
+QPushButton[visualRole="danger"]:pressed {{ background: {colors.selection}; }}
 QPushButton[visualRole="danger"]:focus {{ border: 1px solid {colors.focus}; }}
+QPushButton[visualRole="danger"]:disabled {{
+  color: {colors.text_muted};
+  background: {colors.surface_secondary};
+  border-color: {colors.border};
+}}
 QScrollBar:vertical {{
   width: 9px;
   margin: 0;

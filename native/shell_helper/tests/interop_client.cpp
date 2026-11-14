@@ -24,6 +24,7 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring profile_root;
     std::wstring publish_id;
     std::vector<std::wstring> paths;
+    bool from_explorer = false;
     for (int index = 1; index < argc; ++index) {
         std::wstring value;
         if (ReadArgument(index, argc, argv, L"--profile-root", value)) {
@@ -32,6 +33,8 @@ int wmain(int argc, wchar_t** argv) {
             paths.push_back(std::move(value));
         } else if (ReadArgument(index, argc, argv, L"--publish-id", value)) {
             publish_id = std::move(value);
+        } else if (_wcsicmp(argv[index], L"--explorer") == 0) {
+            from_explorer = true;
         } else {
             return 2;
         }
@@ -45,7 +48,7 @@ int wmain(int argc, wchar_t** argv) {
         std::string id;
         for (const wchar_t c : publish_id) id.push_back(static_cast<char>(c));
         dlsite::shell::Win32HandoffPublisher publisher(profile_root);
-        const auto published = publisher.Publish({id, paths});
+        const auto published = publisher.Publish({id, paths, from_explorer});
         if (published != dlsite::shell::PublishResult::Committed &&
             published != dlsite::shell::PublishResult::Identical) return 6;
         return publisher.MarkLaunchSucceeded(id) ? 0 : 7;
@@ -56,7 +59,16 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
     dlsite::shell::Win32IpcClient client(identity.pipe_name);
-    const dlsite::shell::DispatchResult result = client.Send(paths);
+    dlsite::shell::DispatchResult result;
+    if (from_explorer) {
+        dlsite::shell::BatchRequest request;
+        if (!dlsite::shell::GenerateRequestId(request.request_id)) return 4;
+        request.paths = paths;
+        request.from_explorer = true;
+        result = client.SendToPipe(request, 1000);
+    } else {
+        result = client.Send(paths);
+    }
     switch (result) {
     case dlsite::shell::DispatchResult::Accepted:
         std::cout << "ACCEPTED\n";

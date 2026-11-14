@@ -44,6 +44,31 @@ def command(request_id: str = "request-1", paths: list[str] | None = None) -> Lo
     )
 
 
+def test_atomic_write_retries_windows_reader_contention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "marker.json"
+    marker.write_bytes(b"old")
+    replace = os.replace
+    attempts = 0
+
+    def replace_after_reader_releases(source: Path, target: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            error = PermissionError("sharing violation")
+            error.winerror = 32
+            raise error
+        replace(source, target)
+
+    monkeypatch.setattr(handoff_module.os, "replace", replace_after_reader_releases)
+    handoff_module._atomic_write(marker, b"new")
+
+    assert attempts == 2
+    assert marker.read_bytes() == b"new"
+    assert list(tmp_path.iterdir()) == [marker]
+
+
 @pytest.mark.parametrize("local_app_data", [None, ""])
 def test_cold_handoff_under_known_folder_profile_is_visible_to_gui(
     tmp_path: Path,

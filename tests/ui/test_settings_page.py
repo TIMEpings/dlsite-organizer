@@ -290,6 +290,8 @@ def test_unedited_numeric_controls_survive_unrelated_saves_and_reload(
         config_path=config_path,
     )
     page = SettingsPage(service)
+    assert page.save_bonus_scan_metadata.isChecked()
+    page.save_bonus_scan_metadata.setChecked(False)
 
     for template in ("[{workno}] {title}", "[{maker_name}] {title}"):
         page.template_input.setText(template)
@@ -297,6 +299,8 @@ def test_unedited_numeric_controls_survive_unrelated_saves_and_reload(
         reloaded = load_settings(config_path)
         assert reloaded.provider.timeout_seconds == 1.25
         assert reloaded.cache.ttl_hours == 10000.25
+        assert not reloaded.cache.save_bonus_scan_metadata
+        assert not page.save_bonus_scan_metadata.isChecked()
         assert service.settings.provider.timeout_seconds == 1.25
         assert service.settings.cache.ttl_hours == 10000.25
     page.close()
@@ -312,12 +316,18 @@ def test_explicit_valid_numeric_text_edits_save_exact_values(
     page = SettingsPage(service)
     _set_numeric_control_text(page.timeout_input, "2.375")
     _set_numeric_control_text(page.cache_ttl_input, "10000.375")
+    assert page.explorer_auto_wake.isChecked()
+    assert page.bonus_date_tolerance_input.value() == 7
+    page.explorer_auto_wake.setChecked(False)
+    page.bonus_date_tolerance_input.setValue(14)
 
     page.save_settings()
 
     reloaded = load_settings(config_path)
     assert reloaded.provider.timeout_seconds == 2.375
     assert reloaded.cache.ttl_hours == 10000.375
+    assert not reloaded.explorer_auto_wake
+    assert reloaded.bonus_date_tolerance_days == 14
     assert _numeric_control_value(page.timeout_input) == 2.375
     assert _numeric_control_value(page.cache_ttl_input) == 10000.375
     page.close()

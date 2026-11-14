@@ -116,6 +116,7 @@ def test_fresh_v08_schema_keeps_core_separate_and_creates_manual_review_indexes(
         "work_observations",
         "work_metadata_cache",
         "metadata_observations",
+        "limited_bonus_relations",
         "manual_relation_reviews",
     } == set(inspect(engine).get_table_names())
     columns = {item["name"] for item in inspect(engine).get_columns("manual_relation_reviews")}

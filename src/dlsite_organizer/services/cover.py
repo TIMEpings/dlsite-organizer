@@ -21,7 +21,7 @@ class CoverService:
         # retrieved by the lookup flow available to other local views, while
         # keeping the queue boundary explicit: ``cached_cover_for`` never
         # performs I/O or a network request.
-        self._cached_covers: dict[str, bytes] = {}
+        self._cached_covers: dict[str, tuple[bytes, str | None]] = {}
 
     def fetch(self, url: str, *, workno: str | None = None) -> bytes | None:
         """Return cover bytes, or None for any recoverable cover failure."""
@@ -40,8 +40,8 @@ class CoverService:
         if not content_type.lower().startswith("image/") or len(response.content) > self._max_bytes:
             logger.info("Ignoring invalid or oversized cover response for %s", url)
             return None
-        if workno:
-            self.remember_cached_cover(workno, response.content)
+        if workno and response.content:
+            self._cached_covers[workno.strip().upper()] = (response.content, url)
         return response.content
 
     def fetch_for_work(self, workno: str, url: str) -> bytes | None:
@@ -51,8 +51,12 @@ class CoverService:
     def remember_cached_cover(self, workno: str, content: bytes) -> None:
         """Remember already-retrieved cover bytes without performing any I/O."""
         if content:
-            self._cached_covers[workno.strip().upper()] = bytes(content)
+            self._cached_covers[workno.strip().upper()] = (bytes(content), None)
 
-    def cached_cover_for(self, workno: str) -> bytes | None:
+    def cached_cover_for(self, workno: str, *, url: str | None = None) -> bytes | None:
         """Return a locally cached cover, never downloading or refreshing it."""
-        return self._cached_covers.get(workno.strip().upper())
+        cached = self._cached_covers.get(workno.strip().upper())
+        if cached is None:
+            return None
+        content, cached_url = cached
+        return content if url is None or cached_url in (None, url) else None

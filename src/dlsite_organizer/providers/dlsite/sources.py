@@ -20,11 +20,16 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
-    ValidationInfo,
     field_validator,
+    model_validator,
 )
 
-from dlsite_organizer.domain.bonus import BonusEvidence, BonusEvidenceSnapshot
+from dlsite_organizer.domain.bonus import (
+    BonusEvidence,
+    BonusEvidenceSnapshot,
+    BonusListingSnapshot,
+    BonusListingStatus,
+)
 from dlsite_organizer.domain.work import (
     AgeCategory,
     Availability,
@@ -87,6 +92,25 @@ class BonusEvidenceSource(BaseModel):
         default=None,
         validation_alias=AliasChoices("label", "bonus_label"),
     )
+    invalid_schedule: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def retain_invalid_schedule(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        result = dict(value)
+        invalid = False
+        for field, aliases in (
+            ("start_at", ("start_at", "start_datetime", "start_date")),
+            ("end_at", ("end_at", "end_datetime", "end_date")),
+        ):
+            raw = next((result[key] for key in aliases if key in result), None)
+            parsed = cls.normalize_optional_temporal(raw, field)
+            result[field] = parsed
+            invalid |= parsed is None and raw is not None and raw != ""
+        result["invalid_schedule"] = invalid
+        return result
 
     @field_validator(
         "title",
@@ -107,12 +131,11 @@ class BonusEvidenceSource(BaseModel):
             return stripped or None
         return None
 
-    @field_validator("start_at", "end_at", mode="before")
     @classmethod
     def normalize_optional_temporal(
         cls,
         value: Any,
-        info: ValidationInfo,
+        field: str,
     ) -> date | datetime | None:
         if value is None:
             return None
@@ -130,7 +153,7 @@ class BonusEvidenceSource(BaseModel):
                 return date.fromisoformat(raw.replace("/", "-"))
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
-            logger.warning("Ignoring malformed optional bonus %s value", info.field_name)
+            logger.warning("Ignoring malformed optional bonus %s value", field)
             return None
 
     def to_domain(self) -> BonusEvidence:
@@ -141,6 +164,7 @@ class BonusEvidenceSource(BaseModel):
                 "description": self.description,
                 "start_at": self.start_at,
                 "end_at": self.end_at,
+                "invalid_schedule": self.invalid_schedule or None,
                 "workno": self.workno,
                 "product_id": self.product_id,
                 "url": self.url,
@@ -148,6 +172,17 @@ class BonusEvidenceSource(BaseModel):
                 "label": self.label,
             }
         )
+
+
+class TranslationEditionSource(BaseModel):
+    """An explicit language listing and the provider field that named it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    workno: str
+    language: str | None = None
+    edition_id: int | str | None = None
+    field: str
 
 
 class TranslationInfoSource(BaseModel):
@@ -170,6 +205,8 @@ class TranslationInfoSource(BaseModel):
     is_parent: bool | None = None
     is_child: bool | None = None
     is_translation_bonus_child: bool | None = None
+    language_editions: tuple[TranslationEditionSource, ...] | None = None
+    translator_names: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("original_workno", "parent_workno")
     @classmethod
@@ -570,6 +607,23 @@ class ProductInfoAjaxSource(BaseModel):
     bonuses: list[BonusEvidenceSource] | None = None
     translation_info: TranslationInfoSource | None = None
 
+    @property
+    def bonus_listing(self) -> BonusListingSnapshot:
+        """Use only observed booleans and integers without coercing optional fields."""
+        extras = self.model_extra or {}
+        return BonusListingSnapshot(
+            title=self.work_name,
+            maker_id=self.maker_id,
+            regist_date=self.regist_datetime.date() if self.regist_datetime else None,
+            status=BonusListingStatus(
+                is_sale=_optional_bool(extras.get("is_sale")),
+                is_free=_optional_bool(extras.get("is_free")),
+                is_oly=_optional_bool(extras.get("is_oly")),
+                wishlist_count=_optional_int(extras.get("wishlist_count")),
+                price=_optional_int(extras.get("price")),
+            ),
+        )
+
     @field_validator("bonuses", mode="before")
     @classmethod
     def tolerate_malformed_bonus_collection(cls, value: Any) -> Any:
@@ -614,6 +668,14 @@ class ProductInfoAjaxSource(BaseModel):
         return str(WorkCode.parse(stripped))
 
 
+def _optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def parse_product_info_ajax(payload: str, requested_workno: str) -> ProductInfoAjaxSource:
     """Parse one JSON response only when it matches the supported DTO contract."""
     try:
@@ -627,12 +689,19 @@ def parse_product_info_ajax(payload: str, requested_workno: str) -> ProductInfoA
         raise DlsiteParseError("product_info_ajax was requested with an invalid workno") from exc
 
     product = _extract_product_object(decoded, normalized_requested_workno)
+    return validate_product_info_ajax(product, normalized_requested_workno)
+
+
+def validate_product_info_ajax(
+    product: Mapping[str, Any], requested_workno: str
+) -> ProductInfoAjaxSource:
+    """Validate a single product after its requested envelope has been checked."""
     try:
         source = ProductInfoAjaxSource.model_validate(
             {
                 **product,
-                "requested_workno": normalized_requested_workno,
-                "envelope_workno": normalized_requested_workno,
+                "requested_workno": requested_workno,
+                "envelope_workno": requested_workno,
             }
         )
     except ValidationError as exc:
@@ -657,6 +726,7 @@ def normalize_product_info_ajax(source: ProductInfoAjaxSource, *, section: str) 
     """
     translation = source.translation_info
     is_translation_child = translation is not None and translation.is_child is True
+    flags = source.model_extra or {}
     return Work(
         workno=source.requested_workno,
         title=source.work_name,
@@ -667,7 +737,13 @@ def normalize_product_info_ajax(source: ProductInfoAjaxSource, *, section: str) 
         language=translation.lang if translation is not None else None,
         age_category=normalize_age_category(source.age_category),
         cover_url=_normalize_url(source.work_image),
-        availability=Availability.AVAILABLE,
+        availability=(
+            Availability.NOT_RELEASED
+            if flags.get("is_reserve_work") is True
+            and flags.get("is_reservable") is True
+            and flags.get("is_sale") is False
+            else Availability.AVAILABLE
+        ),
         source_section=section,
     )
 
@@ -763,6 +839,70 @@ def merge_product_metadata(
     )
 
 
+def translation_context(
+    core: ProductInfoAjaxSource, rich: ProductMetadataSource | None = None
+) -> TranslationInfoSource | None:
+    info = core.translation_info
+    if info is None:
+        return None
+    editions: dict[str, TranslationEditionSource] = {}
+    if info.is_original:
+        extras = core.model_extra or {}
+        counts = extras.get("dl_count_items")
+        entries = (
+            ("dl_count_items", counts if isinstance(counts, list) else []),
+            ("language_editions", [
+                edition.model_dump() for edition in (rich.language_editions or ())
+            ] if rich else []),
+        )
+        for field, items in entries:
+            own_group = next((
+                item.get("edition_id") for item in items
+                if isinstance(item, Mapping) and item.get("workno") == core.requested_workno
+                and item.get("edition_type") == "language"
+            ), None)
+            for item in items:
+                if not isinstance(item, Mapping) or item.get("edition_type") != "language":
+                    continue
+                raw_code = item.get("workno")
+                if not isinstance(raw_code, str):
+                    continue
+                try:
+                    code = str(WorkCode.parse(raw_code, allowed_prefixes=("RJ",)))
+                except WorkCodeError:
+                    continue
+                if code == core.requested_workno:
+                    continue
+                group = item.get("edition_id")
+                if own_group is not None and group is not None and group != own_group:
+                    continue
+                editions.setdefault(code, TranslationEditionSource(
+                    workno=code,
+                    language=normalize_language_code(item.get("lang")),
+                    edition_id=group if type(group) in (int, str) else None,
+                    field=field,
+                ))
+
+    translators = (core.model_extra or {}).get("translators")
+    names: dict[str, str] = {}
+    if isinstance(translators, list):
+        for item in translators:
+            if not isinstance(item, Mapping):
+                continue
+            code = item.get("product_id") or item.get("workno")
+            name = item.get("maker_name") or item.get("name")
+            if isinstance(code, str) and isinstance(name, str) and name.strip():
+                try:
+                    code = str(WorkCode.parse(code, allowed_prefixes=("RJ",)))
+                except WorkCodeError:
+                    continue
+                names[code] = name.strip()
+    return info.model_copy(update={
+        "language_editions": tuple(editions.values()),
+        "translator_names": names,
+    })
+
+
 def translation_attribution(
     core_source: ProductInfoAjaxSource,
     rich: ProductMetadataSource | None,
@@ -772,6 +912,9 @@ def translation_attribution(
     info = core_source.translation_info
     if info is None or info.is_child is not True:
         return None
+    context = translation_context(core_source)
+    if context and (name := context.translator_names.get(core_source.requested_workno)):
+        return TranslationAttribution(maker_id=core_source.maker_id, maker_name=name)
     attribution = rich.maker_identity if rich is not None else (None, None)
     if not _identity_is_present(attribution):
         attribution = core_source.maker_id, core_source.maker_name

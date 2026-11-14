@@ -195,7 +195,7 @@ def test_page_content_alignment_policy_and_page_header_axes(
                     assert header is not None
                     header_left = header.mapTo(page, QPoint(0, 0)).x()
                     body = (
-                        window.lookup_page.code_input
+                        window.lookup_page.back_button
                         if route is MainPage.LOOKUP
                         else window.settings_page.quick_access_box
                     )

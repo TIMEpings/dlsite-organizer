@@ -21,6 +21,7 @@ class RelationType(StrEnum):
 
     TRANSLATION = "translation"
     TRANSLATION_OF = "translation_of"
+    HAS_LANGUAGE_EDITION = "has_language_edition"
     HAS_TRANSLATION_CHILD = "has_translation_child"
     CHILD_OF_TRANSLATION = "child_of_translation"
     ORIGINAL = "original"

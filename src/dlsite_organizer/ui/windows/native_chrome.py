@@ -16,7 +16,7 @@ from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QRect
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 if TYPE_CHECKING:
     from dlsite_organizer.ui.lightweight_window import LightweightWindow
@@ -134,6 +134,20 @@ def title_hit(
     if minimize.contains(point) or close.contains(point):
         return Hit.CLIENT
     return Hit.CAPTION
+
+
+def request_foreground(window: QWidget) -> None:
+    """Attempt activation once, and request attention if the OS denies it."""
+    if sys.platform == "win32" and QApplication.platformName() == "windows":
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        if user32.SetForegroundWindow(int(window.winId())):
+            return
+        QApplication.alert(window, 0)
+    else:
+        window.raise_()
+        window.activateWindow()
 
 
 class WindowsChrome:

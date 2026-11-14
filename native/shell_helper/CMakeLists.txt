@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(dlsite_shell_helper VERSION 0.1.0 LANGUAGES CXX)
+set(APP_VERSION_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/dlsite_organizer/version.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${APP_VERSION_SOURCE}")
+file(STRINGS "${APP_VERSION_SOURCE}" APP_VERSION_LINE
+    REGEX "^__version__ = \"[0-9]+\\.[0-9]+\\.[0-9]+\"$")
+if(NOT APP_VERSION_LINE)
+    message(FATAL_ERROR "Application version missing from version.py")
+endif()
+string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" APP_VERSION "${APP_VERSION_LINE}")
+project(dlsite_shell_helper VERSION "${APP_VERSION}" LANGUAGES CXX RC)
 
 if(NOT WIN32)
     message(FATAL_ERROR "dlsite-shell-helper is a Windows-only x64 COM local server")
@@ -42,9 +50,11 @@ target_link_libraries(dlsite_shell_helper_core PUBLIC
     bcrypt
     ole32
     shell32
+    user32
 )
 
-add_executable(dlsite-shell-helper WIN32 src/main.cpp)
+configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/version.rc" @ONLY)
+add_executable(dlsite-shell-helper WIN32 src/main.cpp "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
 target_link_libraries(dlsite-shell-helper PRIVATE dlsite_shell_helper_core)
 set_target_properties(dlsite-shell-helper PROPERTIES
     OUTPUT_NAME "dlsite-shell-helper"

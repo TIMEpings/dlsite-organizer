@@ -44,6 +44,7 @@ from dlsite_organizer.app.settings import (
     StartupMode,
     default_logs_path,
 )
+from dlsite_organizer.domain.bonus import MAX_BONUS_DATE_TOLERANCE_DAYS
 from dlsite_organizer.domain.work import AgeCategory, Work, WorkLanguage
 from dlsite_organizer.services.explorer_integration import (
     ExplorerIntegrationError,
@@ -282,6 +283,12 @@ class SettingsPage(QWidget):
         self.explorer_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.explorer_path_label.setWordWrap(True)
         explorer_form.addRow("路径", self.explorer_path_label)
+        self.explorer_auto_wake = QCheckBox("右键重命名时自动唤醒窗口")
+        self.explorer_auto_wake.setToolTip(
+            "通过资源管理器右键菜单打开重命名任务时，自动恢复已有窗口并尝试切换到前台。"
+            "关闭后保留后台提醒行为。"
+        )
+        explorer_form.addRow(self.explorer_auto_wake)
         explorer_layout.addLayout(explorer_form)
 
         explorer_help = QLabel(
@@ -414,6 +421,9 @@ class SettingsPage(QWidget):
             "已有 cache 不会按新 locale 静默重解释；下一次 live/force refresh 使用新 locale。"
         )
         self.allow_stale_input = QCheckBox("网络错误时允许使用旧 cache")
+        self.save_bonus_scan_metadata = QCheckBox("缓存主动搜索获取的作品元数据")
+        self.save_bonus_scan_metadata.setObjectName("saveBonusScanMetadataInput")
+        self.cache_enabled.toggled.connect(self.save_bonus_scan_metadata.setEnabled)
         timeout_row, self.timeout_input = self._numeric_setting_row("timeoutInput", "秒")
         self.timeout_input.setToolTip("网络请求超时，推荐范围 3–120 秒。")
         metadata_form.addRow("元数据语言", self.metadata_locale_input)
@@ -422,6 +432,14 @@ class SettingsPage(QWidget):
         metadata_form.addRow("缓存", self.cache_enabled)
         metadata_form.addRow("缓存 TTL", cache_ttl_row)
         metadata_form.addRow("缓存回退", self.allow_stale_input)
+        metadata_form.addRow(self.save_bonus_scan_metadata)
+        self.bonus_date_tolerance_input = _SettingsSpinBox()
+        self.bonus_date_tolerance_input.setRange(0, MAX_BONUS_DATE_TOLERANCE_DAYS)
+        self.bonus_date_tolerance_input.setSuffix(" 天")
+        self.bonus_date_tolerance_input.setToolTip(
+            "0 天仅接受同日候选。日期不同的候选仅供人工审阅。"
+        )
+        metadata_form.addRow("期限特典候选登记日期容差", self.bonus_date_tolerance_input)
         metadata_form.addRow("网络超时", timeout_row)
         content_layout.addWidget(metadata_box)
 
@@ -533,6 +551,10 @@ class SettingsPage(QWidget):
         self.cache_enabled.setChecked(settings.cache.enabled)
         self.cache_ttl_input.setText(repr(settings.cache.ttl_hours))
         self.allow_stale_input.setChecked(settings.cache.allow_stale_on_error)
+        self.save_bonus_scan_metadata.setChecked(settings.cache.save_bonus_scan_metadata)
+        self.explorer_auto_wake.setChecked(settings.explorer_auto_wake)
+        self.bonus_date_tolerance_input.setValue(settings.bonus_date_tolerance_days)
+        self.save_bonus_scan_metadata.setEnabled(settings.cache.enabled)
         self.timeout_input.setText(repr(settings.provider.timeout_seconds))
         self.startup_mode_input.setCurrentIndex(
             max(0, self.startup_mode_input.findData(settings.startup_mode.value))
@@ -647,6 +669,8 @@ class SettingsPage(QWidget):
                 "date_format": self.date_format_input.text(),
                 "illegal_char_replacement": self.illegal_replacement_input.text(),
                 "startup_mode": self.startup_mode_input.currentData(),
+                "explorer_auto_wake": self.explorer_auto_wake.isChecked(),
+                "bonus_date_tolerance_days": self.bonus_date_tolerance_input.value(),
             }
         )
         current["provider"] = {
@@ -661,6 +685,7 @@ class SettingsPage(QWidget):
             "enabled": self.cache_enabled.isChecked(),
             "ttl_hours": self._numeric_value(self.cache_ttl_input, "缓存 TTL"),
             "allow_stale_on_error": self.allow_stale_input.isChecked(),
+            "save_bonus_scan_metadata": self.save_bonus_scan_metadata.isChecked(),
         }
         return current
 

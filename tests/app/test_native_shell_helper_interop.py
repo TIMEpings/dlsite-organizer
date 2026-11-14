@@ -34,6 +34,8 @@ from dlsite_organizer.domain.quick_rename import MAX_QUICK_RENAME_ITEMS
 
 
 def _native_client_path() -> Path:
+    if staging_client := os.environ.get("DLSITE_NATIVE_INTEROP_CLIENT"):
+        return Path(staging_client)
     repository = Path(__file__).resolve().parents[2]
     return (
         repository / "build" / "native" / "shell_helper" / "bin" / "shell_helper_interop_client.exe"
@@ -159,8 +161,11 @@ def _run_native(
     paths: tuple[str, ...],
     *,
     timeout_seconds: float = 8.0,
+    from_explorer: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     arguments = [str(client), "--profile-root", str(profile)]
+    if from_explorer:
+        arguments.append("--explorer")
     for path in paths:
         arguments.extend(("--path", path))
     process = subprocess.Popen(
@@ -202,9 +207,11 @@ def _pump_until(
     return predicate()
 
 
+@pytest.mark.parametrize("from_explorer", [False, True])
 def test_native_win32_client_reaches_qlocalserver_and_preserves_one_batch(
     qcore: QCoreApplication,
     tmp_path: Path,
+    from_explorer: bool,
 ) -> None:
     client = _require_native_client()
     profile = tmp_path / "profile"
@@ -217,12 +224,13 @@ def test_native_win32_client_reaches_qlocalserver_and_preserves_one_batch(
     server = _start_server(profile, handler)
     paths = (r"C:\测试 folder\A", r"C:\space path\B")
     try:
-        result = _run_native(qcore, client, profile, paths)
+        result = _run_native(qcore, client, profile, paths, from_explorer=from_explorer)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "ACCEPTED"
         assert len(received) == 1
         assert received[0].command is LocalCommandName.QUICK_RENAME
         assert received[0].quick_rename_paths == paths
+        assert received[0].from_explorer is from_explorer
     finally:
         server.close()
 

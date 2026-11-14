@@ -16,6 +16,7 @@ class Availability(StrEnum):
 
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
+    NOT_RELEASED = "not_released"
     UNKNOWN = "unknown"
 
 

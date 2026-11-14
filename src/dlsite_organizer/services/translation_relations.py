@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from dlsite_organizer.domain.relation import (
@@ -14,7 +14,10 @@ from dlsite_organizer.domain.relation import (
     WorkRelation,
 )
 from dlsite_organizer.domain.work_code import WorkCode, WorkCodeError
-from dlsite_organizer.providers.dlsite.sources import TranslationInfoSource
+from dlsite_organizer.providers.dlsite.sources import (
+    TranslationEditionSource,
+    TranslationInfoSource,
+)
 
 
 class TranslationAnalysisStatus(StrEnum):
@@ -44,6 +47,8 @@ class TranslationAnalysis:
     language: str | None = None
     status: TranslationAnalysisStatus = TranslationAnalysisStatus.NO_INFORMATION
     contract_issue: str | None = None
+    editions: tuple[TranslationEditionSource, ...] | None = None
+    translator_names: dict[str, str] = field(default_factory=dict)
 
 
 class TranslationRelationService:
@@ -92,6 +97,11 @@ class TranslationRelationService:
                 issues.append("original role unexpectedly contains parent_workno")
             if translation_info.child_worknos:
                 issues.append("original role unexpectedly contains child_worknos")
+            for edition in translation_info.language_editions or ():
+                self._append_relation(
+                    relations, issues, normalized_workno, edition.workno,
+                    RelationType.HAS_LANGUAGE_EDITION, edition.field,
+                )
         elif role is TranslationRole.TRANSLATION_PARENT:
             if translation_info.parent_workno is not None:
                 issues.append("translation parent unexpectedly contains parent_workno")
@@ -115,6 +125,12 @@ class TranslationRelationService:
                     RelationType.HAS_TRANSLATION_CHILD,
                     "child_worknos",
                 )
+            for child_workno in translation_info.translator_names:
+                if child_workno not in translation_info.child_worknos:
+                    self._append_relation(
+                        relations, issues, normalized_workno, child_workno,
+                        RelationType.HAS_TRANSLATION_CHILD, "translators",
+                    )
         else:
             if translation_info.child_worknos:
                 issues.append("translation child unexpectedly contains child_worknos")
@@ -152,6 +168,8 @@ class TranslationRelationService:
             language=translation_info.lang,
             status=status,
             contract_issue="; ".join(issues) if issues else None,
+            editions=translation_info.language_editions,
+            translator_names=translation_info.translator_names,
         )
 
     def _append_relation(
@@ -171,6 +189,11 @@ class TranslationRelationService:
         if source_workno == target_workno:
             issues.append(f"{field_name} refers to the queried work itself")
             return
+        field_path = (
+            field_name if relation_type is RelationType.HAS_LANGUAGE_EDITION
+            or field_name == "translators"
+            else f"translation_info.{field_name}"
+        )
         relations.append(
             WorkRelation(
                 source_workno=source_workno,
@@ -180,14 +203,17 @@ class TranslationRelationService:
                 evidence=[
                     RelationEvidence(
                         evidence_type=EvidenceType.EXPLICIT_TRANSLATION_REFERENCE,
-                        description="DLsite translation_info explicitly references a work number.",
+                        description=f"DLsite {field_path} explicitly references a work number.",
                         attributes={
-                            "field": f"translation_info.{field_name}",
+                            "field": field_path,
                             "value": target_workno,
                         },
                     )
                 ],
-                detection_source=self._DETECTION_SOURCE,
+                detection_source=(
+                    f"dlsite.{field_path}" if field_path == field_name
+                    else self._DETECTION_SOURCE
+                ),
             )
         )
 

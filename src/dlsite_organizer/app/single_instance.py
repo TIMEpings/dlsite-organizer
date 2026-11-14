@@ -153,6 +153,13 @@ class LocalCommand:
     payload: dict[str, object]
 
     @property
+    def from_explorer(self) -> bool:
+        return (
+            self.command is LocalCommandName.QUICK_RENAME
+            and self.payload.get("source") == "explorer"
+        )
+
+    @property
     def quick_rename_paths(self) -> tuple[str, ...]:
         """Return the validated path batch carried by QUICK_RENAME."""
         if self.command is not LocalCommandName.QUICK_RENAME:
@@ -414,6 +421,8 @@ def decode_request(frame: bytes) -> LocalCommand:
 def _validate_quick_rename_payload(payload: dict[str, object]) -> tuple[str, ...]:
     """Validate the single-path and compatibility batch payload shapes."""
     fields = set(payload)
+    if payload.get("source") == "explorer":
+        fields.remove("source")
     if fields == {"path"}:
         return (validate_windows_absolute_path(payload["path"]),)
     if fields != {"paths"}:

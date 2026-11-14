@@ -20,6 +20,7 @@ enum class AdmissionStatus {
 struct BatchRequest {
     std::string request_id;
     std::vector<std::wstring> paths;
+    bool from_explorer = false;
 };
 
 struct AdmissionReply {

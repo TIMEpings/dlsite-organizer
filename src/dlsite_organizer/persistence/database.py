@@ -94,6 +94,7 @@ class Database:
                 "work_metadata_cache",
                 "metadata_observations",
                 "manual_relation_reviews",
+                "limited_bonus_relations",
             }
         ]
         Base.metadata.create_all(self._engine, tables=core_tables)
@@ -125,7 +126,9 @@ class Database:
             tables=[
                 t
                 for t in Base.metadata.tables.values()
-                if t.name in {"work_metadata_cache", "metadata_observations"}
+                if t.name in {
+                    "work_metadata_cache", "metadata_observations", "limited_bonus_relations"
+                }
             ],
         )
         # Additive migration for metadata history created before transient
@@ -148,6 +151,7 @@ class Database:
                 "metadata_observations",
                 {
                     "bonus_evidence_json": "TEXT",
+                    "bonus_listing_json": "TEXT",
                     "series_name": "VARCHAR",
                     "cvs_json": "TEXT",
                     "tags_json": "TEXT",

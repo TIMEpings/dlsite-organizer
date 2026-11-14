@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
@@ -35,6 +36,8 @@ from dlsite_organizer.providers.dlsite.sources import (
     parse_product_info_ajax,
     parse_product_metadata,
     translation_attribution,
+    translation_context,
+    validate_product_info_ajax,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,7 @@ DLSITE_PRODUCT_INFO_AJAX = "DLSITE_PRODUCT_INFO_AJAX"
 DLSITE_PRODUCT_JSON = "DLSITE_PRODUCT_JSON"
 DLSITE_HTML_JSONLD = "DLSITE_HTML_JSONLD"
 DLSITE_ENRICHED_SOURCE = f"{DLSITE_PRODUCT_INFO_AJAX}+{DLSITE_PRODUCT_JSON}"
+BONUS_BATCH_SIZE = 5
 
 
 class DlsiteSection(StrEnum):
@@ -135,16 +139,27 @@ class DlsiteWorkLookup:
     metadata_source: str | None = None
     regist_datetime: datetime | None = None
     translation_attribution: TranslationAttribution | None = None
+    rich_metadata: ProductMetadataSource | None = None
 
     @property
     def translation_info(self) -> TranslationInfoSource | None:
         """Expose only the provider source object needed by relation mapping."""
-        return self.product_info.translation_info if self.product_info is not None else None
+        return (
+            translation_context(self.product_info, self.rich_metadata)
+            if self.product_info is not None else None
+        )
 
     @property
     def bonus_evidence(self) -> BonusEvidenceSnapshot | None:
         """Expose normalized transient evidence without leaking the AJAX DTO."""
         return self.product_info.bonus_evidence if self.product_info is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class BonusBatchLookup:
+    listings: dict[str, DlsiteWorkLookup]
+    missing: frozenset[str]
+    malformed: frozenset[str]
 
 
 class DlsiteProvider:
@@ -172,6 +187,84 @@ class DlsiteProvider:
     def fetch_work(self, workno: str) -> Work:
         """Fetch normalized metadata, retaining the minimal legacy interface."""
         return self.fetch_work_lookup(workno).work
+
+    def fetch_bonus_lookup(self, workno: str) -> DlsiteWorkLookup:
+        """Use one exact RJ AJAX request and surface blocks without fallbacks."""
+        code = str(WorkCode.parse(workno, allowed_prefixes=("RJ",)))
+        site = self._site_for_workno(code)
+        response, payload = self._fetch_bonus_ajax(site, (code,))
+        if payload == {} or payload == []:
+            raise WorkNotFoundError(code)
+        return self._bonus_lookup(parse_product_info_ajax(response.text, code), site)
+
+    def fetch_bonus_batch(self, worknos: tuple[str, ...]) -> BonusBatchLookup:
+        """Query a bounded batch, keeping missing and malformed entries separate."""
+        return self.fetch_listing_batch(worknos)
+
+    def fetch_listing_batch(self, worknos: tuple[str, ...]) -> BonusBatchLookup:
+        """Fetch only the explicitly supplied RJ listings from product AJAX."""
+        codes = tuple(str(WorkCode.parse(code, allowed_prefixes=("RJ",))) for code in worknos)
+        requested = frozenset(codes)
+        if not 1 <= len(codes) <= BONUS_BATCH_SIZE or len(requested) != len(codes):
+            raise ValueError("Invalid listing AJAX batch")
+        site = self._site_for_workno(codes[0])
+        _, payload = self._fetch_bonus_ajax(site, codes)
+        if payload == []:
+            payload = {}
+        if not isinstance(payload, dict) or payload.keys() - requested:
+            raise DlsiteParseError("DLsite returned an unexpected listing batch envelope")
+        listings: dict[str, DlsiteWorkLookup] = {}
+        malformed: set[str] = set()
+        for code, entry in payload.items():
+            if not isinstance(entry, Mapping):
+                malformed.add(code)
+                continue
+            try:
+                product = validate_product_info_ajax(entry, code)
+            except DlsiteParseError:
+                malformed.add(code)
+                continue
+            listings[code] = self._bonus_lookup(product, site)
+        return BonusBatchLookup(listings, requested.difference(payload), frozenset(malformed))
+
+    @property
+    def supports_bonus_range(self) -> bool:
+        """Use batch enumeration only on the experimentally checked route."""
+        return self._site.section == DlsiteSection.MANIAX
+
+    def _fetch_bonus_ajax(
+        self, site: DlsiteSite, codes: tuple[str, ...]
+    ) -> tuple[httpx.Response, object]:
+        timeout = min(self._timeout.read or 5.0, 5.0)
+        try:
+            with (self._client_factory or self._new_client)() as client:
+                response = client.get(
+                    site.product_info_url(",".join(codes)), timeout=timeout, follow_redirects=False
+                )
+        except httpx.RequestError as exc:
+            raise DlsiteConnectionError("连接 DLsite 失败或请求超时。") from exc
+        if response.status_code == 404 and len(codes) == 1:
+            raise WorkNotFoundError(codes[0])
+        if response.status_code in (403, 429):
+            raise DlsiteHttpError(f"DLsite 拒绝或限制请求（HTTP {response.status_code}）。")
+        if not response.is_success:
+            raise DlsiteHttpError(f"DLsite 返回 HTTP {response.status_code}。")
+        try:
+            payload = response.json()
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise DlsiteParseError("DLsite 返回了无法读取的 AJAX 响应。") from exc
+        return response, payload
+
+    @staticmethod
+    def _bonus_lookup(product: ProductInfoAjaxSource, site: DlsiteSite) -> DlsiteWorkLookup:
+        return DlsiteWorkLookup(
+            work=normalize_product_info_ajax(product, section=site.section),
+            product_info=product,
+            source=DLSITE_PRODUCT_INFO_AJAX,
+            core_source=DLSITE_PRODUCT_INFO_AJAX,
+            regist_datetime=product.regist_datetime,
+            translation_attribution=translation_attribution(product, None, None),
+        )
 
     def apply_settings(
         self,
@@ -325,6 +418,7 @@ class DlsiteProvider:
             source=DLSITE_ENRICHED_SOURCE,
             core_source=DLSITE_PRODUCT_INFO_AJAX,
             metadata_source=DLSITE_PRODUCT_JSON,
+            rich_metadata=rich,
             regist_datetime=structured.regist_datetime,
             translation_attribution=translation_attribution(
                 structured,
